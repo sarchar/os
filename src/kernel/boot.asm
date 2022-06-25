@@ -1,24 +1,36 @@
 ; This file started from: https://wiki.osdev.org/Bare_Bones_with_NASM
 
-; Declare constants for the multiboot header.
-MBALIGN  equ  1 << 0            ; align loaded modules on page boundaries
-MEMINFO  equ  1 << 1            ; provide memory map
-FLAGS    equ  MBALIGN | MEMINFO ; this is the Multiboot 'flag' field
-MAGIC    equ  0x1BADB002        ; 'magic number' lets bootloader find the header
-CHECKSUM equ -(MAGIC + FLAGS)   ; checksum of above, to prove we are multiboot
+; even though we're producing an elf64 binary, this bootstrapping code is ran in 32-bit protected mode
+bits 32
+
+; Declare constants for the multiboot 2 header.
+MB2_ALIGN    equ  1 << 0                    ; align loaded modules on page boundaries
+MB2_MEMINFO  equ  1 << 1                    ; provide memory map
+MB2_FLAGS    equ  MB2_ALIGN | MB2_MEMINFO   ; this is the Multiboot 'flag' field
+MB2_ARCH     equ  0                         ; i386 protected mode
+MB2_MAGIC    equ  0xE85250D6                ; 'magic number' lets bootloader find the header
+MB2_HDRLEN   equ  multiboot_end - multiboot_header ; length of the header
+MB2_CHECKSUM equ 0x100000000 - (MB2_MAGIC + MB2_ARCH + MB2_HDRLEN)  ; checksum
  
 ; Declare a multiboot header that marks the program as a kernel. These are magic
 ; values that are documented in the multiboot standard. The bootloader will
 ; search for this signature in the first 8 KiB of the kernel file, aligned at a
 ; 32-bit boundary. The signature is in its own section so the header can be
 ; forced to be within the first 8 KiB of the kernel file.
-section .multiboot.data
-align 4
+section .multiboot.data align=8
 multiboot_header:
-	dd MAGIC
-	dd FLAGS
-	dd CHECKSUM
+    ; magic fields
+	dd MB2_MAGIC
+    dd MB2_ARCH
+    dd MB2_HDRLEN
+	dd MB2_CHECKSUM
+    ; tags
+    dw 0                                 ; type (0 = terminating tag)
+	dw 0                                 ; flags
+    dd 8                                 ; size of tag
+multiboot_end:
 
+section .bss align=8
 ; The multiboot standard does not define the value of the stack pointer register
 ; (esp) and it is up to the kernel to provide a stack. This allocates room for a
 ; small stack by creating a symbol at the bottom of it, then allocating 16384
@@ -29,18 +41,28 @@ multiboot_header:
 ; System V ABI standard and de-facto extensions. The compiler will assume the
 ; stack is properly aligned and failure to align the stack will result in
 ; undefined behavior.
-section .bootstrap_stack nobits align=16
+align 16
 stack_bottom: resb 16*1024 ; 16 KiB
 stack_top:
 
 ; Reserve space for the page table
-section .bss
 align 4096
-boot_page_directory: resb 4096 ; one page
-boot_page_table1:    resb 4096 ; one page
+boot_page_table_level4: resq 512   ; one entry in this table is a physical address to a level 3 table (512 entries * 512GiB = 256TiB)
+boot_page_table_level3: resq 512   ; one entry in this table is a physical address to a level 2 table (512 entries * 1GiB = 512GiB)
+boot_page_table_level2: resq 512   ; one entry in this table is a physical address to a level 1 table (512 entries * 0x200000 = 1GiB)
+boot_page_table_level1: resq 512   ; one entry in this table is a 64-bit address to a 4,096 (0x1000) block of physical memory for a total 
+                                   ; of 512 * 0x1000 = 0x200000 = 2MiB mappable bytes per level 1 table
 
+; need another page table for 0xC0000000
+boot_page_table_c000: resq 512
+
+; Link script defined symbols used for knowing the size of the kernel
 extern _kernel_start_address
 extern _kernel_end_address
+extern _kernel_vma_base
+
+; C entry point
+extern kernel_main
 
 ; Define the default GDT
 section .data
@@ -70,17 +92,19 @@ GDT:
     db 0x00                                     ; Access
     db 0x00                                     ; Flags & Limit
     db 0x00                                     ; Base (high, bits 24-31)
-.code: equ $ - GDT
+    ; base @ 0x00000000, limit 1GiB
+.text: equ $ - GDT
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
-    db PRESENT | DPL0 | NOT_SYS | EXEC | RW     ; Access
-    db GRAN_4K | SZ_32 | 0xFF                   ; Flags & Limit (high, bits 16-19)
+    db PRESENT | NOT_SYS | EXEC | RW            ; Access
+    db GRAN_4K | LONG_MODE | 0x0F               ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
+    ; base @ 0x00000000, limit 1GiB
 .data: equ $ - GDT
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
     db PRESENT | NOT_SYS | RW                   ; Access
-    db GRAN_4K | SZ_32 | 0xFF                   ; Flags & Limit (high, bits 16-19)
+    db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
 .tss: equ $ - GDT
     dd 0x00000068
@@ -101,63 +125,90 @@ _bootstrap_start:
 	; machine. Interrupts are disabled. Paging is disabled. The processor
 	; state is as defined in the multiboot standard.  
 
-    ; boot_page_table1 is in .bss, so it is a virtual address. subtract the virtual base to get the physical address
-    mov edi, (boot_page_table1 - 0xC0000000)
+    ; First thing's first: set up paging. Start by pointing level 4 to level 3
+    mov edi, boot_page_table_level4      ; these labels are in high memory, so subtract kernel memory base to get physical addresses
+    sub edi, _kernel_vma_base
+    mov eax, boot_page_table_level3
+    sub eax, _kernel_vma_base
+    or eax, 0x03  ; set present and writable flag
+    mov dword [edi + 0], eax  ; set the 0th entry of the level 4 to point to our lavel 3 table (maps the first 512GiB of memory)
 
-    ; create virtual address 0x00000000
-    mov esi, 0x00000000
-    mov ecx, 1023 ; map 4MiB (minus 4096 bytes) (loop 1023 times)
+    ; Point the level 3 0th entry to our level 2 table
+    mov edi, boot_page_table_level3      ; our page tables are in kernel virtual space at high mem
+    sub edi, _kernel_vma_base
+    mov eax, boot_page_table_level2
+    sub eax, _kernel_vma_base
+    or eax, 0x03  ; set present and writable flag
+    mov dword [edi + 0], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
 
-.boot_pt_loop:
-    cmp esi, _kernel_start_address              ; is the current address in ESI below current space?
-    jl _bootstrap_start.next_boot_pt            ; if so, don't map it
-    cmp esi, (_kernel_end_address - 0xC0000000) ; did we map all of the kernel space?
-    jge _bootstrap_start.done_boot_pt           ; if so, we're done
+    ; In order to map 0xC0000000 later, we need an entry in our level 3 table pointing to a different level 2 table
+    mov eax, boot_page_table_c000
+    sub eax, _kernel_vma_base
+    or eax, 0x03  ; set present and writable
+    mov dword [edi + 3 * 8], eax  ; each entry in the level 3 table maps 1GiB (0x40000000 bytes) and we want to map 0xC0000000,
+                                  ; so we set entry 3 to our second table TODO don't use C0000000 in the future
 
-    ; current esi address is within kernel space, so map it
-    mov edx, esi       ; address into edx
-    or edx, 0x03       ; set the lower two bits to 1 (present, writable)
-    mov [edi], edx     ; write the address into the page table (edi = physical address of boot_page_table1)
+    ; Map the first 4 MiB using hugepages identically to physical ram
+    mov edi, boot_page_table_level2       ; our page tables are in kernel virtual space at high mem
+    sub edi, _kernel_vma_base
+    mov eax, 0x000000  ; first 2MiB
+    or eax, 0b10000011 ; set huge page bit, present, writable
+    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
+    add eax, 0x200000  ; second 2MiB, don't need to set flags
+    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
 
-.next_boot_pt:
-    add esi, 4096      ; increment address by 1 page
-    add edi, 4         ; increment page table by one entry (4 bytes)
-    loop .boot_pt_loop ; next page
+    ; Now map 4MiB at 0xC0000000 to the same physical addresses
+    mov edi, boot_page_table_c000         ; our page tables are in kernel virtual space at high mem
+    sub edi, _kernel_vma_base
+    mov eax, 0x000000  ; first 2MiB
+    or eax, 0b10000011 ; set huge page bit, present, writable
+    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
+    add eax, 0x200000  ; second 2MiB, don't need to set flags
+    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
 
-.done_boot_pt:
-    ; map VGA ram (0xB8000) to the last entry in the page table. the last entry is 1023, so that 
-    ; offset is 1023*4096 = 0x3FF000
-    mov edi, (boot_page_table1 - 0xC0000000) ; reload the physical address of the page table
-    add edi, 1023 * 4                        ; add an offset into the table for the last entry
-    mov dword [edi], (0x000B8000 | 0x03)     ; set the page table with present, writable set
-
-    ; The page table built maps whatever virtual address (selected by the entry in the page table directory)
-    ; to physical addresses 0x3FFFFF. Identity map virtual address 0 to 0 so that our code continues to execute
-    ; normally, and map the same page table to 0xC0000000
-    mov edi, (boot_page_directory - 0xC0000000)   ; pointer to page directory
-    mov ecx, (boot_page_table1 - 0xC0000000)      ; physical address of the page table
-    or ecx, 0x03                                  ; set control bits on the address
-    mov dword [edi], ecx                          ; write pointer to the page table into entry 0 of the directory
-    add edi, 768 * 4                              ; offset into the directory for virtual address 0xC0000000
-    mov dword [edi], ecx                          ; write the same page table address
-
-    ; Set control register 3 to the address of the page directory
-    mov ecx, (boot_page_directory - 0xC0000000)
+    ; Set control register 3 to the address of the level 4 page table
+    mov ecx, boot_page_table_level4
+    sub ecx, _kernel_vma_base
     mov cr3, ecx
+
+    ; Enable PAE
+    mov eax, cr4
+    or eax, 1 << 5
+    mov cr4, eax
+    
+    ; Enable long mode
+    mov ecx, 0xC0000080     ; select register
+    rdmsr                   ; read value
+    or eax, 1 << 8          ; set LM bit
+    wrmsr                   ; write value
 
     ; Finally, enable paging
     mov ecx, cr0
-    or ecx, 0x80010000
+    or ecx, 1 << 31
+    or ecx, 1 << 16
     mov cr0, ecx
 
-    ; Jump to high virtual address
-    lea ecx, [_start] ; will put a virtual address for _start into ecx
-    jmp ecx           ; absolute jump
+    ; at this point we're still in a 32-bit compatibility submode, and we switch to long mode
+    ; by setting the long mode flag on the code segment in the gdt and jumping to code in it
+    lgdt [GDT.pointer]
+
+    ; we have to load the segment registers with the selectors into the gdt
+    mov ax, GDT.data       ; set the non-code segment registers to the data segment
+    mov ds, ax
+    mov es, ax
+    mov fs, ax
+    mov gs, ax
+    mov ss, ax
+
+    ; finally, this jump moves us into long mode
+    jmp GDT.text:_start  ; loads CS register, where the GDT entry has long mode set
 
 .end:
 
 ; We have a _start function running in high (virtual) memory now
 section .text
+bits 64
+
 global _start:function (_start.end - _start)
 _start:
 	; To set up a stack, we set the esp register to point to the top of our
@@ -166,55 +217,18 @@ _start:
 	mov esp, stack_top
 
     ; Unmap the identity mapping in directory entry 0
-    mov dword [boot_page_directory + 0], 0
+    ;!mov dword [boot_page_directory + 0], 0
 
     ; Reload cr3 to force a TLB flush so the changes take effect immediately
-    mov ecx, cr3
-    mov cr3, ecx
+    ;!mov ecx, cr3
+    ;!mov cr3, ecx
 
-	; This is a good place to initialize crucial processor state before the
-	; high-level kernel is entered. It's best to minimize the early
-	; environment where crucial features are offline. Note that the
-	; processor is not fully initialized yet: Features such as floating
-	; point instructions and instruction set extensions are not initialized
-	; yet. The GDT should be loaded here. Paging should be enabled here.
-	; C++ features such as global constructors and exceptions will require
-	; runtime support to work as well.
-
-    ;!; enable long mode by setting the LM bit in the EFER MSR
-    ;!mov ecx, 0xC0000080 ; select the EFER MSR
-    ;!rdmsr               ; read, result in eax
-    ;!or eax, 1 << 8      ; set bit 8 (LM)
-    ;!wrmsr               ; write
-
-    ;!; enable paging, which is required for long mode
-    ;!mov eax, cr0        ; get control register 0
-    ;!or eax, 1 << 31     ; set the PG bit
-    ;!mov cr0, eax        ; write control register 0
-
-    ;!; at this point we're still in a 32-bit compatibility submode, and we switch to long mode
-    ;!; by setting the long mode flag on the code segment in the gdt and jumping to code in it
-;!    lgdt [GDT.pointer]
-;! 
-;!    ; we have to load the segment registers with the selectors into the gdt
-;!    jmp GDT.code:.reload_segment_registers  ; start by loading CS
-;!.reload_segment_registers:
-;!    mov eax, GDT.data                       ; set the remaining segment registers to the data segment
-;!    mov ds, ax
-;!    mov es, ax
-;!    mov fs, ax
-;!    mov gs, ax
-;!    mov ss, ax
-
-	; Enter the high-level kernel. The ABI requires the stack is 16-byte
+	; Enter the high-level kernel. The ABI requires the stack be 16-byte
 	; aligned at the time of the call instruction (which afterwards pushes
 	; the return pointer of size 4 bytes). The stack was originally 16-byte
 	; aligned above and we've since pushed a multiple of 16 bytes to the
 	; stack since (pushed 0 bytes so far) and the alignment is thus
 	; preserved and the call is well defined.
-	; note, that if you are building on Windows, C functions may have "_" prefix in assembly: _kernel_main
-	extern kernel_main
-	;!call GDT.code:kernel_main
 	call kernel_main
 
 	; If the system has nothing more to do, put the computer into an
