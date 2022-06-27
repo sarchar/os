@@ -35,8 +35,8 @@ multiboot_header:
     dw 5 ; MULTIBOOT_HEADER_TAG_FRAMEBUFFER
     dw 1 ; MULTIBOOT_HEADER_TAG_OPTIONAL
     dd .efi_boot_services_tag - .framebuffer_tag
-    dd 640
-    dd 480
+    dd 1024
+    dd 768
     dd 32
     align 8
 .efi_boot_services_tag:

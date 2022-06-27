@@ -2,6 +2,7 @@
 //
 #include "common.h"
 #include "efifb.h"
+#include "terminal.h"
 
 // PSF font structure
 // From https://wiki.osdev.org/PC_Screen_Font
@@ -22,6 +23,22 @@ struct psf1_font *terminal_font;
 
 static u16 unicode_map[1 << 16]; // 16-bit mapping for unicode TODO use calloc?
 static bool font_has_unicode;
+
+#define TERMINAL_BACKLOG 2000
+#define TERMINAL_VIRTUAL_Y(y) (((y) + current_terminal.window_y) % TERMINAL_BACKLOG)
+#define TERMINAL_WIDTH   (1024/8)
+#define TERMINAL_HEIGHT  (768/16)
+
+struct terminal {
+    u32 width;
+    u32 height;
+    u16 buffer[TERMINAL_WIDTH * TERMINAL_BACKLOG]; // 640/8 x 480/16 = 80x30 (TODO determine the size dynamically with framebuffer size)
+    u32 cursor_x;
+    u32 cursor_y;
+    u32 window_y;
+};
+
+static struct terminal current_terminal;
 
 static void _load_font()
 {
@@ -109,11 +126,29 @@ static void _draw_char_to_framebuffer(u16 c, u32 x, u32 y, color text_color, col
 void terminal_init()
 {
     _load_font();
+
+    current_terminal.width = TERMINAL_WIDTH; // TODO determine dynamically
+    current_terminal.height = TERMINAL_HEIGHT;
+    current_terminal.window_y = 0; // window starts at y=0
+    current_terminal.cursor_x = 0;
+    current_terminal.cursor_y = 0;
+    // TODO memset
+    for(u32 i = 0; i < countof(current_terminal.buffer); i++) current_terminal.buffer[i] = 0;
 }
 
 void terminal_setc(u16 c, u32 cx, u32 cy)
 {
-    _draw_char_to_framebuffer(c, cx * 8, cy * terminal_font->charsize, COLOR(255, 255, 255), COLOR(0, 0, 0));
+    current_terminal.buffer[TERMINAL_VIRTUAL_Y(cy) * current_terminal.width + cx] = c;
+
+    if(c != 0) {
+        _draw_char_to_framebuffer(c, cx * 8, cy * terminal_font->charsize, COLOR(255, 255, 255), COLOR(0, 0, 0));
+    } else {
+        for(u32 y = 0; y < terminal_font->charsize; y++) {
+            for(u32 x = 0; x < 8; x++) {
+                efifb_putpixel(cx * 8 + x, cy * terminal_font->charsize + y, COLOR(0, 0, 0));
+            }
+        }
+    }
 
     //u32 xoffs = 0;
     //for(u32 i = 0; i < terminal_font->charsize; i++) {
@@ -123,5 +158,100 @@ void terminal_setc(u16 c, u32 cx, u32 cy)
     //    efifb_putpixel(xoffs + 11, 161, COLOR(255, 255, 255));
     //    xoffs += 8;
     //}
+}
+
+void terminal_putc(u16 c)
+{
+    if(c == '\n') {
+        current_terminal.cursor_x = 0;
+        current_terminal.cursor_y += 1;
+        if(current_terminal.cursor_y >= current_terminal.height) {
+            current_terminal.cursor_y = current_terminal.height - 1;
+            terminal_scroll(1);
+        }
+    } else {
+        terminal_setc(c, current_terminal.cursor_x, current_terminal.cursor_y);
+        terminal_step(1);
+    }
+}
+
+// move the cursor forward n steps without changing the terminal buffer
+// usually only stepped by 1 after printing a character
+void terminal_step(u32 steps)
+{
+    while(steps-- != 0) {
+        current_terminal.cursor_x += 1;
+        if(current_terminal.cursor_x >= current_terminal.width) {
+            current_terminal.cursor_x = 0;
+            current_terminal.cursor_y += 1;
+            if(current_terminal.cursor_y >= current_terminal.height) {
+                current_terminal.cursor_y = current_terminal.height - 1;
+                terminal_scroll(1);
+            }
+        }
+    }
+}
+
+void terminal_scroll(u32 lines)
+{
+    current_terminal.window_y += 1;
+    terminal_redraw();
+}
+
+void terminal_redraw()
+{
+    for(u32 y = 0; y < current_terminal.height; y++) {
+        for(u32 x = 0; x < current_terminal.width; x++) {
+            u8 c = current_terminal.buffer[TERMINAL_VIRTUAL_Y(y) * current_terminal.width + x];
+            terminal_setc(c, x, y);
+        }
+    }
+}
+
+// functions below this line are utility print functions that will ideally be replaced with a printf function
+//
+static char const HEX_LETTERS[] = "0123456789ABCDEF";
+
+void terminal_print_string(char* s)
+{
+    while(*s != '\0') {
+        // TODO decode utf8??
+        terminal_putc((u16)*s++);
+    }
+}
+
+void terminal_print_pointer(void* a)
+{
+    // don't display the upper long if it's all zeros
+    u32 loop_size = (((u64)a & 0xFFFFFFFF00000000LL) == 0) ? 8 : 16;
+
+    for(u32 i = 0; i < loop_size; i++) {
+        u8 v = (((long long)a) >> (((loop_size - 1) - i) * 4)) & 0x0F;
+        terminal_putc((u16)HEX_LETTERS[v]);
+    }
+}
+
+void terminal_print_u64(u64 v)
+{
+    for(u32 i = 0; i < 16; i++) {
+        u8 t = (v >> ((15 - i) * 4)) & 0x0F;
+        terminal_putc((u16)HEX_LETTERS[t]);
+    }
+}
+
+void terminal_print_u32(u32 v)
+{
+    for(u32 i = 0; i < 8; i++) {
+        u8 t = (v >> ((7 - i) * 4)) & 0x0F;
+        terminal_putc((u16)HEX_LETTERS[t]);
+    }
+}
+
+void terminal_print_u8(u32 v)
+{
+    for(u32 i = 0; i < 2; i++) {
+        u8 t = (v >> ((1 - i) * 4)) & 0x0F;
+        terminal_putc((u16)HEX_LETTERS[t]);
+    }
 }
 

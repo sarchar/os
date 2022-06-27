@@ -5,6 +5,7 @@
 #include <stddef.h>
 #include <stdint.h>
 
+#define countof(a) (sizeof(a) / sizeof((a)[0]))
 #define unused(x) ((void)(x))
 
 #define PANIC()   kernel_panic()

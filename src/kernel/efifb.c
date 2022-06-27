@@ -14,7 +14,7 @@ struct efifb {
     u32  pitch;
 };
 
-static struct efifb global_efifb;
+static struct efifb global_efifb = { NULL, 0, 0, 0, 0 };
 
 static bool efifb_iscompat(u32 width, u32 height, u8 bpp, u32 pitch)
 {
@@ -38,7 +38,9 @@ bool efifb_init(u32* framebuffer, u32 width, u32 height, u8 bpp, u32 pitch)
 void efifb_putpixel(u32 x, u32 y, color c)
 {
     if(x >= global_efifb.width || y >= global_efifb.height) return;
-    global_efifb.framebuffer[y * global_efifb.width + x] = c;
+    if(global_efifb.framebuffer != NULL) {
+        global_efifb.framebuffer[y * global_efifb.width + x] = c;
+    }
 }
 
 void efifb_clear(color clear_color)
