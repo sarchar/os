@@ -25,6 +25,26 @@ multiboot_header:
     dd MB2_HDRLEN
 	dd MB2_CHECKSUM
     ; tags
+.console_tag:
+;    dw 4 ; MULTIBOOT_HEADER_TAG_CONSOLE_FLAGS
+;    dw 0 ; required
+;    dd .framebuffer_tag - .console_tag
+;    dw 3 ; 1<<0 = console required, 1<<1 = EGA supported
+;    align 8
+.framebuffer_tag:
+    dw 5 ; MULTIBOOT_HEADER_TAG_FRAMEBUFFER
+    dw 1 ; MULTIBOOT_HEADER_TAG_OPTIONAL
+    dd .efi_boot_services_tag - .framebuffer_tag
+    dd 640
+    dd 480
+    dd 32
+    align 8
+.efi_boot_services_tag:
+;    dw 7 ; MULTIBOOT_HEADER_TAG_EFI_BS
+;    dw 1 ; optional
+;    dd .end_tag - .efi_boot_services_tag
+;    align 8
+.end_tag:
     dw 0                                 ; type (0 = terminating tag)
 	dw 0                                 ; flags
     dd 8                                 ; size of tag
@@ -49,11 +69,14 @@ stack_top:
 align 4096
 boot_page_table_level4: resq 512   ; one entry in this table is a physical address to a level 3 table (512 entries * 512GiB = 256TiB)
 boot_page_table_level3: resq 512   ; one entry in this table is a physical address to a level 2 table (512 entries * 1GiB = 512GiB)
-boot_page_table_level2: resq 512   ; one entry in this table is a physical address to a level 1 table (512 entries * 0x200000 = 1GiB)
-boot_page_table_level1: resq 512   ; one entry in this table is a 64-bit address to a 4,096 (0x1000) block of physical memory for a total 
-                                   ; of 512 * 0x1000 = 0x200000 = 2MiB mappable bytes per level 1 table
+;boot_page_table_level2: resq 512   ; one entry in this table is a physical address to a level 1 table (512 entries * 0x200000 = 1GiB)
+;boot_page_table_level1: resq 512   ; one entry in this table is a 64-bit address to a 4,096 (0x1000) block of physical memory for a total 
+;                                   ; of 512 * 0x1000 = 0x200000 = 2MiB mappable bytes per level 1 table
 
 ; need another page table for 0xC0000000
+boot_page_table_0000: resq 512
+boot_page_table_4000: resq 512
+boot_page_table_8000: resq 512
 boot_page_table_c000: resq 512
 
 ; Link script defined symbols used for knowing the size of the kernel
@@ -92,14 +115,12 @@ GDT:
     db 0x00                                     ; Access
     db 0x00                                     ; Flags & Limit
     db 0x00                                     ; Base (high, bits 24-31)
-    ; base @ 0x00000000, limit 1GiB
 .text: equ $ - GDT
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
     db PRESENT | NOT_SYS | EXEC | RW            ; Access
     db GRAN_4K | LONG_MODE | 0x0F               ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
-    ; base @ 0x00000000, limit 1GiB
 .data: equ $ - GDT
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
@@ -125,7 +146,7 @@ _bootstrap_start:
 	; machine. Interrupts are disabled. Paging is disabled. The processor
 	; state is as defined in the multiboot standard.  
 
-    ; First thing's first: set up paging. Start by pointing level 4 to level 3
+    ; Before switching into long mode, set up paging. Start by pointing level 4 to level 3
     mov edi, boot_page_table_level4      ; these labels are in high memory, so subtract kernel memory base to get physical addresses
     sub edi, _kernel_vma_base
     mov eax, boot_page_table_level3
@@ -133,38 +154,63 @@ _bootstrap_start:
     or eax, 0x03  ; set present and writable flag
     mov dword [edi + 0], eax  ; set the 0th entry of the level 4 to point to our lavel 3 table (maps the first 512GiB of memory)
 
-    ; Point the level 3 0th entry to our level 2 table
+    ; Point the level 3 entries 0 through 3 to level 2 tables .. this is to map identity map the entire 4GiB address space
     mov edi, boot_page_table_level3      ; our page tables are in kernel virtual space at high mem
     sub edi, _kernel_vma_base
-    mov eax, boot_page_table_level2
+    mov eax, boot_page_table_0000
     sub eax, _kernel_vma_base
     or eax, 0x03  ; set present and writable flag
-    mov dword [edi + 0], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+    mov dword [edi + 0 * 8], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
 
-    ; In order to map 0xC0000000 later, we need an entry in our level 3 table pointing to a different level 2 table
+    ; then 4000
+    mov eax, boot_page_table_4000
+    sub eax, _kernel_vma_base
+    or eax, 0x03  ; set present and writable flag
+    mov dword [edi + 1 * 8], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+
+    ; then 8000
+    mov eax, boot_page_table_8000
+    sub eax, _kernel_vma_base
+    or eax, 0x03  ; set present and writable flag
+    mov dword [edi + 2 * 8], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+
+    ; In order to map 0xC0000000 (_kernel_vma_base) later, we need an entry in our level 3 table pointing to a different level 2 table
     mov eax, boot_page_table_c000
     sub eax, _kernel_vma_base
     or eax, 0x03  ; set present and writable
     mov dword [edi + 3 * 8], eax  ; each entry in the level 3 table maps 1GiB (0x40000000 bytes) and we want to map 0xC0000000,
                                   ; so we set entry 3 to our second table TODO don't use C0000000 in the future
 
-    ; Map the first 4 MiB using hugepages identically to physical ram
-    mov edi, boot_page_table_level2       ; our page tables are in kernel virtual space at high mem
-    sub edi, _kernel_vma_base
-    mov eax, 0x000000  ; first 2MiB
-    or eax, 0b10000011 ; set huge page bit, present, writable
-    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
-    add eax, 0x200000  ; second 2MiB, don't need to set flags
-    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
+    ; Each of the tables (0000, 4000, 8000, C000) map 1GiB using huge pages, so all four need to be set up
+    mov ecx, 512*4     ; number of entries per table is 512, but all four tables are contiguous so we can fill in one loop
+    xor eax, eax         ; start with the very last 2MiB
+    or eax, 0b10000011 ; or in present, writable, huge pages bits
 
-    ; Now map 4MiB at 0xC0000000 to the same physical addresses
-    mov edi, boot_page_table_c000         ; our page tables are in kernel virtual space at high mem
+    ; map the 4GiB
+    mov edi, boot_page_table_0000 ; put pagetable for first 1GiB into edi
     sub edi, _kernel_vma_base
-    mov eax, 0x000000  ; first 2MiB
-    or eax, 0b10000011 ; set huge page bit, present, writable
-    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
-    add eax, 0x200000  ; second 2MiB, don't need to set flags
-    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
+.fill_0000:
+    sub eax, 0x200000  ; decrement by 2MiB
+    mov dword [edi + (ecx - 1) * 8], eax
+    loop .fill_0000
+
+;    ; Map the first 4 MiB using hugepages identically to physical ram
+;    mov edi, boot_page_table_0000       ; our page tables are in kernel virtual space at high mem
+;    sub edi, _kernel_vma_base
+;    mov eax, 0x000000  ; first 2MiB
+;    or eax, 0b10000011 ; set huge page bit, present, writable
+;    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
+;    add eax, 0x200000  ; second 2MiB, don't need to set flags
+;    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
+;
+;    ; Now map 4MiB at 0xC0000000 to the same physical addresses
+;    mov edi, boot_page_table_c000         ; our page tables are in kernel virtual space at high mem
+;    sub edi, _kernel_vma_base
+;    mov eax, 0x000000  ; first 2MiB
+;    or eax, 0b10000011 ; set huge page bit, present, writable
+;    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
+;    add eax, 0x200000  ; second 2MiB, don't need to set flags
+;    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
 
     ; Set control register 3 to the address of the level 4 page table
     mov ecx, boot_page_table_level4
@@ -214,7 +260,10 @@ _start:
 	; To set up a stack, we set the esp register to point to the top of our
 	; stack (as it grows downwards on x86 systems). This is necessarily done
 	; in assembly as languages such as C cannot function without a stack.
-	mov esp, stack_top
+	mov esp, stack_top - 4    ; subtract 4 for the multiboot info pointer that's on the stack now
+
+    ; ebx was preserved in _bootstrap_start, put it into rdi for the first parameter to kernel_main
+    mov rdi, rbx
 
     ; Unmap the identity mapping in directory entry 0
     ;!mov dword [boot_page_directory + 0], 0
@@ -230,6 +279,7 @@ _start:
 	; stack since (pushed 0 bytes so far) and the alignment is thus
 	; preserved and the call is well defined.
 	call kernel_main
+    ;ret
 
 	; If the system has nothing more to do, put the computer into an
 	; infinite loop. To do that:

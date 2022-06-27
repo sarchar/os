@@ -6,7 +6,7 @@ ENTRY(_bootstrap_start)
 /* Tell where the various sections of the object files will be put in the final kernel image. */
 SECTIONS
 {
-    _kernel_vma_base = 0xC0000000;
+    _kernel_vma_base = 0x00000000;
 
     /* Begin putting sections at physical address 0x100000 (1 MiB), a conventional address for kernels to be loaded by the bootloader. */
     . = 1M;

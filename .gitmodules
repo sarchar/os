@@ -1,0 +1,3 @@
+[submodule "src/zircon-uefi"]
+	path = src/zircon-uefi
+	url = https://github.com/vineyard-os/zircon-uefi
