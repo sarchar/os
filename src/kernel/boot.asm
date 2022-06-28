@@ -132,8 +132,7 @@ GDT:
     dd 0x00CF8900
 .pointer:
     dw $ - GDT - 1                              ; Limit (size) of the GDT
-    dd GDT                                      ; 64-bit base, even if only 32-bits are used
-    dd 0
+    dq GDT                                      ; 64-bit base
 
 ; The linker script specifies _bootstrap_start as the entry point to the kernel and the
 ; bootloader will jump to this position once the kernel has been loaded. It
@@ -193,24 +192,6 @@ _bootstrap_start:
     sub eax, 0x200000  ; decrement by 2MiB
     mov dword [edi + (ecx - 1) * 8], eax
     loop .fill_0000
-
-;    ; Map the first 4 MiB using hugepages identically to physical ram
-;    mov edi, boot_page_table_0000       ; our page tables are in kernel virtual space at high mem
-;    sub edi, _kernel_vma_base
-;    mov eax, 0x000000  ; first 2MiB
-;    or eax, 0b10000011 ; set huge page bit, present, writable
-;    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
-;    add eax, 0x200000  ; second 2MiB, don't need to set flags
-;    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
-;
-;    ; Now map 4MiB at 0xC0000000 to the same physical addresses
-;    mov edi, boot_page_table_c000         ; our page tables are in kernel virtual space at high mem
-;    sub edi, _kernel_vma_base
-;    mov eax, 0x000000  ; first 2MiB
-;    or eax, 0b10000011 ; set huge page bit, present, writable
-;    mov dword [edi + 0], eax  ; set the 0th entry of the level 2 table to a physical huge page (0x000000 - 0x1FFFFF)
-;    add eax, 0x200000  ; second 2MiB, don't need to set flags
-;    mov dword [edi + 8], eax  ; set the 1st entry of the level 2 table to a physical huge page (0x200000 - 0x3FFFFF)
 
     ; Set control register 3 to the address of the level 4 page table
     mov ecx, boot_page_table_level4

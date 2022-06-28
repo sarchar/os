@@ -194,7 +194,7 @@ void terminal_step(u32 steps)
 
 void terminal_scroll(u32 lines)
 {
-    current_terminal.window_y += 1;
+    current_terminal.window_y += lines;
     terminal_redraw();
 }
 
