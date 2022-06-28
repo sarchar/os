@@ -2,6 +2,7 @@
 #include "common.h"
 
 #include "efifb.h"
+#include "interrupts.h"
 #include "multiboot2.h"
 #include "terminal.h"
 
@@ -24,7 +25,12 @@ struct multiboot_info
 void kernel_panic()
 {
     // attempt to set the screen to all red
-    efifb_clear(COLOR(255,0,0));
+    //efifb_clear(COLOR(255,0,0));
+    for(u32 y = 540; y < 620; y++) {
+        for(u32 x = 840; x < 920; x++) {
+            efifb_putpixel(x, y, COLOR(255, 0, 0));
+        }
+    }
 
     // loop forever
     while(1) { asm("hlt"); }
@@ -38,6 +44,11 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
     struct multiboot_mmap_entry*         mbt_mmap_entry;
     struct multiboot_tag_framebuffer*    mbt_framebuffer;
 
+    // immediately setup and enable interrupts
+    interrupts_init();
+
+    // now create a terminal before any print calls are made -- they won't
+    // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
     terminal_init();
 
     terminal_print_string("Boot\n");
@@ -182,6 +193,9 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
             multiboot_info_ptr->total_size -= alignment;
         }
     }
+
+    // this will cause a page fault exception
+    *(u32 *)0xfefefefe00000000 = 1;
 
     terminal_print_string("\n...exiting...");
 }

@@ -17,7 +17,7 @@ SET_SOURCE_FILES_PROPERTIES(font.o
 #SET_TARGET_PROPERTIES(data PROPERTIES LINKER_LANGUAGE C)
 
 # define the target build
-ADD_EXECUTABLE(os.bin boot.asm kernel.c efifb.c terminal.c font.o)
+ADD_EXECUTABLE(os.bin boot.asm kernel.c efifb.c idt.c interrupts.c terminal.c font.o)
 
 # includes
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
