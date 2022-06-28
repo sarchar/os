@@ -62,4 +62,10 @@ static inline void __io_wait(void)
     __outb(0x80, 0);
 }
 
+static inline u64 __rdcr2()
+{
+    u64 ret;
+    asm volatile ( "mov %%cr2, %0" : "=a"(ret) );
+    return ret;
+}
 #endif

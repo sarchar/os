@@ -5,6 +5,7 @@
 #include "idt.h"
 #include "interrupts.h"
 #include "kernel.h"
+#include "terminal.h"
 
 // Temporarily use PIC to enable some basic interrputs. This will all be wiped once APIC is implemented.
 #define PIC1_COMMAND    0x20        // IO base address for master PIC
@@ -131,6 +132,10 @@ static void pic_clear_mask(u8 irq)
 
 void interrupts_init()
 {
+    unused(pic_set_mask);
+    unused(pic_get_isr);
+    unused(pic_get_irr);
+
     idt_init();
 
     // remap the PIC irqs to 0x20-0x2F
@@ -144,45 +149,102 @@ void interrupts_init()
     __outb(0x61, data | 0x80);  //Disables the keyboard  
     __io_wait();
     __outb(0x61, data & 0x7F);  //Enables the keyboard  
+    __io_wait();
+    __inb(0x60);                //Clear the ps/2 output, as it generates an extra irq
 
     __sti(); // enable interrupts
 }
 
-void interrupt_stub()
+extern void _interrupt_handler_common(void);
+
+// Note: using 'movq' doesn't actually encode an 8-byte move, and I'm not sure why.
+// But without a proper 8-byte mov, the upper long in rax isn't properly set to
+// the address of the interrupt handler. So leaq is used here instead.
+#define DEFINE_INTERRUPT_HANDLER(name)             \
+    __asm__(                                       \
+        ".global " #name "\n"                      \
+        ".align 8\n"                               \
+        #name ":\n"                                \
+        "\t" "push %rax\n"                         /* save rax */                                     \
+        "\t" "push %rdi\n"                         /* save rdi */                                     \
+        "\t" "push %rsi\n"                         /* save rsi */                                     \
+        "\t" "mov 24(%rsp), %rdi\n"                /* load the saved rip into rdi */                  \
+        "\t" "leaq _" #name ", %rax\n"             /* load the actual irq handler address into rax */ \
+        "\t" "jmp _interrupt_handler_common\n"     \
+    );                                             \
+    void _##name(void* fault_addr)
+
+#define DEFINE_INTERRUPT_HANDLER_ERR(name)         \
+    __asm__(                                       \
+        ".global " #name "\n"                      \
+        ".align 8\n"                               \
+        #name ":\n"                                \
+        "\t" "xchg %rax,0(%rsp)\n"                 /* save rax by swapping the error code with it */  \
+        "\t" "push %rdi\n"                         /* save rdi */                                     \
+        "\t" "mov %rax, %rdi\n"                    /* move the cpu error code into rdi */             \
+        "\t" "push %rsi\n"                         /* save rsi */                                     \
+        "\t" "mov 24(%rsp), %rsi\n"                /* load the saved rip into rsi */                  \
+        "\t" "leaq _" #name ", %rax\n"             /* load the actual irq handler address into rax */ \
+        "\t" "jmp _interrupt_handler_common\n"     \
+    );                                             \
+    void _##name(u64 error_code, void* fault_addr)
+
+
+DEFINE_INTERRUPT_HANDLER_ERR(interrupt_stub)
 {
+    unused(error_code);
+    unused(fault_addr);
     kernel_panic(COLOR(255, 0, 0));
     return;
 }
 
-void interrupt_stub_noerr()
+DEFINE_INTERRUPT_HANDLER(interrupt_stub_noerr)
 {
+    unused(fault_addr);
     kernel_panic(COLOR(255, 255, 0));
+    return;
+}
+
+DEFINE_INTERRUPT_HANDLER_ERR(interrupt_gpf)
+{
+    terminal_print_string("general protection fault: error = $");
+    terminal_print_u32(error_code);
+    terminal_print_string(" at address $");
+    terminal_print_pointer(fault_addr);
+    kernel_panic(COLOR(255, 0, 0));
+    return;
+}
+
+DEFINE_INTERRUPT_HANDLER_ERR(interrupt_page_fault)
+{
+    terminal_print_string("page fault: error = $");
+    terminal_print_u32(error_code);
+    terminal_print_string(" at address $");
+    terminal_print_pointer(fault_addr);
+
+    u8 rw = (error_code & 0x02);
+
+    u64 access_address = __rdcr2();
+    terminal_print_string(rw ? " writing $" : " reading $");
+    terminal_print_pointer((void*)access_address);
+    terminal_print_string("\n");
+
+    kernel_panic(COLOR(0, 255, 0));
     return;
 }
 
 extern volatile u32 blocking;
 extern u8 scancode;
 
-void _interrupt_kb_handler()
+DEFINE_INTERRUPT_HANDLER(interrupt_kb_handler)
 {
-    static u8 count = 0;
+    unused(fault_addr);
+
+    // read the keyboard character
+    scancode = __inb(0x60);
     blocking++;
 
-    scancode = __inb(0x60); // read the keyboard character
+    // all PIC interrupts need to send the controller the end-of-interrupt command
     pic_send_eoi(1);
 }
-
-// Define an ISR stub that makes a call to a C function 
-__asm__(
-    ".global interrupt_kb_handler\n"
-    ".align 8\n"
-    "interrupt_kb_handler:\n"
-    "\t" "push %rdx\n"  // Save registers. TODO save allll the registers. Right now only A and D are being used in _interrupt_kb_handler
-    "\t" "push %rax\n"
-    "\t" "cld\n"        // C code following the SysV ABI requires DF to be clear on function entry
-    "\t" "call _interrupt_kb_handler\n"   // Call actual handler
-    "\t" "pop %rax\n"   // Restore all the registers
-    "\t" "pop %rdx\n"
-    "\t" "iretq\n"      // Return from interrupt
-);
 

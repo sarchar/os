@@ -42,7 +42,7 @@ static struct terminal current_terminal;
 
 static void _load_font()
 {
-    u16 glyph = 0;
+//    u16 glyph = 0;
 
     // cast the address to PSF header struct
     terminal_font = (struct psf1_font*)&_binary_font_psf_start;

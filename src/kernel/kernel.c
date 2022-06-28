@@ -198,10 +198,13 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
         }
     }
 
-    // cause a page fault exception (testing the idt)
-    //*(u32 *)0xfefefefe00000000 = 1;
-
     terminal_print_string("\n");
+
+    // cause a page fault exception (testing the idt)
+    *(u32 *)0xfffffefe00000000 = 1;    // page fault
+    //*(u32 *)0xf0fffefe00000000 = 1;  // gpf because upper short isn't canonical
+    //__asm__("div 0, %rax");          // division by 0 error
+
     u32 count = 0;
     while(1) {
         while(blocking > 0) {
