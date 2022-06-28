@@ -1,6 +1,7 @@
 // Based on code from https://wiki.osdev.org/Bare_Bones
 #include "common.h"
 
+#include "cpu.h"
 #include "efifb.h"
 #include "interrupts.h"
 #include "multiboot2.h"
@@ -15,6 +16,9 @@
 #if !defined(__x86_64__)
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
+
+volatile u32 blocking = 0;
+u8 scancode;
  
 struct multiboot_info
 {
@@ -22,13 +26,13 @@ struct multiboot_info
 	multiboot_uint32_t reserved;
 };
 
-void kernel_panic()
+void kernel_panic(u32 error)
 {
     // attempt to set the screen to all red
     //efifb_clear(COLOR(255,0,0));
     for(u32 y = 540; y < 620; y++) {
         for(u32 x = 840; x < 920; x++) {
-            efifb_putpixel(x, y, COLOR(255, 0, 0));
+            efifb_putpixel(x, y, (color)error);
         }
     }
 
@@ -124,7 +128,7 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
                            mbt_framebuffer->common.framebuffer_height,
                            mbt_framebuffer->common.framebuffer_bpp,
                            mbt_framebuffer->common.framebuffer_pitch)) {
-                PANIC();
+                PANIC(COLOR(0, 0, 0)); // color won't mater here
             }
 
             // set screen blue to show that we have initialized the frame buffer
@@ -194,8 +198,27 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
         }
     }
 
-    // this will cause a page fault exception
-    *(u32 *)0xfefefefe00000000 = 1;
+    // cause a page fault exception (testing the idt)
+    //*(u32 *)0xfefefefe00000000 = 1;
+
+    terminal_print_string("\n");
+    u32 count = 0;
+    while(1) {
+        while(blocking > 0) {
+            __cli();
+            terminal_print_u8(scancode);
+            terminal_print_string("\n");
+
+            for(u32 y = 0; y < 16; y++) {
+                for(u32 x = 0; x < 16; x++) {
+                    efifb_putpixel(16+x+count*32, 600+y, COLOR(255, 255, 255));
+                }
+            }
+            blocking--;
+            count++;
+            __sti();
+        }
+    }
 
     terminal_print_string("\n...exiting...");
 }

@@ -84,6 +84,8 @@ void idt_init()
     idt_set_entry(29, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(30, interrupt_stub,       IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(31, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
+    idt_set_entry(32, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
+    idt_set_entry(33, interrupt_kb_handler, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
 
     __asm__ volatile ("lidt %0" : : "m"(_idtr)); // load the new IDT
 }

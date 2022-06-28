@@ -13,7 +13,7 @@
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 #define unused(x) ((void)(x))
 
-#define PANIC()   kernel_panic()
+#define PANIC(c)   kernel_panic(c)
 
 typedef uint8_t   u8;
 typedef uint16_t  u16;
