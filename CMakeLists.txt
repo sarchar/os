@@ -13,8 +13,8 @@ SET(CMAKE_ASM_COMPILE_OBJECT "nasm -felf64 <SOURCE> -o <OBJECT>")
 # Configure C compiler
 SET(CMAKE_C_COMPILER x86_64-elf-gcc)
 SET(CMAKE_C_COMPILER_WORKS TRUE)
-SET(CMAKE_C_FLAGS "-std=gnu99 -ffreestanding -O2 -Wall -Wextra -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2" CACHE STRING "" FORCE)
-#SET(CMAKE_C_SIZEOF_DATA_PTR 4)
+#SET(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -O2 -Wall -Wextra -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2" CACHE STRING "" FORCE)
+SET(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -g3 -Wall -Wextra -mcmodel=large -mno-red-zone -mno-mmx -mno-sse -mno-sse2" CACHE STRING "" FORCE)
 
 # Prevent -rdynamic from being passed to the linker
 set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "-z max-page-size=0x1000")

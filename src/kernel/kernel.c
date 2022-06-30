@@ -5,6 +5,7 @@
 #include "efifb.h"
 #include "interrupts.h"
 #include "multiboot2.h"
+#include "palloc.h"
 #include "terminal.h"
 
 /* Check if the compiler thinks you are targeting the wrong operating system. */
@@ -47,6 +48,7 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
     struct multiboot_tag_mmap*           mbt_mmap;
     struct multiboot_mmap_entry*         mbt_mmap_entry;
     struct multiboot_tag_framebuffer*    mbt_framebuffer;
+    bool palloc_init_done = false;
 
     // immediately setup and enable interrupts
     interrupts_init();
@@ -55,9 +57,7 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
     // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
     terminal_init();
 
-    terminal_print_string("Boot\n");
-    terminal_print_string("Multiboot info ptr: $"); terminal_print_pointer(multiboot_info_ptr);
-	terminal_print_string("\nMultiboot total size: $"); terminal_print_u32(multiboot_info_ptr->total_size);
+    terminal_print_stringnl("Boot");
 
     // loop over all the tags in the structure up to total_size, which includes the info structure size
     multiboot_info_ptr->total_size -= 8;
@@ -67,28 +67,31 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
         switch(mbt->type) {
         case MULTIBOOT_TAG_TYPE_CMDLINE:
             mbt_string = (struct multiboot_tag_string*)mbt;
-            terminal_print_string("\nMBT Command line: ");
-            terminal_print_string(mbt_string->string);
+            terminal_print_string("MBT Command line: ");
+            terminal_print_stringnl(mbt_string->string);
             break;
 
         case MULTIBOOT_TAG_TYPE_BOOT_LOADER_NAME:
             mbt_string = (struct multiboot_tag_string*)mbt;
-            terminal_print_string("\nMBT Boot loader name: ");
-            terminal_print_string(mbt_string->string);
+            terminal_print_string("MBT Boot loader name: ");
+            terminal_print_stringnl(mbt_string->string);
             break;
 
         case MULTIBOOT_TAG_TYPE_MMAP:
             mbt_mmap = (struct multiboot_tag_mmap*)mbt;
             mbt_mmap_entry = mbt_mmap->entries;
 
+#if 0
+            // Loop once to find the first available memory chunk large enough to initialize the physical memory allocator
             for(uint32_t size = mbt_mmap->size - sizeof(struct multiboot_tag_mmap); size != 0;) {
-                terminal_print_string("\nMBT Memory map entry: $");
-                terminal_print_pointer((void*)mbt_mmap_entry->addr);
-                terminal_print_string(" length $");
-                terminal_print_u64(mbt_mmap_entry->len);
-                terminal_print_string(" type 0x");
-                terminal_print_u8(mbt_mmap_entry->type);
-                
+                // Take the first memory chunk that has enough available and initialize physical memory
+                if(!palloc_init_done && mbt_mmap_entry->len >= PALLOC_INIT_MINIMUM_SIZE && mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
+                    palloc_init((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
+                    palloc_init_done = true;
+                    // make this region as reserved so it isn't added in the next loop
+                    mbt_mmap_entry->type = MULTIBOOT_MEMORY_RESERVED;
+                } 
+
                 // next entry
                 mbt_mmap_entry = (struct multiboot_mmap_entry*)((void *)mbt_mmap_entry + mbt_mmap->entry_size);
                 size -= mbt_mmap->entry_size;
@@ -100,17 +103,67 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
                     size -= alignment;
                 }
             }
+#endif
+
+            // Run a second loop to add all free memory to palloc and display it to the terminal
+            mbt_mmap_entry = mbt_mmap->entries;
+            for(uint32_t size = mbt_mmap->size - sizeof(struct multiboot_tag_mmap); size != 0;) {
+                terminal_print_string("MBT Memory map entry: $");
+                terminal_print_pointer((void*)mbt_mmap_entry->addr);
+                terminal_print_string(" length $");
+                terminal_print_u64(mbt_mmap_entry->len);
+
+                switch(mbt_mmap_entry->type) {
+                case MULTIBOOT_MEMORY_AVAILABLE:
+                    terminal_print_stringnl(" AVAILABLE");
+                    break;
+                case MULTIBOOT_MEMORY_RESERVED:
+                    terminal_print_stringnl(" RESERVED");
+                    break;
+                case MULTIBOOT_MEMORY_BADRAM:
+                    terminal_print_stringnl(" BADRAM");
+                    break;
+                case MULTIBOOT_MEMORY_NVS:
+                    terminal_print_stringnl(" NVS");
+                    break;
+                case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
+                    terminal_print_stringnl(" ACPI RECLAIMABLE");
+                    break;
+                default:
+                    terminal_print_stringnl(" UNKNOWN");
+                    break;
+                }
+
+                // Add all available memory to the system
+                // TODO reclaim ACPI ?
+                if(mbt_mmap_entry->len >= PALLOC_MINIMUM_SIZE && mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
+                    palloc_add_free_region((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
+                } 
+
+                // next entry
+                mbt_mmap_entry = (struct multiboot_mmap_entry*)((void *)mbt_mmap_entry + mbt_mmap->entry_size);
+                size -= mbt_mmap->entry_size;
+
+                // align-up the mbt pointer to 8 byte boundaries
+                if(((uint64_t)mbt_mmap_entry & 0x07) != 0) {
+                    int alignment = 8 - ((uint64_t)mbt_mmap_entry & 0x07);
+                    mbt_mmap_entry = (struct multiboot_mmap_entry*)((void *)mbt_mmap_entry + alignment);
+                    size -= alignment;
+                }
+            }
+
             break;
 
         case MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR:
             mbt_load_base_addr = (struct multiboot_tag_load_base_addr*)mbt;
-            terminal_print_string("\nMBT Base load address: $");
+            terminal_print_string("MBT Base load address: $");
             terminal_print_u32(mbt_load_base_addr->load_base_addr);
+            terminal_putc(L'\n');
             break;
 
         case MULTIBOOT_TAG_TYPE_FRAMEBUFFER:
             mbt_framebuffer = (struct multiboot_tag_framebuffer*)mbt;
-            terminal_print_string("\nMBT Framebuffer: address $");
+            terminal_print_string("MBT Framebuffer: address $");
             terminal_print_pointer((void*)mbt_framebuffer->common.framebuffer_addr);
             terminal_print_string(" pitch $");
             terminal_print_u32(mbt_framebuffer->common.framebuffer_pitch);
@@ -122,6 +175,7 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
             terminal_print_u8(mbt_framebuffer->common.framebuffer_bpp);
             terminal_print_string(" type $");
             terminal_print_u8(mbt_framebuffer->common.framebuffer_bpp);
+            terminal_putc(L'\n');
 
             if(!efifb_init((u32*)mbt_framebuffer->common.framebuffer_addr,
                            mbt_framebuffer->common.framebuffer_width,
@@ -155,13 +209,14 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
         case MULTIBOOT_TAG_TYPE_EFI_MMAP:
             {
                 struct multiboot_tag_efi_mmap* mbt_efi_mmap = (struct multiboot_tag_efi_mmap*)mbt;
-                terminal_print_string("\nMBT EFI mmap: descriptor size ");
+                terminal_print_string("MBT EFI mmap: descriptor size ");
                 terminal_print_u32(mbt_efi_mmap->descr_size);
+                terminal_putc(L'\n');
             }
             break;
 
         case MULTIBOOT_TAG_TYPE_ACPI_NEW:
-            terminal_print_string("\nGot tag ACPI_NEW");
+            terminal_print_stringnl("Got tag ACPI_NEW");
             break;
 
         case MULTIBOOT_TAG_TYPE_EFI64:
@@ -180,10 +235,11 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
             break;
 
         default:
-            terminal_print_string("\nMB unknown type $");
+            terminal_print_string("MB unknown type $");
             terminal_print_u32(mbt->type);
             terminal_print_string(" size $");
             terminal_print_u32(mbt->size);
+            terminal_putc(L'\n');
             break;
         }
 
@@ -198,7 +254,9 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
         }
     }
 
-    terminal_print_string("\n");
+    terminal_putc(L'\n');
+
+    palloc_init((void*)0x900000, 0x40000000);
 
     // cause a page fault exception (testing the idt)
     *(u32 *)0xfffffefe00000000 = 1;    // page fault
@@ -223,6 +281,6 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
         }
     }
 
-    terminal_print_string("\n...exiting...");
+    terminal_print_stringnl("...exiting...");
 }
 

@@ -6,6 +6,7 @@
 
 // PSF font structure
 // From https://wiki.osdev.org/PC_Screen_Font
+// Better description of PSF1/2 formats: https://www.win.tue.nl/~aeb/linux/kbd/font-formats-1.html
 #define PSF_FONT_MAGIC 0x864AB572
  
 struct psf1_font {
@@ -219,6 +220,13 @@ void terminal_print_string(char* s)
         terminal_putc((u16)*s++);
     }
 }
+
+void terminal_print_stringnl(char* s)
+{
+    terminal_print_string(s);
+    terminal_putc(L'\n');
+}
+
 
 void terminal_print_pointer(void* a)
 {

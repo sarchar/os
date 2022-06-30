@@ -182,7 +182,7 @@ _bootstrap_start:
 
     ; Each of the tables (0000, 4000, 8000, C000) map 1GiB using huge pages, so all four need to be set up
     mov ecx, 512*4     ; number of entries per table is 512, but all four tables are contiguous so we can fill in one loop
-    xor eax, eax         ; start with the very last 2MiB
+    xor eax, eax       ; start with the very last 2MiB
     or eax, 0b10000011 ; or in present, writable, huge pages bits
 
     ; map the 4GiB

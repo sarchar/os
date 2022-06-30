@@ -17,13 +17,14 @@ SET_SOURCE_FILES_PROPERTIES(font.o
 #SET_TARGET_PROPERTIES(data PROPERTIES LINKER_LANGUAGE C)
 
 # define the target build
-ADD_EXECUTABLE(os.bin boot.asm kernel.c efifb.c idt.c interrupts.c interrupts.asm terminal.c font.o)
+ADD_EXECUTABLE(os.bin boot.asm efifb.c idt.c interrupts.c interrupts.asm kernel.c palloc.c terminal.c font.o)
 
 # includes
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 # configure linker flags
-SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -O2 -nostdlib -lgcc")
+#SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -O2 -nostdlib -lgcc")
+SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -g3 -nostdlib -lgcc")
 
 # be sure to link static files
 #TARGET_LINK_LIBRARIES(os.bin font)
