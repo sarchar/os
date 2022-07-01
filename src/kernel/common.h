@@ -47,4 +47,6 @@ typedef u32 color;
 #define memset(m, v, s)   do { for(u64 i = 0; i < s; i++) *((u8*)m+i) = v; } while(false)
 #define memset64(m, v, c) do { for(u64 i = 0; i < c; i++) *((u64*)m+i) = v; } while(false)
 
+#define lmask(n) ((1ULL << (n & 0x3F)) - (n == 64) - 1)
+
 #endif

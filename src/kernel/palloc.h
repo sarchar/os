@@ -8,6 +8,7 @@
 #define PALLOC_MINIMUM_SIZE      (64 * 1024)  // minimum size of contiguous ram that can be added to the physical page manager
 
 void palloc_init(void* init_ram, u64 init_ram_size);
+void* palloc_claim(u8 n); // allocate n=1,64 pages
 void palloc_add_free_region(void* ram, u64 ram_size);
 
 #endif

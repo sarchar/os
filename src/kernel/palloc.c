@@ -160,19 +160,139 @@ struct {
     u64   wasted;     // # of bytes wasted due to alignment or large allocations that force claim new pages
 } palloc_stats = { 0, };
 
-static inline void make_path(void* address, u8* result)
+static inline void _get_path(void* address, u8* path)
 {
     intp v = (intp)address;
 
-    // top 10 bits are unusable
-    result[0] = (v >> 48) & 0x3F; // selects 256TiB slice
-    result[1] = (v >> 42) & 0x3F; // selects 4TiB slice
-    result[2] = (v >> 36) & 0x3F; // selects 64GiB slice
-    result[3] = (v >> 30) & 0x3F; // selects 1GiB slice
-    result[4] = (v >> 24) & 0x3F; // selects 16MiB slice
-    result[5] = (v >> 18) & 0x3F; // selects 256KiB slice
-    result[6] = (v >> 12) & 0x3F; // selects 4K page
+    // top 10 bits are unused
+    path[0] = (v >> 48) & 0x3F; // selects 256TiB slice
+    path[1] = (v >> 42) & 0x3F; // selects 4TiB slice
+    path[2] = (v >> 36) & 0x3F; // selects 64GiB slice
+    path[3] = (v >> 30) & 0x3F; // selects 1GiB slice
+    path[4] = (v >> 24) & 0x3F; // selects 16MiB slice
+    path[5] = (v >> 18) & 0x3F; // selects 256KiB slice
+    path[6] = (v >> 12) & 0x3F; // selects 4K page
 }
+
+static inline intp _get_base_address(u8* path)
+{
+    return ((intp)path[0] << 48) |
+           ((intp)path[1] << 42) |
+           ((intp)path[2] << 36) |
+           ((intp)path[3] << 30) |
+           ((intp)path[4] << 24) |
+           ((intp)path[5] << 18) |
+           ((intp)path[6] << 12);
+}
+
+static inline void _print_path(u8* path)
+{
+    terminal_print_string("palloc: path(");
+    for(u8 i = 0; i < PALLOC_PATH_LEN; i++) {
+        terminal_print_u8(path[i]);
+        if(i != (PALLOC_PATH_LEN - 1)) terminal_putc(L',');
+    }
+    terminal_print_string(") address = $");
+    terminal_print_pointer((void*)_get_base_address(path));
+    terminal_putc(L'\n');
+}
+
+// initialize path and layer_nodes to point to the first leaf node with at least one page free
+static inline bool _init_leaf_search(struct palloc_node** layer_nodes, u8* path, u8* depth)
+{
+    *depth = 0;
+    layer_nodes[0] = palloc_root;
+
+    for(;;) {
+        if(*depth == (PALLOC_PATH_LEN - 1)) {
+            assert(layer_nodes[*depth]->bitmap != 0, "must not happen"); // leaf node said to have free pages doesn't
+            path[*depth] = 0; // not using the first free page within a leaf
+            return true;
+        } else {
+            assert(layer_nodes[*depth]->slices != null, "must not happen"); // node said to have child nodes doesn't
+
+            u8 i;
+            for(i = 0; i < 64; i++) {
+                // slice needs to exist and have at least one free page
+                if(layer_nodes[*depth]->slices[i] == null || layer_nodes[*depth]->slices[i]->free_pages == 0) continue;
+
+                // found a slot with pages available
+                path[*depth] = i;
+                layer_nodes[*depth+1] = layer_nodes[*depth]->slices[i];
+
+                // next depth
+                (*depth)++;
+                break;
+            }
+
+            assert(i != 64, "must not happen"); // node said to have child nodes doesn't
+        }
+    }
+
+    return false;
+}
+
+static bool _next_slice(u8* path, u8* depth)
+{
+    // go up to the next slice
+    (*depth)--;
+    path[*depth]++;
+    
+    // continue moving up while nodes run out of slices
+    while(path[*depth] == 64 && *depth > 0) {
+        // have to go up a layer, and back down into the next slice
+        path[*depth] = 0; // reset current node's slice to 0 since we're linearly incrementing into the next node
+    
+        // go up a layer
+        (*depth)--;
+    
+        // increment to the next slice within that layer (which might make us go up another layer!)
+        path[*depth]++;
+    }
+
+    // return false if increment is done, no more memory
+    return (depth != 0 || path[0] != 64);
+}
+
+// find the next leaf node with n pages free
+static bool _search_leaf_next(struct palloc_node** layer_nodes, u8* path, u8* depth, u8 n)
+{
+    _next_slice(path, depth);
+
+    // paths have been incremented to point to the next slice, but it may not exist or not have enough
+    // pages, so we have to continue that search
+    for(;;) {
+        if(*depth == (PALLOC_PATH_LEN - 1)) {
+            path[*depth] = 0; // don't need to know where the first free page is
+            return true;
+        } else {
+            u8 i;
+            for(i = 0; i < 64; i++) {
+                // slice needs to exist and have enough pages
+                if(layer_nodes[*depth]->slices[i] == null) continue;
+                if(layer_nodes[*depth]->slices[i]->free_pages < n) continue;
+
+                // found a slot with pages available
+                path[*depth] = i;
+
+                layer_nodes[*depth+1] = layer_nodes[*depth]->slices[i];
+                (*depth)++;
+                break;
+            }
+
+            // this happens if none of the slices within this node had a enough free pages
+            // so we have to move to the next slice in the parent layer
+            if(i == 64) {
+                if(!_next_slice(path, depth)) {
+                    assert(false, "no more memory to search");
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
 
 // steal some ram from the ram provided, to be used as bitmaps
 static inline void* _palloc_steal(void* mem, u64* mem_size, u64 alloc_size, u64 alignment)
@@ -185,9 +305,9 @@ static inline void* _palloc_steal(void* mem, u64* mem_size, u64 alloc_size, u64 
         palloc_internal_memory_start = 0;
         palloc_stats.pages++;
 
-        terminal_print_string("palloc: stealing one page from provided ram at $");
-        terminal_print_pointer((void*)palloc_internal_memory);
-        terminal_putc(L'\n');
+        //terminal_print_string("palloc: stealing one page from provided ram at $");
+        //terminal_print_pointer((void*)palloc_internal_memory);
+        //terminal_putc(L'\n');
 
         *mem_size -= 4096;
 
@@ -232,7 +352,7 @@ static void _palloc_print_stats()
 }
 
 // from palloc_root, set all the bits in all the necessary bitmaps to 1 that correspond to memory pages in [mem, mem_size).
-static inline void set_free_bits(void* mem, u64 mem_size)
+static inline void _set_free_bits(void* mem, u64 mem_size)
 {
     struct palloc_node* layer_nodes[PALLOC_PATH_LEN];
 
@@ -243,7 +363,7 @@ static inline void set_free_bits(void* mem, u64 mem_size)
     u64  pages_added[PALLOC_PATH_LEN] = { 0, };
 
     u8 path[PALLOC_PATH_LEN];
-    make_path(mem, path);
+    _get_path(mem, path);
 
     // find starting position in the bitmap tree
     layer_nodes[0] = palloc_root;
@@ -257,7 +377,7 @@ static inline void set_free_bits(void* mem, u64 mem_size)
         slice_size >>= 6; // each lower layer represents 64x less per slice
     }
 
-    terminal_print_string("end memory address = $"); terminal_print_pointer((void*)((intp)mem + mem_size)); terminal_putc(L'\n');
+    //terminal_print_string("end memory address = $"); terminal_print_pointer((void*)((intp)mem + mem_size)); terminal_putc(L'\n');
 
     // continue setting bits while we have more memory!
     while(true) {
@@ -343,9 +463,9 @@ static inline void set_free_bits(void* mem, u64 mem_size)
 
             // accumulate the free pages added at the previous layer
             layer_nodes[depth]->free_pages += pages_added[depth + 1];
-            if(depth == 3) {
-                terminal_print_string("*added "); terminal_print_u32((u32)pages_added[depth+1]); terminal_putc(L'\n');
-            }
+            //if(depth == 3) {
+            //    terminal_print_string("*added "); terminal_print_u32((u32)pages_added[depth+1]); terminal_putc(L'\n');
+            //}
             pages_added[depth] += pages_added[depth + 1];
             pages_added[depth + 1] = 0; // reset the accumulator at the lower level so it isn't added again
 
@@ -361,7 +481,7 @@ static inline void set_free_bits(void* mem, u64 mem_size)
 
     // tally up the added pages all the way up the tree
     for(u8 i = depth; i > 0; --i) {
-        terminal_print_string("* at layer "); terminal_print_u8(i-1); terminal_print_string(" added "); terminal_print_u32((u32)pages_added[i]); terminal_putc(L'\n');
+        //terminal_print_string("* at layer "); terminal_print_u8(i-1); terminal_print_string(" added "); terminal_print_u32((u32)pages_added[i]); terminal_putc(L'\n');
         layer_nodes[i - 1]->free_pages += pages_added[i];
         pages_added[i - 1] += pages_added[i];
     }
@@ -379,15 +499,11 @@ void palloc_init(void* init_ram, u64 init_ram_size)
     terminal_print_string(" size=$"); terminal_print_u64(init_ram_size);
     terminal_putc(L'\n');
     
-    u8 base_path[PALLOC_PATH_LEN];
-    make_path(init_ram, base_path);
-
-    // claim a page from the provided ram
-
     // initialize the root layer
     palloc_root = (struct palloc_node*)_palloc_steal(init_ram, &init_ram_size, sizeof(struct palloc_node), 8);
 
-    set_free_bits(init_ram, init_ram_size);
+    // set allll the bits making each page free
+    _set_free_bits(init_ram, init_ram_size);
 #if 0
     // loop from the base address to the end address, setting bits in the bitmap to 1
     // if the base address is aligned with the current slice's base address and it is equal or larger than the entire layer
@@ -415,5 +531,62 @@ void palloc_add_free_region(void* ram, u64 ram_size)
     terminal_print_string("palloc: TODO adding new RAM $"); terminal_print_pointer(ram);
     terminal_print_string(" size=$"); terminal_print_u64(ram_size);
     terminal_print_string("\n");
+}
+
+// can only claim up to 64 pages at a time, and the result is guaranteed to be contiguous
+void* palloc_claim(u8 n)
+{
+    assert(n > 0 && n <= 64, "must be in range [1, 64]");
+
+    u8 path[PALLOC_PATH_LEN];
+    struct palloc_node* layer_nodes[PALLOC_PATH_LEN];
+    u8 depth;
+
+    // initialize the search algorithm
+    if(!_init_leaf_search(layer_nodes, path, &depth)) {
+        assert(false, "out of memory");
+    }
+
+    // find the first leaf node with n pages available
+    // _init_leaf_search doesn't scan based on number of requried pages, but the
+    // first node with some pages might still satisfy our requirement, otherwise
+    // start scanning for the first leaf node with enough pages
+    if(layer_nodes[depth]->free_pages < n) {
+        _search_leaf_next(layer_nodes, path, &depth, n);
+    }
+    //terminal_print_string("* palloc: found leaf node with enough pages ($"); terminal_print_u8((u8)layer_nodes[depth]->free_pages); terminal_print_string("):\n");
+    //_print_path(path);
+
+    while(true) {
+        u64 mask = lmask(n);
+        for(u8 i = 0; i <= 64 - n; i++) {
+            if((layer_nodes[depth]->bitmap & mask) == mask) { // enough bits at position i
+                // mark bits
+                layer_nodes[depth]->bitmap &= ~mask;
+
+                // add i offset to base address
+                intp base_address = _get_base_address(path) + 0x1000 * i;
+
+                // propagate free pages
+                for(s8 i = depth; i >= 0; --i) {
+                    layer_nodes[i]->free_pages -= n;
+                }
+
+                // return physical address
+                return (void*)base_address;
+            } else {
+                mask <<= 1;
+            }
+        }
+
+        // not enough bits found in this leaf node, go to the next leaf node with 
+        if(!_search_leaf_next(layer_nodes, path, &depth, n)) {
+            assert(false, "out of physical memory");
+        }
+        //terminal_print_string("* palloc: found leaf node with enough pages ($"); terminal_print_u8((u8)layer_nodes[depth]->free_pages); terminal_print_string("):\n");
+        //_print_path(path);
+    }
+
+    return null;
 }
 
