@@ -22,9 +22,12 @@ ADD_EXECUTABLE(os.bin boot.asm efifb.c idt.c interrupts.c interrupts.asm kernel.
 # includes
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
+# libs
+TARGET_LINK_LIBRARIES(os.bin gcc)
+
 # configure linker flags
 #SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -O2 -nostdlib -lgcc")
-SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -g3 -nostdlib -lgcc")
+SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -g3 -nostdlib")
 
 # be sure to link static files
 #TARGET_LINK_LIBRARIES(os.bin font)

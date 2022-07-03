@@ -20,6 +20,7 @@
 #define __alignup(x, n) (void*)((__alignof(x, n) != 0) ? ((intp)(x) + ((n) - __alignof(x, n))) : (intp)(x))
 #define __aligndown(x, n) (void*)((intp)(x) - __alignof(x, n))
 #define __interrupt __attribute__((interrupt))
+#define __popcnt(x) __builtin_popcountll(x)
 
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 #define unused(x) ((void)(x))

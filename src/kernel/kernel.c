@@ -256,17 +256,19 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
 
     terminal_putc(L'\n');
 
-    palloc_init((void*)0x900000, 0x40000000);
+    //palloc_init((void*)0x900000, 0x40000000); // takes 108,672 bytes in overhead inside palloc
+    //palloc_init((void*)0x900000, 0x600000); // takes 3,552 bytes in overhead (3184 ouch)
+    palloc_init((void*)0x1000000, (64*64+2*64+32)*4096); // one 16MiB block + 2 256KiB blocks + 32 more pages at base aligned with 16MiB
 #define TEST_PALLOC(n) { \
     void* p = palloc_claim(n); \
     terminal_print_string("palloc_claim(" #n ") = "); terminal_print_pointer(p); terminal_putc(L'\n'); \
     }
 
-    TEST_PALLOC(32);
-    TEST_PALLOC(64);
-    //TEST_PALLOC(1);
-    //TEST_PALLOC(16);
-    //TEST_PALLOC(16);
+    TEST_PALLOC(12);
+    TEST_PALLOC(48);
+    TEST_PALLOC(1);
+    TEST_PALLOC(16);
+    TEST_PALLOC(16);
 
     // cause a page fault exception (testing the idt)
     *(u32 *)0xfffffefe00000000 = 1;    // page fault
