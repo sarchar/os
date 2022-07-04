@@ -255,7 +255,15 @@ void terminal_print_u32(u32 v)
     }
 }
 
-void terminal_print_u8(u32 v)
+void terminal_print_u16(u16 v)
+{
+    for(u32 i = 0; i < 4; i++) {
+        u8 t = (v >> ((3 - i) * 4)) & 0x0F;
+        terminal_putc((u16)HEX_LETTERS[t]);
+    }
+}
+
+void terminal_print_u8(u8 v)
 {
     for(u32 i = 0; i < 2; i++) {
         u8 t = (v >> ((1 - i) * 4)) & 0x0F;

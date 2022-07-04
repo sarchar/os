@@ -1,6 +1,7 @@
 // Based on code from https://wiki.osdev.org/Bare_Bones
 #include "common.h"
 
+#include "bootmem.h"
 #include "cpu.h"
 #include "efifb.h"
 #include "interrupts.h"
@@ -108,6 +109,7 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
             // Run a second loop to add all free memory to palloc and display it to the terminal
             mbt_mmap_entry = mbt_mmap->entries;
             for(uint32_t size = mbt_mmap->size - sizeof(struct multiboot_tag_mmap); size != 0;) {
+                /*
                 terminal_print_string("MBT Memory map entry: $");
                 terminal_print_pointer((void*)mbt_mmap_entry->addr);
                 terminal_print_string(" length $");
@@ -133,12 +135,19 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
                     terminal_print_stringnl(" UNKNOWN");
                     break;
                 }
+                */
 
                 // Add all available memory to the system
                 // TODO reclaim ACPI ?
-                if(mbt_mmap_entry->len >= PALLOC_MINIMUM_SIZE && mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
-                    palloc_add_free_region((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
-                } 
+                //if(mbt_mmap_entry->len >= PALLOC_MINIMUM_SIZE && mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
+                //    if((intp)mbt_mmap_entry->addr < 0x100000000) {
+                //        palloc_add_free_region((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
+                //    }
+                //} 
+                if(mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE && mbt_mmap_entry->addr < 0x100000000) {
+                    bootmem_addregion((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
+                    mbt_mmap_entry->type = MULTIBOOT_MEMORY_RESERVED;
+                }
 
                 // next entry
                 mbt_mmap_entry = (struct multiboot_mmap_entry*)((void *)mbt_mmap_entry + mbt_mmap->entry_size);
@@ -256,19 +265,39 @@ void kernel_main(struct multiboot_info* multiboot_info_ptr)
 
     terminal_putc(L'\n');
 
-    //palloc_init((void*)0x900000, 0x40000000); // takes 108,672 bytes in overhead inside palloc
-    //palloc_init((void*)0x900000, 0x600000); // takes 3,552 bytes in overhead (3184 ouch)
-    palloc_init((void*)0x1000000, (64*64+2*64+32)*4096); // one 16MiB block + 2 256KiB blocks + 32 more pages at base aligned with 16MiB
+    palloc_init();
+
+    //palloc_add_free_region((void*)0x900000, 0x40000000);
+    //palloc_init((void*)0x900000, 0x600000);
+    //palloc_add_free_region((void*)0x1000000, (64*64+2*64+32)*4096); // one 16MiB block + 2 256KiB blocks + 32 more pages at base aligned with 16MiB
 #define TEST_PALLOC(n) { \
     void* p = palloc_claim(n); \
     terminal_print_string("palloc_claim(" #n ") = "); terminal_print_pointer(p); terminal_putc(L'\n'); \
     }
 
-    TEST_PALLOC(12);
-    TEST_PALLOC(48);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(10);
+    TEST_PALLOC(9);
+    TEST_PALLOC(8);
+    TEST_PALLOC(7);
+    TEST_PALLOC(6);
+    TEST_PALLOC(5);
+    TEST_PALLOC(4);
+    TEST_PALLOC(3);
+    TEST_PALLOC(2);
     TEST_PALLOC(1);
-    TEST_PALLOC(16);
-    TEST_PALLOC(16);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
+    TEST_PALLOC(0);
 
     // cause a page fault exception (testing the idt)
     *(u32 *)0xfffffefe00000000 = 1;    // page fault

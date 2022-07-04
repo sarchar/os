@@ -21,3 +21,15 @@ add_custom_target(run
                                              -vga std
                                              -monitor stdio
 )
+
+add_custom_target(gdb
+                  DEPENDS os_iso 
+                  COMMAND qemu-system-x86_64 -machine q35
+                                             -cdrom ${CMAKE_BINARY_DIR}/os.iso
+                                             -m 4G
+                                             -bios /usr/share/ovmf/OVMF.fd
+                                             -boot d
+                                             -vga std
+                                             -monitor stdio
+                                             -s -S
+)
