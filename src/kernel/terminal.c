@@ -209,65 +209,14 @@ void terminal_redraw()
     }
 }
 
-// functions below this line are utility print functions that will ideally be replaced with a printf function
-//
-static char const HEX_LETTERS[] = "0123456789ABCDEF";
-
-void terminal_print_string(char* s)
+int errno;
+int write(int fd, char* buf, u64 size)
 {
-    while(*s != '\0') {
-        // TODO decode utf8??
-        terminal_putc((u16)*s++);
+    if(fd != 2) return -1;
+
+    for(u64 i = 0; i < size; i++) {
+        terminal_putc((u16)buf[0]);
     }
+
+    return size;
 }
-
-void terminal_print_stringnl(char* s)
-{
-    terminal_print_string(s);
-    terminal_putc(L'\n');
-}
-
-
-void terminal_print_pointer(void* a)
-{
-    // don't display the upper long if it's all zeros
-    u32 loop_size = (((u64)a & 0xFFFFFFFF00000000LL) == 0) ? 8 : 16;
-
-    for(u32 i = 0; i < loop_size; i++) {
-        u8 v = (((long long)a) >> (((loop_size - 1) - i) * 4)) & 0x0F;
-        terminal_putc((u16)HEX_LETTERS[v]);
-    }
-}
-
-void terminal_print_u64(u64 v)
-{
-    for(u32 i = 0; i < 16; i++) {
-        u8 t = (v >> ((15 - i) * 4)) & 0x0F;
-        terminal_putc((u16)HEX_LETTERS[t]);
-    }
-}
-
-void terminal_print_u32(u32 v)
-{
-    for(u32 i = 0; i < 8; i++) {
-        u8 t = (v >> ((7 - i) * 4)) & 0x0F;
-        terminal_putc((u16)HEX_LETTERS[t]);
-    }
-}
-
-void terminal_print_u16(u16 v)
-{
-    for(u32 i = 0; i < 4; i++) {
-        u8 t = (v >> ((3 - i) * 4)) & 0x0F;
-        terminal_putc((u16)HEX_LETTERS[t]);
-    }
-}
-
-void terminal_print_u8(u8 v)
-{
-    for(u32 i = 0; i < 2; i++) {
-        u8 t = (v >> ((1 - i) * 4)) & 0x0F;
-        terminal_putc((u16)HEX_LETTERS[t]);
-    }
-}
-

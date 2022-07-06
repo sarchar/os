@@ -7,6 +7,7 @@
 #include "interrupts.h"
 #include "multiboot2.h"
 #include "palloc.h"
+#include "stdio.h"
 #include "terminal.h"
 
 volatile u32 blocking = 0;
@@ -35,7 +36,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
     terminal_init();
 
-    terminal_print_stringnl("Boot");
+    fprintf(stderr, "Boot\n");
 
     // parse multiboot
     multiboot2_parse(multiboot_info);
@@ -45,7 +46,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
 
 #define TEST_PALLOC(n) { \
     void* p = palloc_claim(n); \
-    terminal_print_string("palloc_claim(" #n ") = "); terminal_print_pointer(p); terminal_putc(L'\n'); \
+    fprintf(stderr, "palloc_claim(" #n ") = $%lX\n", (intp)p); \
     }
 
     //TEST_PALLOC(0);
@@ -62,7 +63,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     TEST_PALLOC(8);
     //TEST_PALLOC(7);
     void* p7 = palloc_claim(7);
-    terminal_print_string("palloc_claim(7) = "); terminal_print_pointer(p7); terminal_putc(L'\n');
+    fprintf(stderr, "palloc_claim(7) = $%lX\n", (intp)p7);
     TEST_PALLOC(6);
     TEST_PALLOC(5);
     TEST_PALLOC(4);
@@ -72,9 +73,9 @@ void kernel_main(struct multiboot_info* multiboot_info)
     TEST_PALLOC(0);
     TEST_PALLOC(0);
     void* p0a = palloc_claim(0);
-    terminal_print_string("palloc_claim(0) = "); terminal_print_pointer(p0a); terminal_putc(L'\n');
+    fprintf(stderr, "palloc_claim(0) = $%lX\n", (intp)p0a);
     void* p0 = palloc_claim(0);
-    terminal_print_string("palloc_claim(0) = "); terminal_print_pointer(p0); terminal_putc(L'\n');
+    fprintf(stderr, "palloc_claim(0) = $%lX\n", (intp)p0);
     //TEST_PALLOC(0);
     //TEST_PALLOC(0);
     palloc_abandon(p0, 0);
@@ -91,8 +92,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     while(1) {
         while(blocking > 0) {
             __cli();
-            terminal_print_u8(scancode);
-            terminal_print_string("\n");
+            fprintf(stderr, "kb: %d\n", scancode);
 
             for(u32 y = 0; y < 16; y++) {
                 for(u32 x = 0; x < 16; x++) {
@@ -105,6 +105,6 @@ void kernel_main(struct multiboot_info* multiboot_info)
         }
     }
 
-    terminal_print_stringnl("...exiting...");
+    fprintf(stderr, "...exiting kernel code...\n");
 }
 

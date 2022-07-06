@@ -2,12 +2,13 @@
 // A basic implementation of the buddy system, inspired by how Linux (used to?) work, at 
 // least around the 2.4-2.6 era.  Lots of information learned from 
 // https://hzliu123.github.io/linux-kernel/Physical%20Memory%20Management%20in%20Linux.pdf
+
 #include "common.h"
 
 #include "bootmem.h"
 #include "kernel.h"
 #include "palloc.h"
-#include "terminal.h"
+#include "stdio.h"
 
 #define PALLOC_MAX_ORDER 11 // 2^10 pages * 4KiB/page = 4MiB max contiguous allocation
 
@@ -49,12 +50,9 @@ static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
 
         // flip the bit
         regions[i].maps[order][index >> 3] ^= 1 << (index & 7);
-        //terminal_print_string("palloc: toggle bit region=$"); terminal_print_pointer((void*)regions[i].start);
-        //terminal_print_string(" order="); terminal_print_u8(order);
-        //terminal_print_string(" index="); terminal_print_u32(index);
-        //terminal_print_string(" base="); terminal_print_pointer((void*)base);
-        //terminal_print_string(" new bit="); terminal_print_u8(regions[i].maps[order][index >> 3] & (1 << (index & 7)));
-        //terminal_putc(L'\n');
+
+        //fprintf(stderr, "palloc: toggle bit region=$%lX order=%d index=%d base=$%lX new bit=$%02X\n",
+        //        (intp)regions[i].start, order, index, (intp)base, regions[i].maps[order][index >> 3] & (1 << (index & 7)));
 
         // and get the new value
         if(nb != null) *nb = regions[i].maps[order][index >> 3] & (1 << (index & 7));
@@ -120,10 +118,7 @@ void palloc_init()
         region_start = __alignup(region_start, 4096);
         region_size -= wasted_alignment;
 
-        //terminal_print_string("palloc: reclaiming region at start="); terminal_print_pointer(region_start);
-        //terminal_print_string(" size=$"); terminal_print_u32(region_size);
-        //terminal_print_string(" wasted=$"); terminal_print_u16(wasted_alignment);
-        //terminal_putc(L'\n');
+        //fprintf(stderr, "palloc: reclaiming region at start=$%lX size=%d wasted=%d\n", (intp)region_start, region_size, wasted_alignment);
 
         // put in region info
         regions[region_index].start = region_start;
@@ -131,9 +126,7 @@ void palloc_init()
         regions[region_index].end = (void*)((intp)region_start + region_size);
         regions[region_index].npages = region_size >> 12; // this value will be used quite a lot, so a small optimization here
 
-        terminal_print_string("palloc: region $"); terminal_print_pointer(region_start);
-        terminal_print_string(" has npages="); terminal_print_u32(regions[region_index].npages);
-        terminal_putc(L'\n');
+        //fprintf(stderr, "palloc: region $%lX has npages=%d\n", (intp)region_start, regions[region_index].npages);
 
         region_index++;
 
@@ -158,11 +151,7 @@ void palloc_init()
             }
             free_page_head[order]->next = fp;
 
-            //terminal_print_string("palloc: adding block at order="); terminal_print_u8(order);
-            //terminal_print_string(" address=$"); terminal_print_pointer(region_start);
-            //terminal_print_string(" size=$"); terminal_print_u32(region_size); //size remaining in region
-            //terminal_print_string(" next=$"); terminal_print_pointer(fp->next); //next pointer
-            //terminal_putc(L'\n');
+            //fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
 
             // increment region_start and reduce region_size
             region_start = (void*)((intp)region_start + block_size);
@@ -197,16 +186,11 @@ void* palloc_claim(u8 n) // allocate 2^n pages
         struct free_page* right = (struct free_page*)((u8*)left + (block_size >> 1));
         zero(right);
 
-        terminal_print_string("palloc: splitting block order $"); terminal_print_u8(order);
-        terminal_print_string(" address=$"); terminal_print_pointer((void*)left);
-        terminal_print_string(" right=$"); terminal_print_pointer((void*)right);
-        terminal_putc(L'\n');
+        //fprintf(stderr, "palloc: splitting block order %d address=$%lX right=$%lX\n", order, (intp)left, (intp)right);
 
         // immediately toggle the bit out of the order the block comes from, before any splits
         palloc_togglebit(left, order, null);
 
-        //terminal_print_string("* right address="); terminal_print_pointer((void*)right);
-        //terminal_putc(L'\n');
         assert(((intp)left ^ (1 << ((order - 1) + 12))) == (intp)right, "verifying buddy address");
 
         // add the right node to the free page list at the lower order. the bitmap bit will be 
@@ -248,19 +232,12 @@ void palloc_abandon(void* base, u8 n)
             palloc_togglebit(base, order, &bit);
         }
 
-        terminal_print_string("palloc: marking block $"); terminal_print_pointer((void*)base);
-        terminal_print_string(" order $"); terminal_print_u8(order);
-        terminal_print_string(" free (new bit = "); terminal_print_u8(bit);
-        terminal_print_string(") buddy_valid = "); terminal_print_u8((u8)buddy_valid);
-        terminal_print_string("\n");
+        //fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", (intp)base, order, bit, (u8)buddy_valid);
 
         // a released block with no buddy must stay at this level, otherwise
         // try combining to larger blocks
         if(buddy_valid && (bit == 0) && order < PALLOC_MAX_ORDER - 1) {
-            terminal_print_string("palloc: combining blocks $"); terminal_print_pointer((void*)buddy_addr);
-            terminal_print_string(" and $"); terminal_print_pointer(base);
-            terminal_print_string(" into order $"); terminal_print_u8(order + 1);
-            terminal_putc(L'\n');
+            //fprintf(stderr, "palloc: combining blocks $%lX and $%lX into order %d\n", (intp)buddy_addr, (intp)base, order + 1);
 
             // bit is 0, so both blocks must be free
             struct free_page* buddy = (struct free_page*)buddy_addr;

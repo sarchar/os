@@ -23,7 +23,7 @@ ADD_EXECUTABLE(os.bin boot.asm bootmem.c efifb.c idt.c interrupts.c interrupts.a
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 # libs
-TARGET_LINK_LIBRARIES(os.bin gcc)
+TARGET_LINK_LIBRARIES(os.bin gcc pdclib)
 
 # configure linker flags
 #SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -O2 -nostdlib -lgcc")

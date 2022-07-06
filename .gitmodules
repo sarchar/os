@@ -1,3 +1,6 @@
 [submodule "src/zircon-uefi"]
 	path = src/zircon-uefi
 	url = https://github.com/vineyard-os/zircon-uefi
+[submodule "src/pdclib"]
+	path = src/pdclib
+	url = https://github.com/DevSolar/pdclib

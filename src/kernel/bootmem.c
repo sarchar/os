@@ -8,12 +8,14 @@
 // 5. NOT page based, which means when it comes time to move regions to palloc, partially
 //    used pages will be wasted
 // 
+
 #include "common.h"
 
 #include "bootmem.h"
 #include "cpu.h"
 #include "efifb.h"
 #include "kernel.h"
+#include "stdio.h"
 #include "terminal.h"
 
 #define BOOTMEM_SMALLEST_REGION_SIZE 1024 // smallest region of memory that we care to manage
@@ -40,10 +42,7 @@ void bootmem_addregion(void* region_start, u64 size)
         // not enough data remaining to care about, so toss it
         bootmem_accounting.wasted_due_to_size += size;
 
-        terminal_print_string("bootmem: ignoring region $"); terminal_print_pointer(region_start);
-        terminal_print_string(" size=$"); terminal_print_u64(size);
-        terminal_putc(L'\n');
-        
+        fprintf(stderr, "bootmem: ignoring region $%lX size=%d\n", (intp)region_start, size);
         return;
     }
 
@@ -54,9 +53,7 @@ void bootmem_addregion(void* region_start, u64 size)
     bootmem_accounting.num_regions += 1;
     bootmem_accounting.free += size;
 
-    terminal_print_string("bootmem: adding region $"); terminal_print_pointer(region_start);
-    terminal_print_string(" size=$"); terminal_print_u64(size);
-    terminal_putc(L'\n');
+    fprintf(stderr, "bootmem: adding region $%lX size=%d\n", (intp)region_start, size);
 }
 
 void* bootmem_alloc(u64 size, u8 alignment)
@@ -79,8 +76,7 @@ void* bootmem_alloc(u64 size, u8 alignment)
     }
 
     if(cur == null) {
-        terminal_print_string("bootmem: allocation of size $"); terminal_print_pointer((void*)size);
-        terminal_print_string(" failed\n");
+        fprintf(stderr, "bootmem: allocation of size %d failed\n", size);
         assert(false, "bootmem alloc failed");
         return null;
     }

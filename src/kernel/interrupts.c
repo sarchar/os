@@ -5,6 +5,7 @@
 #include "idt.h"
 #include "interrupts.h"
 #include "kernel.h"
+#include "stdio.h"
 #include "terminal.h"
 
 // Temporarily use PIC to enable some basic interrputs. This will all be wiped once APIC is implemented.
@@ -207,27 +208,19 @@ DEFINE_INTERRUPT_HANDLER(interrupt_stub_noerr)
 
 DEFINE_INTERRUPT_HANDLER_ERR(interrupt_gpf)
 {
-    terminal_print_string("general protection fault: error = $");
-    terminal_print_u32(error_code);
-    terminal_print_string(" at address $");
-    terminal_print_pointer(fault_addr);
+    fprintf(stderr, "general protection fault: error = $%lX at address $%lX\n", error_code, fault_addr);
     kernel_panic(COLOR(255, 0, 0));
     return;
 }
 
 DEFINE_INTERRUPT_HANDLER_ERR(interrupt_page_fault)
 {
-    terminal_print_string("page fault: error = $");
-    terminal_print_u32(error_code);
-    terminal_print_string(" at address $");
-    terminal_print_pointer(fault_addr);
+    fprintf(stderr, "page fault: error = $%lX at address $%lX ", error_code, fault_addr);
 
     u8 rw = (error_code & 0x02);
 
     u64 access_address = __rdcr2();
-    terminal_print_string(rw ? " writing $" : " reading $");
-    terminal_print_pointer((void*)access_address);
-    terminal_print_string("\n");
+    fprintf(stderr, " %s $%lX\n", rw ? "writing" : "reading", (intp)access_address);
 
     kernel_panic(COLOR(0, 255, 0));
     return;
