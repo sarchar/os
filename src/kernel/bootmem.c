@@ -70,7 +70,7 @@ void* bootmem_alloc(u64 size, u8 alignment)
 
     u8 extra;
     while(cur != null) {
-        extra = alignment - __alignof(cur, alignment); // increase size for alignment requirement
+        extra = (intp)__alignup(cur, alignment) - (intp)cur; // increase size for alignment requirement
 
         if((size + extra) <= cur->size) break;         // break out if this region has enough memory
 
@@ -138,6 +138,7 @@ u64 bootmem_reclaim_region(void** region_start)
 
     regions = cur->next;
     *region_start = (void*)cur;
+    assert(cur->size != 0, "bug: all memory in this region has been consumed"); // TODO actually allow returning 0 size regions so palloc can keep proper indexing?
     return cur->size;
 }
 
@@ -153,5 +154,12 @@ u8 bootmem_num_regions()
     }
 
     return c;
+}
+
+u64 bootmem_get_region_size(u8 region_index)
+{
+    struct bootmem_region* cur = regions;
+    while(region_index-- > 0) cur = cur->next;
+    return cur->size;
 }
 
