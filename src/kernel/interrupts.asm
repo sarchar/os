@@ -1,4 +1,4 @@
-[bits 64]
+bits 64
 
 section .text align=8
 extern _interrupt_kb_handler

@@ -50,47 +50,6 @@ multiboot_header:
     dd 8                                 ; size of tag
 multiboot_end:
 
-section .bss align=8
-; The multiboot standard does not define the value of the stack pointer register
-; (esp) and it is up to the kernel to provide a stack. This allocates room for a
-; small stack by creating a symbol at the bottom of it, then allocating 16384
-; bytes for it, and finally creating a symbol at the top. The stack grows
-; downwards on x86. The stack is in its own section so it can be marked nobits,
-; which means the kernel file is smaller because it does not contain an
-; uninitialized stack. The stack on x86 must be 16-byte aligned according to the
-; System V ABI standard and de-facto extensions. The compiler will assume the
-; stack is properly aligned and failure to align the stack will result in
-; undefined behavior.
-align 16
-stack_bottom: resb 16*1024 ; 16 KiB
-stack_top:
-
-; Reserve space for the page table
-align 4096
-boot_page_table_level4: resq 512   ; one entry in this table is a physical address to a level 3 table (512 entries * 512GiB = 256TiB)
-boot_page_table_level3: resq 512   ; one entry in this table is a physical address to a level 2 table (512 entries * 1GiB = 512GiB)
-;boot_page_table_level2: resq 512   ; one entry in this table is a physical address to a level 1 table (512 entries * 0x200000 = 1GiB)
-;boot_page_table_level1: resq 512   ; one entry in this table is a 64-bit address to a 4,096 (0x1000) block of physical memory for a total 
-;                                   ; of 512 * 0x1000 = 0x200000 = 2MiB mappable bytes per level 1 table
-
-; need another page table for 0xC0000000
-boot_page_table_0000: resq 512
-boot_page_table_4000: resq 512
-boot_page_table_8000: resq 512
-boot_page_table_c000: resq 512
-
-; Link script defined symbols used for knowing the size of the kernel
-extern _kernel_start_address
-extern _kernel_end_address
-extern _kernel_vma_base
-
-; C entry point
-extern kernel_main
-
-; Define the default GDT
-section .data
-align 16
-
 ; Access bits
 PRESENT        equ 1 << 7
 DPL0           equ 0 << 5
@@ -134,6 +93,55 @@ GDT:
     dw $ - GDT - 1                              ; Limit (size) of the GDT
     dq GDT                                      ; 64-bit base
 
+; the page tables separated from .bss, since .bss will be placed in high mem
+section .multiboot.bss align=8 nobits
+
+; Reserve space for the page table
+align 4096
+boot_page_table_level4: resq 512   ; one entry in this table is a physical address to a level 3 table (512 entries * 512GiB = 256TiB)
+boot_page_table_level3: resq 512   ; one entry in this table is a physical address to a level 2 table (512 entries * 1GiB = 512GiB)
+; another page table required for mapping 0xFFFFFFFE00000000-0xFFFFFFFEFFFFFFFF
+boot_high_page_table_level3: resq 512   ; one entry in this table is a physical address to a level 2 table (512 entries * 1GiB = 512GiB)
+                                        ; but will point to boot_page_table_XXXX's to also map real low memory into high virtual memory
+;boot_page_table_level2: resq 512   ; one entry in this table is a physical address to a level 1 table (512 entries * 0x200000 = 1GiB)
+;boot_page_table_level1: resq 512   ; one entry in this table is a 64-bit address to a 4,096 (0x1000) block of physical memory for a total 
+;                                   ; of 512 * 0x1000 = 0x200000 = 2MiB mappable bytes per level 1 table
+
+; these four are used as level 2 pages with huge page bit set, so with 1 entry mapping
+; an entire level 1 page (2MiB), and 512 entries, we have 1GiB per table. To map the entire
+; 32-bit space, we need four tables.
+boot_page_table_0000: resq 512
+boot_page_table_4000: resq 512
+boot_page_table_8000: resq 512
+boot_page_table_c000: resq 512
+
+section .bss align=8
+; The multiboot standard does not define the value of the stack pointer register
+; (esp) and it is up to the kernel to provide a stack. This allocates room for a
+; small stack by creating a symbol at the bottom of it, then allocating 16384
+; bytes for it, and finally creating a symbol at the top. The stack grows
+; downwards on x86. The stack is in its own section so it can be marked nobits,
+; which means the kernel file is smaller because it does not contain an
+; uninitialized stack. The stack on x86 must be 16-byte aligned according to the
+; System V ABI standard and de-facto extensions. The compiler will assume the
+; stack is properly aligned and failure to align the stack will result in
+; undefined behavior.
+align 16
+stack_bottom: resb 16*1024 ; 16 KiB
+stack_top:
+
+; Link script defined symbols used for knowing the size of the kernel
+extern _kernel_load_address
+extern _kernel_end_address
+extern _kernel_vma_base
+
+; C entry point
+extern kernel_main
+
+; Define the default GDT
+section .data
+align 16
+
 ; The linker script specifies _bootstrap_start as the entry point to the kernel and the
 ; bootloader will jump to this position once the kernel has been loaded. It
 ; doesn't make sense to return from this function as the bootloader is gone.
@@ -146,48 +154,51 @@ _bootstrap_start:
 	; state is as defined in the multiboot standard.  
 
     ; Before switching into long mode, set up paging. Start by pointing level 4 to level 3
-    mov edi, boot_page_table_level4      ; these labels are in high memory, so subtract kernel memory base to get physical addresses
-    sub edi, _kernel_vma_base
+    mov edi, boot_page_table_level4      
     mov eax, boot_page_table_level3
-    sub eax, _kernel_vma_base
     or eax, 0x03  ; set present and writable flag
     mov dword [edi + 0], eax  ; set the 0th entry of the level 4 to point to our lavel 3 table (maps the first 512GiB of memory)
 
-    ; Point the level 3 entries 0 through 3 to level 2 tables .. this is to map identity map the entire 4GiB address space
-    mov edi, boot_page_table_level3      ; our page tables are in kernel virtual space at high mem
-    sub edi, _kernel_vma_base
-    mov eax, boot_page_table_0000
-    sub eax, _kernel_vma_base
+    ; The 511th entry in boot_page_table_level4 maps region 0xFFFF_FF80_0000_0000-0xFFFF_FFFF_FFFF_FFFF, so we'll point our high table there
+    mov eax, boot_high_page_table_level3
     or eax, 0x03  ; set present and writable flag
-    mov dword [edi + 0 * 8], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+    mov dword [edi + 511 * 8], eax
+
+    ; Point the level 3 entries 0 through 3 to level 2 tables .. this is to map identity map the entire 4GiB address space
+    ; and, the 504th entry in these tables corresponds to 0x7E_0000_0000, that's 1GiB (0x4000_0000) chunks, so map those into the high table
+    mov edi, boot_page_table_level3      ; low page table
+    mov edx, boot_high_page_table_level3 ; high page table
+    mov eax, boot_page_table_0000
+    or eax, 0x03  ; set present and writable flag
+    mov dword [edi + 0 * 8], eax    ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+    mov dword [edx + 504 * 8], eax  ; set the 504th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory to 0x7E_0000_0000)
 
     ; then 4000
     mov eax, boot_page_table_4000
-    sub eax, _kernel_vma_base
     or eax, 0x03  ; set present and writable flag
-    mov dword [edi + 1 * 8], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+    mov dword [edi + 1 * 8], eax    ; set the 1th entry of the level 3 table to point to our level 2 table (maps the second 1GiB of memory)
+    mov dword [edx + 505 * 8], eax  ; set the 505th entry of the level 3 table to point to our level 2 table (maps the second 1GiB of memory to 0x7E_4000_0000)
 
     ; then 8000
     mov eax, boot_page_table_8000
-    sub eax, _kernel_vma_base
-    or eax, 0x03  ; set present and writable flag
-    mov dword [edi + 2 * 8], eax  ; set the 0th entry of the level 3 table to point to our level 2 table (maps the first 1GiB of memory)
+    or eax, 0x03                    ; set present and writable flag
+    mov dword [edi + 2 * 8], eax    ; set the 2nd entry of the level 3 table to point to our level 2 table (maps the third 1GiB of memory)
+    mov dword [edx + 506 * 8], eax  ; set the 506th entry of the level 3 table to point to our level 2 table (maps the third 1GiB of memory to 0x7E_8000_0000)
 
-    ; In order to map 0xC0000000 (_kernel_vma_base) later, we need an entry in our level 3 table pointing to a different level 2 table
+    ; and finally C000
     mov eax, boot_page_table_c000
-    sub eax, _kernel_vma_base
-    or eax, 0x03  ; set present and writable
-    mov dword [edi + 3 * 8], eax  ; each entry in the level 3 table maps 1GiB (0x40000000 bytes) and we want to map 0xC0000000,
-                                  ; so we set entry 3 to our second table TODO don't use C0000000 in the future
+    or eax, 0x03                    ; set present and writable
+    mov dword [edi + 3 * 8], eax    ; set the 3rd entry of the level 3 table to point to our level 2 table (maps the fourth 1GiB of memory)
+    mov dword [edx + 507 * 8], eax  ; set the 507th entry of the level 3 table to point to our level 2 table (maps the fourth 1GiB of memory to 0x7E_C000_0000)
 
     ; Each of the tables (0000, 4000, 8000, C000) map 1GiB using huge pages, so all four need to be set up
-    mov ecx, 512*4     ; number of entries per table is 512, but all four tables are contiguous so we can fill in one loop
+    mov ecx, 512*4     ; number of entries per table is 512, but all four tables are consecutive in memory so we can fill in one loop
     xor eax, eax       ; start with the very last 2MiB
     or eax, 0b10000011 ; or in present, writable, huge pages bits
 
     ; map the 4GiB
     mov edi, boot_page_table_0000 ; put pagetable for first 1GiB into edi
-    sub edi, _kernel_vma_base
+    ;sub edi, _kernel_vma_base
 .fill_0000:
     sub eax, 0x200000  ; decrement by 2MiB
     mov dword [edi + (ecx - 1) * 8], eax
@@ -195,7 +206,7 @@ _bootstrap_start:
 
     ; Set control register 3 to the address of the level 4 page table
     mov ecx, boot_page_table_level4
-    sub ecx, _kernel_vma_base
+    ;sub ecx, _kernel_vma_base
     mov cr3, ecx
 
     ; Enable PAE
@@ -228,8 +239,13 @@ _bootstrap_start:
     mov ss, ax
 
     ; finally, this jump moves us into long mode
-    jmp GDT.text:_start  ; loads CS register, where the GDT entry has long mode set
+    jmp GDT.text:.long_mode_entry  ; loads CS register, where the GDT entry has long mode set
 
+.long_mode_entry:
+bits 64
+;.forever_loop: jmp .forever_loop
+    mov rdi, _start
+    jmp rdi
 .end:
 
 ; We have a _start function running in high (virtual) memory now
@@ -241,7 +257,7 @@ _start:
 	; To set up a stack, we set the esp register to point to the top of our
 	; stack (as it grows downwards on x86 systems). This is necessarily done
 	; in assembly as languages such as C cannot function without a stack.
-	mov esp, stack_top - 4    ; subtract 4 for the multiboot info pointer that's on the stack now
+	mov rsp, stack_top - 4    ; subtract 4 for the multiboot info pointer that's on the stack now
 
     ; ebx was preserved in _bootstrap_start, put it into rdi for the first parameter to kernel_main
     mov rdi, rbx

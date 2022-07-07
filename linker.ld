@@ -6,17 +6,21 @@ ENTRY(_bootstrap_start)
 /* Tell where the various sections of the object files will be put in the final kernel image. */
 SECTIONS
 {
-    _kernel_vma_base = 0x00000000;
+    _kernel_vma_base = 0xFFFFFFFE00000000;
 
     /* Begin putting sections at physical address 0x100000 (1 MiB), a conventional address for kernels to be loaded by the bootloader. */
     . = 1M;
  
     /* Define the kernel start address symbol */
-    _kernel_start_address = .;
+    _kernel_load_address = .;
 
     /* The multiboot code/kernel entry point runs with paging disable and will run at address 1MiB */
     .multiboot.data : {
         *(.multiboot.data)
+    }
+
+    .multiboot.bss : {
+        *(.multiboot.bss)
     }
 
     .multiboot.text : ALIGN(4K) {

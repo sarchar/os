@@ -11,6 +11,10 @@
 #error "This tutorial needs to be compiled with a ix86-elf compiler"
 #endif
 
+extern u64 _kernel_vma_base;
+extern u64 _kernel_load_address;
+extern u64 _kernel_end_address;
+
 void kernel_panic(u32 error); // hack to not include the color type
 
 #endif

@@ -163,6 +163,7 @@ extern void _interrupt_handler_common(void);
 // the address of the interrupt handler. So leaq is used here instead.
 #define DEFINE_INTERRUPT_HANDLER(name)             \
     __asm__(                                       \
+        ".extern _" #name "\n"                     \
         ".global " #name "\n"                      \
         ".align 8\n"                               \
         #name ":\n"                                \
@@ -170,13 +171,14 @@ extern void _interrupt_handler_common(void);
         "\t" "push %rdi\n"                         /* save rdi */                                     \
         "\t" "push %rsi\n"                         /* save rsi */                                     \
         "\t" "mov 24(%rsp), %rdi\n"                /* load the saved rip into rdi */                  \
-        "\t" "leaq _" #name ", %rax\n"             /* load the actual irq handler address into rax */ \
+        "\t" "movabs $_" #name ", %rax\n"          /* load the actual irq handler address into rax */ \
         "\t" "jmp _interrupt_handler_common\n"     \
     );                                             \
     void _##name(void* fault_addr)
 
 #define DEFINE_INTERRUPT_HANDLER_ERR(name)         \
     __asm__(                                       \
+        ".extern _" #name "\n"                     \
         ".global " #name "\n"                      \
         ".align 8\n"                               \
         #name ":\n"                                \
@@ -185,11 +187,10 @@ extern void _interrupt_handler_common(void);
         "\t" "mov %rax, %rdi\n"                    /* move the cpu error code into rdi */             \
         "\t" "push %rsi\n"                         /* save rsi */                                     \
         "\t" "mov 24(%rsp), %rsi\n"                /* load the saved rip into rsi */                  \
-        "\t" "leaq _" #name ", %rax\n"             /* load the actual irq handler address into rax */ \
+        "\t" "movabs $_" #name ", %rax\n"          /* load the actual irq handler address into rax */ \
         "\t" "jmp _interrupt_handler_common\n"     \
     );                                             \
     void _##name(u64 error_code, void* fault_addr)
-
 
 DEFINE_INTERRUPT_HANDLER_ERR(interrupt_stub)
 {

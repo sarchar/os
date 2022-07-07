@@ -40,10 +40,11 @@ static u8 num_regions;
 static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
 {
     intp base_addr = (intp)base;
+    u64 block_size = 1 << (order + 12);
 
     for(u8 i = 0; i < num_regions; i++) {
-        // check if not in this region
-        if(base_addr < (intp)regions[i].start || base_addr >= (intp)regions[i].end) continue;
+        // check if not in this region. the block has to be within the region entirely
+        if(base_addr < (intp)regions[i].start || (base_addr + block_size) >= (intp)regions[i].end) continue;
 
         // base_addr is in this region, determine the bitmap block index
         u64 index = base_addr >> (order + 1 + 12);
@@ -176,7 +177,7 @@ void* palloc_claim(u8 n) // allocate 2^n pages
     // remove the head from the current order
     struct free_page* left = free_page_head[order]->next;
     free_page_head[order]->next = left->next;
-    free_page_head[order]->next->prev = null;
+    if(free_page_head[order]->next != null) free_page_head[order]->next->prev = null;
 
     // split blocks all the way down to the requested size, if necessary
     while(order != n) {
@@ -184,7 +185,6 @@ void* palloc_claim(u8 n) // allocate 2^n pages
     
         // split 'fp' into two block_size/2 blocks
         struct free_page* right = (struct free_page*)((u8*)left + (block_size >> 1));
-        zero(right);
 
         //fprintf(stderr, "palloc: splitting block order %d address=$%lX right=$%lX\n", order, (intp)left, (intp)right);
 
@@ -237,14 +237,15 @@ void palloc_abandon(void* base, u8 n)
         // a released block with no buddy must stay at this level, otherwise
         // try combining to larger blocks
         if(buddy_valid && (bit == 0) && order < PALLOC_MAX_ORDER - 1) {
-            //fprintf(stderr, "palloc: combining blocks $%lX and $%lX into order %d\n", (intp)buddy_addr, (intp)base, order + 1);
+            //fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", (intp)base, (intp)buddy_addr, order + 1);
 
-            // bit is 0, so both blocks must be free
+            // bit is 0, so buddy must be in the free blocks list
             struct free_page* buddy = (struct free_page*)buddy_addr;
 
             // remove buddy from free_list
-            if(buddy->prev == null) {
-                assert(free_page_head[order]->next == buddy, "must be the case");
+            if(buddy->prev == null) { 
+                //fprintf(stderr, "free_page_head[%d]->next = $%lX, buddy = $%lX\n", order, free_page_head[order]->next, buddy);
+                assert(free_page_head[order]->next == buddy, "must be the case"); // the only time a node's prev pointer should be null is if it's at the start of the free list
                 free_page_head[order]->next = buddy->next;
             } else {
                 buddy->prev->next = buddy->next;
@@ -255,7 +256,7 @@ void palloc_abandon(void* base, u8 n)
             struct free_page* combined = (struct free_page*)((intp)base & ~block_size);
             combined->prev = null;
             combined->next = free_page_head[order + 1]->next;
-            combined->next->prev = combined;
+            if(combined->next != null) combined->next->prev = combined;
             free_page_head[order + 1]->next = combined;
 
             // try combining again one order higher
@@ -266,6 +267,7 @@ void palloc_abandon(void* base, u8 n)
             struct free_page* np = (struct free_page*)base;
             np->prev = null;
             np->next = free_page_head[order]->next;
+            if(np->next != null) np->next->prev = np;
             free_page_head[order]->next = np;
             break;
         }

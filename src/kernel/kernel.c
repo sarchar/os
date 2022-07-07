@@ -36,7 +36,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
     terminal_init();
 
-    fprintf(stderr, "Boot\n");
+    fprintf(stderr, "Boot..kernel_main at 0x%lX\n", (intp)kernel_main);
 
     // parse multiboot
     multiboot2_parse(multiboot_info);
@@ -82,9 +82,8 @@ void kernel_main(struct multiboot_info* multiboot_info)
     palloc_abandon(p0a, 0);
     palloc_abandon(p7, 7);
     
-
     // cause a page fault exception (testing the idt)
-    *(u32 *)0xfffffefe00000000 = 1;    // page fault
+    *(u64 *)0x00007ffc00000000 = 1;    // page fault
     //*(u32 *)0xf0fffefe00000000 = 1;  // gpf because upper short isn't canonical
     //__asm__("div 0, %rax");          // division by 0 error
 

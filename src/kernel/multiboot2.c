@@ -11,7 +11,7 @@
 
 void multiboot2_parse(struct multiboot_info* multiboot_info)
 {
-    struct multiboot_tag_load_base_addr* mbt_load_base_addr;
+    struct multiboot_tag_load_base_addr* mbt_load_base_addr = null;
     struct multiboot_tag_string*         mbt_string;
     struct multiboot_tag_mmap*           mbt_mmap;
     struct multiboot_mmap_entry*         mbt_mmap_entry;
@@ -33,7 +33,14 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
             fprintf(stderr, "MBT Boot loader name: %s\n", mbt_string->string);
             break;
 
+        case MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR:
+            mbt_load_base_addr = (struct multiboot_tag_load_base_addr*)mbt;
+            fprintf(stderr, "MBT Base load address: $%lX\n", mbt_load_base_addr->load_base_addr);
+            break;
+
         case MULTIBOOT_TAG_TYPE_MMAP:
+            assert(mbt_load_base_addr != null, "we must know our load address before allocating regions to bootmem");
+
             mbt_mmap = (struct multiboot_tag_mmap*)mbt;
 
             mbt_mmap_entry = mbt_mmap->entries;
@@ -65,14 +72,14 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
 
                 // Add all available memory to the system
                 // TODO reclaim ACPI ?
-                //if(mbt_mmap_entry->len >= PALLOC_MINIMUM_SIZE && mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE) {
-                //    if((intp)mbt_mmap_entry->addr < 0x100000000) {
-                //        palloc_add_free_region((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
-                //    }
-                //} 
                 if(mbt_mmap_entry->type == MULTIBOOT_MEMORY_AVAILABLE && mbt_mmap_entry->addr < 0x100000000) {
-                    bootmem_addregion((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
-                    mbt_mmap_entry->type = MULTIBOOT_MEMORY_RESERVED;
+                    // the region the kernel is loaded into cannot be used for bootmem (well, unless we use _kernel_end_address 
+                    // but there's no point for that right now. TODO later we can move the kernel and reclaim the entire region
+                    if(mbt_load_base_addr->load_base_addr < mbt_mmap_entry->addr 
+                       || mbt_load_base_addr->load_base_addr > (mbt_mmap_entry->addr + mbt_mmap_entry->len)) {
+                        bootmem_addregion((void*)mbt_mmap_entry->addr, mbt_mmap_entry->len);
+                        mbt_mmap_entry->type = MULTIBOOT_MEMORY_RESERVED;
+                    }
                 }
 
                 // next entry
@@ -87,11 +94,6 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
                 }
             }
 
-            break;
-
-        case MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR:
-            mbt_load_base_addr = (struct multiboot_tag_load_base_addr*)mbt;
-            fprintf(stderr, "MBT Base load address: $%lX\n", mbt_load_base_addr->load_base_addr);
             break;
 
         case MULTIBOOT_TAG_TYPE_FRAMEBUFFER:
