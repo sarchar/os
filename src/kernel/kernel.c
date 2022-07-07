@@ -6,6 +6,7 @@
 #include "efifb.h"
 #include "interrupts.h"
 #include "multiboot2.h"
+#include "paging.h"
 #include "palloc.h"
 #include "stdio.h"
 #include "terminal.h"
@@ -82,6 +83,8 @@ void kernel_main(struct multiboot_info* multiboot_info)
     palloc_abandon(p0a, 0);
     palloc_abandon(p7, 7);
     
+    paging_init();
+
     // cause a page fault exception (testing the idt)
     *(u64 *)0x00007ffc00000000 = 1;    // page fault
     //*(u32 *)0xf0fffefe00000000 = 1;  // gpf because upper short isn't canonical

@@ -68,4 +68,10 @@ static inline u64 __rdcr2()
     asm volatile ( "mov %%cr2, %0" : "=a"(ret) );
     return ret;
 }
+
+static inline void __wrcr3(u64 val)
+{
+    asm volatile ( "mov %0, %%cr3" : : "a"(val) );
+}
+
 #endif

@@ -10,6 +10,8 @@
 #include "palloc.h"
 #include "stdio.h"
 
+#define PALLOC_VERBOSE 0
+
 #define PALLOC_MAX_ORDER 11 // 2^10 pages * 4KiB/page = 4MiB max contiguous allocation
 
 struct free_page {
@@ -52,8 +54,10 @@ static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
         // flip the bit
         regions[i].maps[order][index >> 3] ^= 1 << (index & 7);
 
-        //fprintf(stderr, "palloc: toggle bit region=$%lX order=%d index=%d base=$%lX new bit=$%02X\n",
-        //        (intp)regions[i].start, order, index, (intp)base, regions[i].maps[order][index >> 3] & (1 << (index & 7)));
+#if PALLOC_VERBOSE > 1
+        fprintf(stderr, "palloc: toggle bit region=$%lX order=%d index=%d base=$%lX new bit=$%02X\n",
+                (intp)regions[i].start, order, index, (intp)base, regions[i].maps[order][index >> 3] & (1 << (index & 7)));
+#endif
 
         // and get the new value
         if(nb != null) *nb = regions[i].maps[order][index >> 3] & (1 << (index & 7));
@@ -119,7 +123,9 @@ void palloc_init()
         region_start = __alignup(region_start, 4096);
         region_size -= wasted_alignment;
 
-        //fprintf(stderr, "palloc: reclaiming region at start=$%lX size=%d wasted=%d\n", (intp)region_start, region_size, wasted_alignment);
+#if PALLOC_VERBOSE > 0
+        fprintf(stderr, "palloc: reclaiming region at start=$%lX size=%d wasted=%d\n", (intp)region_start, region_size, wasted_alignment);
+#endif
 
         // put in region info
         regions[region_index].start = region_start;
@@ -127,7 +133,9 @@ void palloc_init()
         regions[region_index].end = (void*)((intp)region_start + region_size);
         regions[region_index].npages = region_size >> 12; // this value will be used quite a lot, so a small optimization here
 
-        //fprintf(stderr, "palloc: region $%lX has npages=%d\n", (intp)region_start, regions[region_index].npages);
+#if PALLOC_VERBOSE > 1
+        fprintf(stderr, "palloc: region $%lX has npages=%d\n", (intp)region_start, regions[region_index].npages);
+#endif
 
         region_index++;
 
@@ -152,7 +160,9 @@ void palloc_init()
             }
             free_page_head[order]->next = fp;
 
-            //fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
+#if PALLOC_VERBOSE > 1
+            fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
+#endif
 
             // increment region_start and reduce region_size
             region_start = (void*)((intp)region_start + block_size);
@@ -179,6 +189,14 @@ void* palloc_claim(u8 n) // allocate 2^n pages
     free_page_head[order]->next = left->next;
     if(free_page_head[order]->next != null) free_page_head[order]->next->prev = null;
 
+#if PALLOC_VERBOSE > 0
+    fprintf(stderr, "palloc: removed block $%lX at order %d\n", (intp)left, order);
+
+    if(left == 0x7feb6000) {
+        assert(left->next != 0x7feb6000, "what");
+    }
+#endif
+
     // split blocks all the way down to the requested size, if necessary
     while(order != n) {
         u64 block_size = (1 << order) << 12; // 2^n*4096
@@ -186,7 +204,9 @@ void* palloc_claim(u8 n) // allocate 2^n pages
         // split 'fp' into two block_size/2 blocks
         struct free_page* right = (struct free_page*)((u8*)left + (block_size >> 1));
 
-        //fprintf(stderr, "palloc: splitting block order %d address=$%lX right=$%lX\n", order, (intp)left, (intp)right);
+#if PALLOC_VERBOSE > 0
+        fprintf(stderr, "palloc: splitting block order %d address=$%lX right=$%lX\n", order, (intp)left, (intp)right);
+#endif
 
         // immediately toggle the bit out of the order the block comes from, before any splits
         palloc_togglebit(left, order, null);
@@ -232,19 +252,25 @@ void palloc_abandon(void* base, u8 n)
             palloc_togglebit(base, order, &bit);
         }
 
-        //fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", (intp)base, order, bit, (u8)buddy_valid);
+#if PALLOC_VERBOSE > 0
+        fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", (intp)base, order, bit, (u8)buddy_valid);
+#endif
 
         // a released block with no buddy must stay at this level, otherwise
         // try combining to larger blocks
         if(buddy_valid && (bit == 0) && order < PALLOC_MAX_ORDER - 1) {
-            //fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", (intp)base, (intp)buddy_addr, order + 1);
+#if PALLOC_VERBOSE > 0
+            fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", (intp)base, (intp)buddy_addr, order + 1);
+#endif
 
             // bit is 0, so buddy must be in the free blocks list
             struct free_page* buddy = (struct free_page*)buddy_addr;
 
             // remove buddy from free_list
             if(buddy->prev == null) { 
-                //fprintf(stderr, "free_page_head[%d]->next = $%lX, buddy = $%lX\n", order, free_page_head[order]->next, buddy);
+#if PALLOC_VERBOSE > 1
+                fprintf(stderr, "free_page_head[%d]->next = $%lX, buddy = $%lX\n", order, free_page_head[order]->next, buddy);
+#endif
                 assert(free_page_head[order]->next == buddy, "must be the case"); // the only time a node's prev pointer should be null is if it's at the start of the free list
                 free_page_head[order]->next = buddy->next;
             } else {
@@ -252,23 +278,18 @@ void palloc_abandon(void* base, u8 n)
             }
             buddy->next->prev = buddy->prev;
 
-            // use the lower address and add it to the higher layer, then repeat the process
-            struct free_page* combined = (struct free_page*)((intp)base & ~block_size);
-            combined->prev = null;
-            combined->next = free_page_head[order + 1]->next;
-            if(combined->next != null) combined->next->prev = combined;
-            free_page_head[order + 1]->next = combined;
-
-            // try combining again one order higher
+            // use the lower address and add try combining in the next higher order
+            base = (void*)((intp)base & ~block_size);
             order++;
-            base = (void*)combined;
         } else {
             // not combing with a buddy, so add to current order and break out
             struct free_page* np = (struct free_page*)base;
             np->prev = null;
+            assert(free_page_head[order]->next != np, "what4");
             np->next = free_page_head[order]->next;
             if(np->next != null) np->next->prev = np;
             free_page_head[order]->next = np;
+            assert(np->next != np, "what3");
             break;
         }
     }
