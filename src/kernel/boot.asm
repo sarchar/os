@@ -239,12 +239,15 @@ _bootstrap_start:
     mov ss, ax
 
     ; finally, this jump moves us into long mode
+    ; TODO this jumps to a 32-bit label (relocation size errors when using _start), so at some point
+    ; it would be nice to find out how to do a jump to a 64-bit address. Or maybe this is the right
+    ; way to do it?
     jmp GDT.text:.long_mode_entry  ; loads CS register, where the GDT entry has long mode set
 
-.long_mode_entry:
+.long_mode_entry:  ; label remains in 32-bit land
+    ; and falls into 64-bit code
 bits 64
-;.forever_loop: jmp .forever_loop
-    mov rdi, _start
+    mov rdi, _start ; indirect jump to 64-bit address
     jmp rdi
 .end:
 
