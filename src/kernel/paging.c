@@ -49,8 +49,6 @@ struct page_table {
 static struct page_table_allocator _allocator;
 static struct page_table* paging_root;
 
-static u64**** page_table_level_4;
-
 static void _map_2mb(intp phys, intp virt);
 
 static void _allocator_init()
@@ -133,6 +131,9 @@ void paging_init()
     // and change cr3 to set the new page tables
     // setting cr3 forces a full tlb invalidate
     __wrcr3((u64)__pa_kernel(paging_root->_cpu_table));
+
+    // for shits n giggles
+    paging_map_2mb(0x100000000, 0x0000000400000000);
     return;
 
 }
@@ -141,6 +142,10 @@ void paging_init()
 // location, but does not flush the TLB. For TLB flush, call paging_map_2mb() instead.
 static void _map_2mb(intp phys, intp virt)
 {
+    assert((virt >> 47) == 0 || (virt >> 47) == 0x1FFFF, "virtual address must be canonical");
+    assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
+    assert(__alignof(phys, 0x200000) == 0, "physical address must be 2MiB aligned");
+
     //fprintf(stderr, "paging: mapping 1GiB at 0x%08lX to virtual address 0x%08lX\n", phys, virt);
 
     // shift right 12 for pt1
@@ -175,8 +180,15 @@ static void _map_2mb(intp phys, intp virt)
     *pde = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_2MB) | CPU_PAGE_TABLE_ENTRY_FLAG_HUGE | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
 }
 
-void paging_map_2mb()
+void paging_map_2mb(intp phys, intp virt)
 {
     // calls _map_2mb and then flushes TLB
+    _map_2mb(phys, virt);
+
+    // TODO do I seriously have to issue 512 INVLPGs?
+    for(u32 i = 0; i < 512; i++) {
+        __invlpg(virt);
+        virt += 4096;
+    }
 }
 

@@ -6,5 +6,6 @@
 #define __pa_kernel(v) ((intp)(v) - (intp)&_kernel_vma_base)
 
 void paging_init();
+void paging_map_2mb(intp phys, intp vert);
 
 #endif
