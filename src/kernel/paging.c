@@ -132,10 +132,73 @@ void paging_init()
     // setting cr3 forces a full tlb invalidate
     __wrcr3((u64)__pa_kernel(paging_root->_cpu_table));
 
-    // for shits n giggles
-    paging_map_2mb(0x100000000, 0x0000000400000000);
+    // testing
+    u8* physpage = (u8*)palloc_claim_one();
+    physpage[1000] = 0x55; // we have identity mapping on all memory
+    physpage[1001] = 0xAA;
+    paging_map_page(physpage, 0x3F00000000);
+    assert(((u8*)0x3F00000000)[1000] == 0x55, "55 is wrong");
+    assert(((u8*)0x3F00000000)[1001] == 0xAA, "AA is wrong");
     return;
 
+}
+
+// _map_page does the hard work of mapping a physical address for the specified virtual address
+// location, but does not flush the TLB. For TLB flush, call paging_map_page() instead.
+static void _map_page(intp phys, intp virt)
+{
+    assert((virt >> 47) == 0 || (virt >> 47) == 0x1FFFF, "virtual address must be canonical");
+    assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
+    assert(__alignof(phys, 4096) == 0, "physical address must be 4KB aligned");
+
+    fprintf(stderr, "paging: mapping page at 0x%08lX to virtual address 0x%08lX\n", phys, virt);
+
+    // shift right 12 for pt1
+    // shift right 21 for pt2
+    // shift right 30 for pt3
+    // shift right 39 for pt4
+
+    // create a level 3 page table (page directory pointers) if necessary
+    u32 pml4_index = (virt >> 39) & 0x1FF;
+    struct page_table* pdpt = paging_root->entries[pml4_index];
+    if(paging_root->_cpu_table[pml4_index] == 0) {
+        pdpt = _allocate_page_table();
+        paging_root->entries[pml4_index] = pdpt;
+        paging_root->_cpu_table[pml4_index] = __pa_kernel(pdpt->_cpu_table) | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+    }
+
+    // create a level 2 page table (page directory) if necessary
+    u32 pdpt_index = (virt >> 30) & 0x1FF;
+    struct page_table* pd = pdpt->entries[pdpt_index];
+    if(pdpt->_cpu_table[pdpt_index] == 0) {
+        pd = _allocate_page_table();
+        pdpt->entries[pdpt_index] = pd;
+        pdpt->_cpu_table[pdpt_index] = __pa_kernel(pd->_cpu_table) | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+    }
+
+    // create a level 1 page table if necessary
+    u32 pd_index = (virt >> 21) & 0x1FF;
+    struct page_table* pt = pd->entries[pd_index];
+    if(pd->_cpu_table[pd_index] == 0) {
+        pt = _allocate_page_table();
+        pd->entries[pd_index] = pt;
+        pd->_cpu_table[pd_index] = __pa_kernel(pt->_cpu_table) | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+    }
+
+    // create the entry in the lowest level table (page table). if it already exists, error out
+    u32 pt_index = (virt >> 12) & 0x1FF;
+    u64* pte = &pt->_cpu_table[pt_index];
+    assert(*pte == 0, "mapping for virtual address already exists");
+
+    // set the page directory entry with huge page bit set
+    *pte = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_4KB) | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+}
+
+void paging_map_page(intp phys, intp virt)
+{
+    // call _map_page and then flushes TLB
+    _map_page(phys, virt);
+    __invlpg(virt);
 }
 
 // _map_2mb does the hard work of mapping the physical address into the specified virtual address
