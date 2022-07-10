@@ -49,7 +49,6 @@ typedef u32 color;
 #define COLOR(r,g,b) (color)(0x00000000 | ((r) << 16) | ((g) << 8) | (b))
 
 #define zero(m)           do { for(u64 ___asadf431 = 0; ___asadf431 < sizeof(*m); ___asadf431++) ((u8*)(m))[___asadf431] = 0; } while(false)
-#define memset(m, v, s)   do { for(u64 ___asadf431 = 0; ___asadf431 < s; ___asadf431++) ((u8*)(m))[___asadf431] = v; } while(false)
 #define memset64(m, v, c) do { for(u64 ___asadf431 = 0; ___asadf431 < c; ___asadf431++) ((u64*)(m))[___asadf431] = v; } while(false)
 
 #define lmask(n) ((1ULL << (n & 0x3F)) - (n == 64) - 1)

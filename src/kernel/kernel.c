@@ -1,6 +1,7 @@
 // Based on code from https://wiki.osdev.org/Bare_Bones
 #include "common.h"
 
+#include "acpi.h"
 #include "bootmem.h"
 #include "cpu.h"
 #include "efifb.h"
@@ -30,17 +31,17 @@ void kernel_panic(u32 error)
 
 void kernel_main(struct multiboot_info* multiboot_info) 
 {
+    // create a terminal before any print calls are made -- they won't
+    // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
+    terminal_init();
+    fprintf(stderr, "Boot..kernel_main at 0x%lX\n", (intp)kernel_main);
+
     // immediately setup and enable interrupts
     interrupts_init();
 
-    // now create a terminal before any print calls are made -- they won't
-    // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
-    terminal_init();
-
-    fprintf(stderr, "Boot..kernel_main at 0x%lX\n", (intp)kernel_main);
-
     // parse multiboot
     multiboot2_parse(multiboot_info);
+    acpi_init(); // TODO will need to happen before interrupts_init() but for now just testing acpi
 
     // after this, the bootmem allocator is no longer useful
     palloc_init();
@@ -86,7 +87,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     paging_init();
 
     // cause a page fault exception (testing the idt)
-    *(u64 *)0x00007ffc00000000 = 1;    // page fault
+    //*(u64 *)0x00007ffc00000000 = 1;    // page fault
     //*(u32 *)0xf0fffefe00000000 = 1;  // gpf because upper short isn't canonical
     //__asm__("div 0, %rax");          // division by 0 error
 

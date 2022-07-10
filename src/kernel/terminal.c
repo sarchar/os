@@ -2,6 +2,7 @@
 //
 #include "common.h"
 #include "efifb.h"
+#include "string.h"
 #include "terminal.h"
 
 // PSF font structure
@@ -133,8 +134,7 @@ void terminal_init()
     current_terminal.window_y = 0; // window starts at y=0
     current_terminal.cursor_x = 0;
     current_terminal.cursor_y = 0;
-    // TODO memset
-    for(u32 i = 0; i < countof(current_terminal.buffer); i++) current_terminal.buffer[i] = 0;
+    memset(current_terminal.buffer, 0, sizeof(current_terminal.buffer));
 }
 
 void terminal_setc(u16 c, u32 cx, u32 cy)

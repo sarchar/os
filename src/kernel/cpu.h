@@ -1,6 +1,8 @@
 #ifndef __CPU_H__
 #define __CPU_H__
 
+#include "cpuid.h"
+
 #define __cli() __asm__ volatile("cli")
 #define __sti() __asm__ volatile("sti")
 
@@ -60,6 +62,21 @@ static inline u64 __inq(u16 port)
 static inline void __io_wait(void)
 {
     __outb(0x80, 0);
+}
+
+static inline u64 __rdmsr(u32 msr)
+{
+    u64 edx;
+    u64 eax;
+    asm volatile("rdmsr" : "=a"(eax), "=d"(edx) : "c" (msr) );
+    return eax | (edx << 32);
+}
+
+static inline void __wrmsr(u64 msr, u64 value)
+{
+    u32 low = value & 0xFFFFFFFF;
+    u32 high = value >> 32;
+    asm volatile("wrmsr" : : "c"(msr), "a"(low), "d"(high));
 }
 
 static inline u64 __rdcr2()

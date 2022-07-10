@@ -136,7 +136,7 @@ void paging_init()
     u8* physpage = (u8*)palloc_claim_one();
     physpage[1000] = 0x55; // we have identity mapping on all memory
     physpage[1001] = 0xAA;
-    paging_map_page(physpage, 0x3F00000000);
+    paging_map_page((intp)physpage, 0x3F00000000);
     assert(((u8*)0x3F00000000)[1000] == 0x55, "55 is wrong");
     assert(((u8*)0x3F00000000)[1001] == 0xAA, "AA is wrong");
     return;

@@ -9,6 +9,7 @@
 #include "kernel.h"
 #include "palloc.h"
 #include "stdio.h"
+#include "string.h"
 
 #define PALLOC_VERBOSE 0
 

@@ -20,6 +20,7 @@ add_custom_target(run
                                              -boot d
                                              -vga std
                                              -monitor stdio
+                                             -smp 4
 )
 
 add_custom_target(gdb
@@ -31,5 +32,6 @@ add_custom_target(gdb
                                              -boot d
                                              -vga std
                                              -monitor stdio
+                                             -smp 4
                                              -s -S
 )

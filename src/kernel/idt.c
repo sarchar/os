@@ -87,6 +87,10 @@ void idt_init()
     idt_set_entry(32, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(33, interrupt_kb_handler, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
 
+    for(u32 i = 34; i < NUM_INTERRUPTS; i++) {
+        idt_set_entry(i, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
+    }
+
     // TODO I'm sure there's a cleaner way to make gcc do this properly
     // but I haven't figured it out yet.
     __asm__ volatile ("movabs %0, %%rax\n\t" 

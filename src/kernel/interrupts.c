@@ -1,5 +1,6 @@
 #include "common.h"
 
+#include "apic.h"
 #include "cpu.h"
 #include "efifb.h"
 #include "idt.h"
@@ -54,6 +55,7 @@ static u16 pic_get_isr(void)
  
 #define ICW4_8086       0x01        // 8086/88 (MCS-80/85) mode
 #define ICW4_AUTO       0x02        // Auto (normal) EOI
+#define ICW4_MASTER     0x04        // Master/slave
 #define ICW4_BUF_SLAVE  0x08        // Buffered mode/slave
 #define ICW4_BUF_MASTER 0x0C        // Buffered mode/master
 #define ICW4_SFNM       0x10        // Special fully nested (not)
@@ -93,7 +95,7 @@ static void pic_remap(u8 offset1, u8 offset2)
     __io_wait();
 
     // ICW4: put PICs into 8086 compat mode
-    __outb(PIC1_DATA, ICW4_8086);
+    __outb(PIC1_DATA, ICW4_8086 | ICW4_MASTER);
     __io_wait();
     __outb(PIC2_DATA, ICW4_8086);
     __io_wait();
@@ -131,19 +133,29 @@ static void pic_clear_mask(u8 irq)
     __outb(port, __inb(port) & ~(1 << irq));
 }
 
-void interrupts_init()
+void _disable_pic()
 {
+    unused(pic_clear_mask);
     unused(pic_set_mask);
     unused(pic_get_isr);
     unused(pic_get_irr);
 
-    idt_init();
-
     // remap the PIC irqs to 0x20-0x2F
     pic_remap(0x20, 0x28); // TODO when switching to APIC, see https://wiki.osdev.org/PIC#Disabling first!
 
-    // enable keyboard interrupt IRQ 1
-    pic_clear_mask(1);     // TODO handle spurious IRQs, see https://wiki.osdev.org/PIC#Spurious_IRQs
+    // mask out all IRQs
+    __outb(PIC1_DATA, 0xFF);
+    __outb(PIC2_DATA, 0xFF);
+}
+
+void interrupts_init()
+{
+    _disable_pic();
+
+    idt_init();
+
+
+    apic_init();
 
     // reset the PS/2 keyboard
     u8 data = __inb(0x61);     
@@ -239,6 +251,6 @@ DEFINE_INTERRUPT_HANDLER(interrupt_kb_handler)
     blocking++;
 
     // all PIC interrupts need to send the controller the end-of-interrupt command
-    pic_send_eoi(1);
+    //pic_send_eoi(1);
 }
 
