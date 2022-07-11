@@ -30,22 +30,38 @@ void kernel_panic(u32 error)
     while(1) { asm("hlt"); }
 }
 
-void kernel_main(struct multiboot_info* multiboot_info) 
+void kernel_main(struct multiboot_info*);
+
+static void initialize_kernel(struct multiboot_info* multiboot_info)
 {
     // create a terminal before any print calls are made -- they won't
     // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
+    // for now this is safe to call immediately, since no memory allocation happens in terminal_init()
     terminal_init();
     fprintf(stderr, "Boot..kernel_main at 0x%lX\n", (intp)kernel_main);
+
+    // parse multiboot right away
+    multiboot2_parse(multiboot_info);
+
+    // create bootmem storage
+    bootmem_init();
+
+    // create the frame buffer so we can actually show the user stuff
+    efifb_init();
+
+    // parse the ACPI tables. we need it to enable interrupts
+    acpi_init();
 
     // immediately setup and enable interrupts
     interrupts_init();
 
-    // parse multiboot
-    multiboot2_parse(multiboot_info);
-    acpi_init(); // TODO will need to happen before interrupts_init() but for now just testing acpi
-
-    // after this, the bootmem allocator is no longer useful
+    // take over from the bootmem allocator
     palloc_init();
+}
+
+void kernel_main(struct multiboot_info* multiboot_info) 
+{
+    initialize_kernel(multiboot_info);
 
 #define TEST_PALLOC(n) { \
     void* p = palloc_claim(n); \

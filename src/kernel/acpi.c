@@ -3,6 +3,7 @@
 #include "acpi.h"
 #include "cpu.h"
 #include "kernel.h"
+#include "multiboot2.h"
 #include "stdio.h"
 #include "string.h"
 
@@ -120,41 +121,33 @@ struct acpi_hpet {
     u8     oem_attributes     : 4;
 } __packed;
 
-static intp rsdp_base;
-
 static void _parse_apic_table(struct acpi_apic*);
 static void _parse_hpet_table(struct acpi_hpet*);
 
-void acpi_set_rsdp_base(intp base)
+static void _validate_checksum(intp base, u64 size, char* msg)
 {
-    rsdp_base = base;
-    if(memcmp((void*)rsdp_base, "RSD PTR ", 8) != 0) {
-        fprintf(stderr, "ACPI RSDP descriptor not valid\n");
-        assert(false, "invalid rsdp descriptor pointer");
+    u32 sum = 0;
+    for(u64 i = 0; i < size; i++) {
+        sum += *(u8*)(base + i);
+    }
+
+    if((sum & 0xFF) != 0) {
+        fprintf(stderr, "acpi: checksum not valid: %s\n", msg);
+        assert(false, "invalid checksum");
     }
 }
 
 void acpi_init()
 {
+    intp rsdp_base = multiboot2_acpi_get_rsdp();
+    if(memcmp((void*)rsdp_base, "RSD PTR ", 8) != 0) {
+        fprintf(stderr, "ACPI RSDP descriptor not valid\n");
+        assert(false, "invalid rsdp descriptor pointer");
+    }
+
     u32 sum = 0;
-    for(u32 i = 0; i < sizeof(struct rsdp_descriptor); i++) {
-        sum += *(u8*)(rsdp_base + i);
-    }
-
-    if((sum & 0xFF) != 0) {
-        fprintf(stderr, "ACPI RSDP v1 checksum not valid\n");
-        assert(false, "invalid rsdp v1 checksum not valid");
-    }
-
-    sum = 0;
-    for(u32 i = 0; i < sizeof(struct rsdp_descriptorv2) - sizeof(struct rsdp_descriptor); i++) {
-        sum += *(u8*)(rsdp_base + sizeof(struct rsdp_descriptor) + i);
-    }
-
-    if((sum & 0xFF) != 0) {
-        fprintf(stderr, "ACPI RSDP v2 checksum not valid\n");
-        assert(false, "invalid rsdp v2 checksum not valid");
-    }
+    _validate_checksum(rsdp_base, sizeof(struct rsdp_descriptor), "RSDP v1 checksum not valid");
+    _validate_checksum(rsdp_base + sizeof(struct rsdp_descriptor), sizeof(struct rsdp_descriptorv2) - sizeof(struct rsdp_descriptor), "RSDP v2 checksum not valid");
 
     struct rsdp_descriptorv2* desc = (struct rsdp_descriptorv2*)rsdp_base;
     assert(desc->descv1.revision >= 2, "require V2 ACPI");

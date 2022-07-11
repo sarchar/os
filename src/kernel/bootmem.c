@@ -15,6 +15,7 @@
 #include "cpu.h"
 #include "efifb.h"
 #include "kernel.h"
+#include "multiboot2.h"
 #include "stdio.h"
 #include "terminal.h"
 
@@ -36,7 +37,7 @@ struct {
     u8  num_regions;
 } bootmem_accounting = { 0, };
 
-void bootmem_addregion(void* region_start, u64 size)
+static void bootmem_addregion(void* region_start, u64 size)
 {
     if(size < BOOTMEM_SMALLEST_REGION_SIZE) {
         // not enough data remaining to care about, so toss it
@@ -54,6 +55,16 @@ void bootmem_addregion(void* region_start, u64 size)
     bootmem_accounting.free += size;
 
     fprintf(stderr, "bootmem: adding region $%lX size=%d\n", (intp)region_start, size);
+}
+
+void bootmem_init()
+{
+    intp region_start;
+    u64  region_size;
+
+    while((region_start = multiboot2_mmap_next_free_region(&region_size)) != (intp)-1) {
+        bootmem_addregion((void*)region_start, region_size);
+    }
 }
 
 void* bootmem_alloc(u64 size, u8 alignment)
