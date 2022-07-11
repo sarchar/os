@@ -14,7 +14,8 @@
 
 volatile u32 blocking = 0;
 u8 scancode;
- 
+extern u64 master_ticks;
+
 void kernel_panic(u32 error)
 {
     // attempt to set the screen to all red
@@ -87,15 +88,21 @@ void kernel_main(struct multiboot_info* multiboot_info)
     paging_init();
 
     // cause a page fault exception (testing the idt)
-    //*(u64 *)0x00007ffc00000000 = 1;    // page fault
-    //*(u32 *)0xf0fffefe00000000 = 1;  // gpf because upper short isn't canonical
-    //__asm__("div 0, %rax");          // division by 0 error
 
     u32 count = 0;
     while(1) {
         while(blocking > 0) {
             __cli();
-            fprintf(stderr, "kb: %d\n", scancode);
+            fprintf(stderr, "kb: %d, master_ticks = %llu\n", scancode, master_ticks);
+
+            // z - page fault, x - gpf, c - division by 0
+            if(scancode == 44) {
+                *(u64 *)0x00007ffc00000000 = 1;    // page fault
+            } else if(scancode == 45) {
+                *(u32 *)0xf0fffefe00000000 = 1;  // gpf because address isn't canonical
+            } else if(scancode == 46) {
+                __asm__ volatile("div %0" : : "c"(0));  // division by 0 error
+            }
 
             for(u32 y = 0; y < 16; y++) {
                 for(u32 x = 0; x < 16; x++) {

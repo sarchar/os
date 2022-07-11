@@ -52,7 +52,8 @@ void idt_init()
     _idtr.base = (intp)&_idt[0] - (intp)&_kernel_vma_base; // the cpu wants a physical address
     _idtr.limit = (u16)(sizeof(_idt) - 1);
     
-    idt_set_entry( 0, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
+    // the first 32 interrupts are internal to the cpu
+    idt_set_entry( 0, interrupt_div_by_zero, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry( 1, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry( 2, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry( 3, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
@@ -84,12 +85,17 @@ void idt_init()
     idt_set_entry(29, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(30, interrupt_stub,       IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(31, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
+
+    // Default all interrupt handlers to interrupt_stub_noerr
+    for(u32 i = 32; i < NUM_INTERRUPTS; i++) {
+        idt_set_entry(i, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
+    }
+
+
     idt_set_entry(32, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(33, interrupt_kb_handler, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
 
-    for(u32 i = 34; i < NUM_INTERRUPTS; i++) {
-        idt_set_entry(i, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
-    }
+    idt_set_entry(80, interrupt_timer, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
 
     // TODO I'm sure there's a cleaner way to make gcc do this properly
     // but I haven't figured it out yet.

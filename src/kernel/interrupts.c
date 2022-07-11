@@ -9,6 +9,8 @@
 #include "stdio.h"
 #include "terminal.h"
 
+u64 volatile master_ticks = 0;
+
 // Temporarily use PIC to enable some basic interrputs. This will all be wiped once APIC is implemented.
 #define PIC1_COMMAND    0x20        // IO base address for master PIC
 #define PIC1_DATA       (PIC1_COMMAND+1)
@@ -18,6 +20,7 @@
 #define PIC_EOI         0x20        // End-of-interrupt command code
 #define PIC_READ_IRR    0x0A        // OCW3 irq ready next CMD read 
 #define PIC_READ_ISR    0x0B        // OCW3 irq service next CMD read
+
 
 static inline void pic_send_eoi(u8 irq)
 {
@@ -177,7 +180,7 @@ extern void _interrupt_handler_common(void);
     __asm__(                                       \
         ".extern _" #name "\n"                     \
         ".global " #name "\n"                      \
-        ".align 8\n"                               \
+        ".align 16\n"                               \
         #name ":\n"                                \
         "\t" "push %rax\n"                         /* save rax */                                     \
         "\t" "push %rdi\n"                         /* save rdi */                                     \
@@ -192,7 +195,7 @@ extern void _interrupt_handler_common(void);
     __asm__(                                       \
         ".extern _" #name "\n"                     \
         ".global " #name "\n"                      \
-        ".align 8\n"                               \
+        ".align 16\n"                               \
         #name ":\n"                                \
         "\t" "xchg %rax,0(%rsp)\n"                 /* save rax by swapping the error code with it */  \
         "\t" "push %rdi\n"                         /* save rdi */                                     \
@@ -209,21 +212,24 @@ DEFINE_INTERRUPT_HANDLER_ERR(interrupt_stub)
     unused(error_code);
     unused(fault_addr);
     kernel_panic(COLOR(255, 0, 0));
-    return;
 }
 
 DEFINE_INTERRUPT_HANDLER(interrupt_stub_noerr)
 {
     unused(fault_addr);
     kernel_panic(COLOR(255, 255, 0));
-    return;
+}
+
+DEFINE_INTERRUPT_HANDLER(interrupt_div_by_zero)
+{
+    fprintf(stderr, "division by zero at address $%lX ", fault_addr);
+    kernel_panic(COLOR(255, 128, 128));
 }
 
 DEFINE_INTERRUPT_HANDLER_ERR(interrupt_gpf)
 {
     fprintf(stderr, "general protection fault: error = $%lX at address $%lX\n", error_code, fault_addr);
     kernel_panic(COLOR(255, 0, 0));
-    return;
 }
 
 DEFINE_INTERRUPT_HANDLER_ERR(interrupt_page_fault)
@@ -236,7 +242,6 @@ DEFINE_INTERRUPT_HANDLER_ERR(interrupt_page_fault)
     fprintf(stderr, " %s $%lX\n", rw ? "writing" : "reading", (intp)access_address);
 
     kernel_panic(COLOR(0, 255, 0));
-    return;
 }
 
 extern volatile u32 blocking;
@@ -252,5 +257,11 @@ DEFINE_INTERRUPT_HANDLER(interrupt_kb_handler)
 
     // all PIC interrupts need to send the controller the end-of-interrupt command
     //pic_send_eoi(1);
+}
+
+DEFINE_INTERRUPT_HANDLER(interrupt_timer)
+{
+    unused(fault_addr);
+    master_ticks++;
 }
 
