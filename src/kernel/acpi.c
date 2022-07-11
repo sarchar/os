@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include "acpi.h"
+#include "apic.h"
 #include "cpu.h"
 #include "kernel.h"
 #include "multiboot2.h"
@@ -44,7 +45,7 @@ struct acpi_xsdt {
 #define ACPI_APIC_FLAG_HAS_PIC (1 << 0)
 
 enum {
-    ACPI_APIC_RECORD_TYPE_LOCAL_APIC = 0,
+    ACPI_APIC_RECORD_PROCESSOR_LOCAL_APIC = 0,
     ACPI_APIC_RECORD_TYPE_IOAPIC = 1,
     ACPI_APIC_RECORD_TYPE_IOAPIC_INTERRUPT_SOURCE_OVERRIDE = 2,
     ACPI_APIC_RECORD_TYPE_IOAPIC_NMI_SOURCE = 3,
@@ -65,7 +66,7 @@ struct acpi_apic_record_header {
     u8     length;
 } __packed;
 
-struct acpi_apic_record_local_apic {
+struct acpi_apic_record_processor_local_apic {
     struct acpi_apic_record_header header;
     u8     acpi_processor_id;
     u8     acpi_id;
@@ -145,7 +146,7 @@ void acpi_init()
         assert(false, "invalid rsdp descriptor pointer");
     }
 
-    u32 sum = 0;
+    // validate the main descriptor
     _validate_checksum(rsdp_base, sizeof(struct rsdp_descriptor), "RSDP v1 checksum not valid");
     _validate_checksum(rsdp_base + sizeof(struct rsdp_descriptor), sizeof(struct rsdp_descriptorv2) - sizeof(struct rsdp_descriptor), "RSDP v2 checksum not valid");
 
@@ -159,37 +160,19 @@ void acpi_init()
 
     // validate the XSDT before parsing it
     struct acpi_xsdt* xsdt = (struct acpi_xsdt*)desc->xsdt_address;
-    sum = 0;
-    for(u32 i = 0; i < xsdt->header.length; i++) {
-        sum += *(u8*)((intp)xsdt + i);
-    }
+    _validate_checksum((intp)xsdt, xsdt->header.length, "XSDT checksum not valid");
 
-    if((sum & 0xFF) != 0) {
-        fprintf(stderr, "acpi: XSDT checksum not valid\n");
-        assert(false, "xsdt checksum not valid");
-    }
-
-    fprintf(stderr, "xsdt->header.length = %d, sizeof(struct acpi_sdt_header) = %d\n", xsdt->header.length, sizeof(struct acpi_sdt_header));
     u32 ntables = (xsdt->header.length - sizeof(struct acpi_sdt_header)) / sizeof(u64);
-    fprintf(stderr, "got %d tables\n", ntables);
     for(u32 table_index = 0; table_index < ntables; table_index++) {
         //fprintf(stderr, "table %d at 0x%lX\n", table_index, xsdt->tables[table_index]);
         struct acpi_sdt_header* hdr = (struct acpi_sdt_header*)xsdt->tables[table_index];
 
         buf[4] = 0;
         memcpy(buf, hdr->signature, 4);
-        fprintf(stderr, "acpi: table %d signature [%s], address = 0x%lX\n", table_index, buf, (intp)hdr);
+        //fprintf(stderr, "acpi: table %d signature [%s], address = 0x%lX\n", table_index, buf, (intp)hdr);
 
         // validate the structure
-        sum = 0;
-        for(u32 i = 0; i < hdr->length; i++) {
-            sum += *(u8*)((intp)hdr + i);
-        }
-
-        if((sum & 0xFF) != 0) {
-            fprintf(stderr, "acpi: [%s] table checksum not valid\n", buf);
-            assert(false, "table checksum not valid");
-        }
+        _validate_checksum((intp)hdr, hdr->length, "table checksum not valid");
 
         switch(*(u32*)&hdr->signature[0]) {
         case 0x43495041:  // 'APIC'
@@ -199,15 +182,18 @@ void acpi_init()
         case 0x54455048: // 'HPET'
             _parse_hpet_table((struct acpi_hpet*)hdr);
             break;
+
+        default:
+            fprintf(stderr, "acpi: unhandled table [%s], address = 0x%lX\n", buf, (intp)hdr);
         }
     }
 }
 
 static void _parse_apic_table(struct acpi_apic* apic)
 {
-    struct acpi_apic_record_local_apic*      local_apic;
-    struct acpi_apic_record_ioapic*          ioapic;
-    struct acpi_apic_record_local_apic_nmis* local_apic_nmis;
+    struct acpi_apic_record_processor_local_apic*      local_apic;
+    struct acpi_apic_record_ioapic*                    ioapic;
+    struct acpi_apic_record_local_apic_nmis*           local_apic_nmis;
     struct acpi_apic_record_interrupt_source_override* interrupt_source_override;
 
     fprintf(stderr, "acpi: LAPIC at 0x%lX", apic->lapic_base);
@@ -216,33 +202,46 @@ static void _parse_apic_table(struct acpi_apic* apic)
     }
     fprintf(stderr, "\n");
 
+    // configure the local 
+    apic_notify_acpi_local_apic(apic->lapic_base, apic->flags & ACPI_APIC_FLAG_HAS_PIC);
+
+    // loop over all the records in the MADT table
+    // TODO loop twice to count the # of cpus and ioapics first, to allocate dynamic storage in apic.c
     u8* current_record = apic->records;
     u8* records_end = (u8*)((intp)apic + apic->header.length);
     while(current_record < records_end) {
         u8 type = current_record[0];
 
         switch(type) {
-        case ACPI_APIC_RECORD_TYPE_LOCAL_APIC:
-            local_apic = (struct acpi_apic_record_local_apic*)current_record;
-            fprintf(stderr, "acpi: Local APIC acpi_processor_id=%d acpi_id=%d flags=%08X\n", local_apic->acpi_processor_id, local_apic->acpi_id, local_apic->flags);
+        case ACPI_APIC_RECORD_PROCESSOR_LOCAL_APIC:
+            local_apic = (struct acpi_apic_record_processor_local_apic*)current_record;
+            //fprintf(stderr, "acpi: Local APIC acpi_processor_id=%d acpi_id=%d flags=%08X\n", local_apic->acpi_processor_id, local_apic->acpi_id, local_apic->flags);
+            if((local_apic->flags & 0x03) != 0) {
+                apic_register_processor_lapic(local_apic->acpi_processor_id, local_apic->acpi_id, (local_apic->flags & 0x01) != 0);
+            }
             break;
 
         case ACPI_APIC_RECORD_TYPE_IOAPIC:
             ioapic = (struct acpi_apic_record_ioapic*)current_record;
-            fprintf(stderr, "acpi: I/O APIC ioapic_id=%d ioapic_address=0x%lX global_system_interrupt_base=0x%lX\n",
-                    ioapic->ioapic_id, ioapic->ioapic_address, ioapic->global_system_interrupt_base);
+            //fprintf(stderr, "acpi: I/O APIC ioapic_id=%d ioapic_address=0x%lX global_system_interrupt_base=0x%lX\n",
+            //        ioapic->ioapic_id, ioapic->ioapic_address, ioapic->global_system_interrupt_base);
+            apic_notify_acpi_io_apic(ioapic->ioapic_id, ioapic->ioapic_address, ioapic->global_system_interrupt_base);
             break;
 
         case ACPI_APIC_RECORD_TYPE_IOAPIC_INTERRUPT_SOURCE_OVERRIDE:
             interrupt_source_override = (struct acpi_apic_record_interrupt_source_override*)current_record;
-            fprintf(stderr, "acpi: Interrupt Source Override bus source=%d irq source=%d global_system_interrupt=0x%08X flags=0x%04X\n",
-                    interrupt_source_override->bus_source, interrupt_source_override->irq_source,
-                    interrupt_source_override->global_system_interrupt, interrupt_source_override->flags);
+            //fprintf(stderr, "acpi: Interrupt Source Override bus source=%d irq source=%d global_system_interrupt=%d flags=0x%04X\n",
+            //        interrupt_source_override->bus_source, interrupt_source_override->irq_source,
+            //        interrupt_source_override->global_system_interrupt, interrupt_source_override->flags);
+            apic_notify_acpi_io_apic_interrupt_source_override(interrupt_source_override->bus_source,
+                    interrupt_source_override->irq_source, interrupt_source_override->global_system_interrupt,
+                    interrupt_source_override->flags);
             break;
 
         case ACPI_APIC_RECORD_TYPE_LOCAL_APIC_NMIS:
             local_apic_nmis = (struct acpi_apic_record_local_apic_nmis*)current_record;
-            fprintf(stderr, "acpi: Local APIC NMIs acpi_processor_id=%d flags=0x%04X lint_number=%d\n", local_apic_nmis->acpi_processor_id, local_apic_nmis->flags, local_apic_nmis->lint_number);
+            //fprintf(stderr, "acpi: Local APIC NMIs acpi_processor_id=%d flags=0x%04X lint_number=%d\n", local_apic_nmis->acpi_processor_id, local_apic_nmis->flags, local_apic_nmis->lint_number);
+            apic_notify_acpi_lapic_nmis(local_apic_nmis->acpi_processor_id, local_apic_nmis->lint_number, local_apic_nmis->flags);
             break;
 
         default:

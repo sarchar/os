@@ -157,7 +157,6 @@ void interrupts_init()
 
     idt_init();
 
-
     apic_init();
 
     // reset the PS/2 keyboard
