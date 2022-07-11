@@ -303,7 +303,7 @@ static void _parse_hpet_table(struct acpi_hpet* hpet)
 #define TIMER_PERIOD(time_in_microseconds) \
         ((u64)time_in_microseconds * 1000000000ULL) / time_per_tick_in_femtoseconds
 
-    u64 timer_period = TIMER_PERIOD(10000); // 10ms
+    u64 timer_period = TIMER_PERIOD(1000); // 1ms or 1000Hz
     u64 ioapic_route = 19; // map the timer to I/O APIC irq 19
 
     assert((timer_route_cap & (ioapic_route << 1)) != 0, "must be capable of routing that irq");

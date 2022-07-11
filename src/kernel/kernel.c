@@ -95,12 +95,12 @@ void kernel_main(struct multiboot_info* multiboot_info)
             __cli();
             fprintf(stderr, "kb: %d, master_ticks = %llu\n", scancode, master_ticks);
 
-            // z - page fault, x - gpf, c - division by 0
-            if(scancode == 44) {
+            // F1 - page fault, F2 - gpf, F3 - division by 0
+            if(scancode == 59) {
                 *(u64 *)0x00007ffc00000000 = 1;    // page fault
-            } else if(scancode == 45) {
+            } else if(scancode == 60) {
                 *(u32 *)0xf0fffefe00000000 = 1;  // gpf because address isn't canonical
-            } else if(scancode == 46) {
+            } else if(scancode == 61) {
                 __asm__ volatile("div %0" : : "c"(0));  // division by 0 error
             }
 
@@ -109,6 +109,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
                     efifb_putpixel(16+x+count*32, 600+y, COLOR(255, 255, 255));
                 }
             }
+
             blocking--;
             count++;
             __sti();
