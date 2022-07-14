@@ -6,6 +6,7 @@
 #include "cpu.h"
 #include "efifb.h"
 #include "interrupts.h"
+#include "kalloc.h"
 #include "multiboot2.h"
 #include "paging.h"
 #include "palloc.h"
@@ -57,6 +58,12 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // take over from the bootmem allocator
     palloc_init();
+    kalloc_init();
+
+    // take over from the page table initialized at boot
+    paging_init();
+
+    // TODO enable/use high memory in palloc only after paging is initialized
 }
 
 void kernel_main(struct multiboot_info* multiboot_info) 
@@ -101,10 +108,15 @@ void kernel_main(struct multiboot_info* multiboot_info)
     palloc_abandon(p0a, 0);
     palloc_abandon(p7, 7);
     
-    paging_init();
+    void* test_ptr = kalloc(128);
+    fprintf(stderr, "test_ptr = 0x%lX\n", (intp)test_ptr);
+    *(u64*)test_ptr = 0;
+    void* test_ptr2 = kalloc(128);
+    fprintf(stderr, "test_ptr2 = 0x%lX\n", (intp)test_ptr2);
+    kfree(test_ptr);
+    fprintf(stderr, "*test_ptr = 0x%lX\n", *(intp*)test_ptr);
 
-    // cause a page fault exception (testing the idt)
-
+    // testing loop
     u32 count = 0;
     while(1) {
         while(blocking > 0) {

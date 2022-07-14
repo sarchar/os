@@ -101,8 +101,7 @@ void palloc_init()
     //
 
     // have to loop over all regions and build bitmaps for them individually
-    u8 num_bootmem_regions = bootmem_num_regions();
-    for(u8 r = 0; r < num_bootmem_regions; r++) {
+    for(u8 r = 0; r < num_regions; r++) {
         u32 npages = bootmem_get_region_size(r) >> 12;
 
         // allocate the bitmaps

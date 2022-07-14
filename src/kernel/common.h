@@ -16,6 +16,8 @@
         }                                       \
     } while(false);
 
+#define static_assert(cond,err) _Static_assert(cond, err)
+
 #define __packed __attribute__((packed))
 #define __aligned(x) __attribute__((aligned(x)))
 #define __alignof(x, n) (((intp)(x)) & ((n)-1))
@@ -50,5 +52,11 @@ typedef u32 color;
 #define memset64(m, v, c) do { for(u64 ___asadf431 = 0; ___asadf431 < c; ___asadf431++) ((u64*)(m))[___asadf431] = v; } while(false)
 
 #define lmask(n) ((1ULL << (n & 0x3F)) - (n == 64) - 1)
+
+#define is_power_of_2(x) (((x) & ((x) - 1)) == 0)
+
+// return n such that 2^n >= x
+// not valid for x=0 or 1
+#define next_power_of_2(x) (is_power_of_2(x) ? (63 - __builtin_clzll((u64)(x))) : (64 - __builtin_clzll((u64)(x)))) 
 
 #endif
