@@ -2,6 +2,7 @@
 //
 #include "common.h"
 #include "efifb.h"
+#include "serial.h"
 #include "string.h"
 #include "terminal.h"
 
@@ -217,6 +218,8 @@ int write(int fd, char* buf, u64 size)
     for(u64 i = 0; i < size; i++) {
         terminal_putc((u16)buf[0]);
     }
+
+    serial_write_buffer(buf, size);
 
     return size;
 }

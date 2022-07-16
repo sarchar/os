@@ -39,6 +39,10 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // show up on screen until a framebuffer is enabled, but they are buffered in memory until then
     // for now this is safe to call immediately, since no memory allocation happens in terminal_init()
     terminal_init();
+
+    // initialize serial port 
+    serial_init();
+
     fprintf(stderr, "Boot..kernel_main at 0x%lX\n", (intp)kernel_main);
 
     // parse multiboot right away

@@ -21,6 +21,7 @@ add_custom_target(run
                                              -vga std
                                              -monitor stdio
                                              -smp 4
+                                             -serial file:${CMAKE_BINARY_DIR}/output.log
 )
 
 add_custom_target(gdb
@@ -33,5 +34,6 @@ add_custom_target(gdb
                                              -vga std
                                              -monitor stdio
                                              -smp 4
+                                             -serial file:${CMAKE_BINARY_DIR}/output.log
                                              -s -S
 )
