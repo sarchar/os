@@ -17,6 +17,7 @@
     } while(false);
 
 #define static_assert(cond,err) _Static_assert(cond, err)
+#define always_inline __attribute__((always_inline)) inline
 
 #define __packed __attribute__((packed))
 #define __aligned(x) __attribute__((aligned(x)))

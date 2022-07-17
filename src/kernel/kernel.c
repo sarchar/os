@@ -5,11 +5,13 @@
 #include "bootmem.h"
 #include "cpu.h"
 #include "efifb.h"
+#include "hpet.h"
 #include "interrupts.h"
 #include "kalloc.h"
 #include "multiboot2.h"
 #include "paging.h"
 #include "palloc.h"
+#include "serial.h"
 #include "stdio.h"
 #include "terminal.h"
 
@@ -66,6 +68,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // take over from the page table initialized at boot
     paging_init();
+
+    // enable the kernel timer
+    hpet_init();
 
     // TODO enable/use high memory in palloc only after paging is initialized
 }

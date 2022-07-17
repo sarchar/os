@@ -130,7 +130,7 @@ static bool _check_serial(u16 port)
 
 void serial_init()
 {
-    serial.port = 0x3f8;
+    serial.port  = 0x3F8;
     serial.valid = _check_serial(serial.port);
 
     if(!serial.valid) fprintf(stderr, "serial: port 0x3F8 not valid\n");

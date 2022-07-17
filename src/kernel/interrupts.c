@@ -6,7 +6,6 @@
 #include "idt.h"
 #include "interrupts.h"
 #include "kernel.h"
-#include "palloc.h"
 #include "stdio.h"
 #include "terminal.h"
 
@@ -242,10 +241,12 @@ DEFINE_INTERRUPT_HANDLER_ERR(interrupt_page_fault)
     fprintf(stderr, " %s $%lX\n", rw ? "writing" : "reading", (intp)access_address);
 
     // put a page at the access_address 
-    intp new_page = (intp)palloc_claim_one();
+#if 0
+    intp new_page = (intp)palloc_claim(0);
     paging_map_page(new_page, (intp)access_address);
-
-    //kernel_panic(COLOR(0, 255, 0));
+#else
+    kernel_panic(COLOR(0, 255, 0));
+#endif
 }
 
 extern volatile u32 blocking;

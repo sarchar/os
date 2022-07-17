@@ -3,6 +3,7 @@
 #include "acpi.h"
 #include "apic.h"
 #include "cpu.h"
+#include "hpet.h"
 #include "kernel.h"
 #include "multiboot2.h"
 #include "stdio.h"
@@ -158,11 +159,23 @@ void acpi_init()
     buf[6] = 0;
     fprintf(stderr, "apci: oem_id = [%s], revision %d, rsdt = 0x%lX, xsdt = 0x%lX, xsdt length = %d\n", buf, desc->descv1.revision, desc->descv1.rsdt_address, desc->xsdt_address, desc->length);
 
+
     // validate the XSDT before parsing it
     struct acpi_xsdt* xsdt = (struct acpi_xsdt*)desc->xsdt_address;
     _validate_checksum((intp)xsdt, xsdt->header.length, "XSDT checksum not valid");
 
     u32 ntables = (xsdt->header.length - sizeof(struct acpi_sdt_header)) / sizeof(u64);
+
+    // counter the number of HPET tables first. doesn't matter much if they're invalid,
+    // that'll be checked in the next loop
+    u8 num_hpets = 0;
+    for(u32 table_index = 0; table_index < ntables; table_index++) {
+        struct acpi_sdt_header* hdr = (struct acpi_sdt_header*)xsdt->tables[table_index];
+        if(*(u32*)&hdr->signature[0] == 0x54455048) num_hpets++; // 'HPET' table
+    }
+    if(num_hpets > 0) hpet_notify_timer_count(num_hpets);
+
+    // now loop over and parse the tables
     for(u32 table_index = 0; table_index < ntables; table_index++) {
         //fprintf(stderr, "table %d at 0x%lX\n", table_index, xsdt->tables[table_index]);
         struct acpi_sdt_header* hdr = (struct acpi_sdt_header*)xsdt->tables[table_index];
@@ -263,48 +276,10 @@ static void _parse_hpet_table(struct acpi_hpet* hpet)
     fprintf(stderr, "    address_space_id=%d register_bit_width=%d register_bit_offset=%d address=0x%lX\n", 
             hpet->address.address_space_id, hpet->address.register_bit_width, hpet->address.register_bit_offset, hpet->address.address);
 
-    u64 cap = *(u64 *)(hpet->address.address + 0);
-    u32 period = cap >> 32;
-    u16 vendor_id = (cap >> 16) & 0xFFFF;
-    u8  legacy_cap = (cap >> 15) & 0x01;
-    u8  long_counter = (cap >> 13) & 0x01;
-    u8  num_timers = (cap >> 8) & 0x1F;
-    u8  revision = cap & 0xFF;
+    u8 flags = 0;
+    if(hpet->address.address_space_id == 1) flags |= HPET_FLAG_ADDRESS_IO;
 
-    fprintf(stderr, "acpi: HPET capabilities period=0x%08X vendor_id=0x%04X legacy_cap=%d long_counter=%d num_timers=%d revision=0x%02X\n", 
-            period, vendor_id, legacy_cap, long_counter, num_timers, revision);
-
-    // enable hpet and without legacy irq routing
-    *(u64 *)(hpet->address.address + 0x10) = 0x01ULL;
-
-    u64 timer_cap = *(u64 volatile*)(hpet->address.address + 0x120);
-    u8  has_periodic = (timer_cap >> 4) & 0x01;
-    u8  timer_long_cap = (timer_cap >> 5) & 0x01;
-    u32 timer_route_cap = timer_cap >> 32;
-    fprintf(stderr, "acpi: HPET timer 0: has_periodic=%d timer_long_cap=%d timer_route_cap=0x%08X\n",
-            has_periodic, timer_long_cap, timer_route_cap);
-
-    // The period specified in the hpet capabilities is actually the real world time that has to elapse to
-    // increment the internal clock counter by 1.  But that value is specified in femtoseconds, so the
-    // *actual* real world time for 1 counter tick is time_per_tick_in_femtoseconds*10^15 seconds.  So, 
-    // to get the number of clock counter ticks we want to use that corrresponds to a real world time t, 
-    // we use t / (time_per_tick_in_femtoseconds * 10^-15).  To avoid using floating point math, multiply
-    // by 10^15/10^15 to get t*10^15/time_per_tick_in_femtoseconds.  Now let's specify t in microseconds
-    // to get t*10^9/time_per_tick_in_femtoseconds:
-    u64 time_per_tick_in_femtoseconds = period;
-#define TIMER_PERIOD(time_in_microseconds) \
-        ((u64)time_in_microseconds * 1000000000ULL) / time_per_tick_in_femtoseconds
-
-    u64 timer_period = TIMER_PERIOD(1000); // 1ms or 1000Hz
-    u64 ioapic_route = 19; // map the timer to I/O APIC irq 19
-
-    assert((timer_route_cap & (ioapic_route << 1)) != 0, "must be capable of routing that irq");
-    *(u64 volatile*)(hpet->address.address + 0x120) = (ioapic_route << 9) | (1 << 6) | (1 << 3); // bit 3 is periodic mode
-    *(u64 volatile*)(hpet->address.address + 0x128) = *(u64 volatile*)(hpet->address.address + 0xF0) + timer_period; // should be 1second
-    *(u64 volatile*)(hpet->address.address + 0x128) = timer_period; // should be 1second
-    *(u64 volatile*)(hpet->address.address + 0x120) |= (1 << 2); // enable interrupts from this timer source
-
-    //u64 curval = *(u64 *)(hpet->address.address + 0xF0);
-    //fprintf(stderr, "acpi: HPET current timer value=0x%lX\n", curval);
+    hpet_notify_presence(hpet->hpet_number, hpet->hardware_revision_id, hpet->comparator_count, hpet->minimum_tick, (intp)hpet->address.address, 
+                         hpet->address.register_bit_width, hpet->address.register_bit_offset, flags);
 }
 
