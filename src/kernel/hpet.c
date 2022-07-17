@@ -174,8 +174,8 @@ void hpet_notify_presence(u8 hpet_number, u8 hardwar_revision_id, u8 comparator_
         comp->in_use   = false;
         comp->cap_conf = _read_comparator_register(comp, HPET_COMPARATOR_CAPABILITIES_REGISTER);
 
-        fprintf(stderr, "hpet: comparator %d: periodic_capable=%d long_counter=%d timer_route_cap=0x%08X\n",
-                i, comp->periodic_capable, comp->long_counter, comp->interrupt_map);
+        //fprintf(stderr, "hpet: comparator %d: periodic_capable=%d long_counter=%d timer_route_cap=0x%08X\n",
+        //        i, comp->periodic_capable, comp->long_counter, comp->interrupt_map);
     }
 }
 
@@ -220,7 +220,7 @@ void hpet_init()
     // TODO find comparator matching criteria (long mode, available irq, periodic mode available)
     // TODO loop over valid irqs (comp->interrupt_map)
     // TODO and convert global irq number to cpu irq number
-    // TODO apic_is_irq_slot_available
+    // TODO apic_is_irq_slot_available / apic_map_global_to_cpu
     // TODO install interrupt handler with local function
     // then map the timer/comparator to the global irq number
     _enable_kernel_timer(19);

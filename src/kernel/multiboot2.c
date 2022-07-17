@@ -95,17 +95,17 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
         switch(mbt->type) {
         case MULTIBOOT_TAG_TYPE_CMDLINE:
             mbt_cmdline = (struct multiboot_tag_string*)mbt;
-            fprintf(stderr, "MBT Command line: %s\n", mbt_cmdline->string);
+            fprintf(stderr, "multiboot: command line: %s\n", mbt_cmdline->string);
             break;
 
         case MULTIBOOT_TAG_TYPE_BOOT_LOADER_NAME:
             mbt_bootloader_name = (struct multiboot_tag_string*)mbt;
-            fprintf(stderr, "MBT Boot loader name: %s\n", mbt_bootloader_name->string);
+            //fprintf(stderr, "MBT Boot loader name: %s\n", mbt_bootloader_name->string);
             break;
 
         case MULTIBOOT_TAG_TYPE_LOAD_BASE_ADDR:
             mbt_load_base_addr = (struct multiboot_tag_load_base_addr*)mbt;
-            fprintf(stderr, "MBT Base load address: $%lX\n", mbt_load_base_addr->load_base_addr);
+            fprintf(stderr, "multiboot: base load address: 0x%08lX\n", mbt_load_base_addr->load_base_addr);
             break;
 
         case MULTIBOOT_TAG_TYPE_MMAP:
@@ -115,24 +115,25 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
 
         case MULTIBOOT_TAG_TYPE_FRAMEBUFFER:
             mbt_framebuffer = (struct multiboot_tag_framebuffer*)mbt;
-            fprintf(stderr, "MBT Framebuffer: address $%lX pitch %d width %d height %d bpp %d type %d\n",
-                    (intp)mbt_framebuffer->common.framebuffer_addr,
-                    (intp)mbt_framebuffer->common.framebuffer_pitch,
-                    (intp)mbt_framebuffer->common.framebuffer_width,
-                    (intp)mbt_framebuffer->common.framebuffer_height,
-                    (intp)mbt_framebuffer->common.framebuffer_bpp,
-                    (intp)mbt_framebuffer->common.framebuffer_type);
+            //fprintf(stderr, "MBT Framebuffer: address $%lX pitch %d width %d height %d bpp %d type %d\n",
+            //        (intp)mbt_framebuffer->common.framebuffer_addr,
+            //        (intp)mbt_framebuffer->common.framebuffer_pitch,
+            //        (intp)mbt_framebuffer->common.framebuffer_width,
+            //        (intp)mbt_framebuffer->common.framebuffer_height,
+            //        (intp)mbt_framebuffer->common.framebuffer_bpp,
+            //        (intp)mbt_framebuffer->common.framebuffer_type);
 
         case MULTIBOOT_TAG_TYPE_EFI_MMAP:
             {
-                struct multiboot_tag_efi_mmap* mbt_efi_mmap = (struct multiboot_tag_efi_mmap*)mbt;
-                fprintf(stderr, "MBT EFI mmap: descriptor size %d\n", mbt_efi_mmap->descr_size);
+                //TODO is this tag needed if MULTIBOOT_TAG_TYPE_MMAP works too?
+                //struct multiboot_tag_efi_mmap* mbt_efi_mmap = (struct multiboot_tag_efi_mmap*)mbt;
+                //fprintf(stderr, "MBT EFI mmap: descriptor size %d\n", mbt_efi_mmap->descr_size);
             }
             break;
 
         case MULTIBOOT_TAG_TYPE_ACPI_NEW:
             mbt_acpi = (struct multiboot_tag_new_acpi*)mbt;
-            fprintf(stderr, "MBT ACPI: RSDP at 0x%lX\n", (intp)&mbt_acpi->rsdp[0]);
+            fprintf(stderr, "multiboot: ACPI RSDP at 0x%lX\n", (intp)&mbt_acpi->rsdp[0]);
             break;
 
         case MULTIBOOT_TAG_TYPE_EFI64:

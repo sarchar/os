@@ -84,7 +84,7 @@ static void _initialize_lapic()
     //_set_lapic_base(local_apic.base); // not sure if this is needed, but it's present on osdev wiki
     _write_lapic(LAPIC_SIV_REG, 0x1FF); // enable LAPIC and set the spurious interrupt vector to 255
 
-    fprintf(stderr, "apic: Local API enabled (local_apic.base=0x%lX\n", local_apic.base);
+    fprintf(stderr, "apic: LAPIC enabled (local_apic.base=0x%08lX)\n", local_apic.base);
 }
 
 static void _initialize_ioapic()

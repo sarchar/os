@@ -1,3 +1,9 @@
+// Very basic module that allows sending data over the PC serial port
+//
+// Documentation
+// https://wiki.osdev.org/Serial_Ports
+// http://synfare.com/JO59hw/hwdocs/serial/serial04.html
+//
 #include "common.h"
 
 #include "cpu.h"

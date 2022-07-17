@@ -12,7 +12,8 @@
 #define KALLOC_MAGIC 0x1E1EA5A5A5A5E1E1ULL
 
 #define KALLOC_MIN_N 3  // 8 bytes is the smallest allocation unit
-#define KALLOC_MAX_N 9  // 512 bytes is the largest allocation unit
+//#define KALLOC_MAX_N 9  // 512 bytes is the largest allocation unit
+#define KALLOC_MAX_N 16  // 64k is the largest allocation unit
 
 #define KALLOC_VERBOSE 0
 
@@ -90,7 +91,9 @@ static void* _next_from_pool(struct kalloc_pool* pool, u32 size)
         // since free_count must have been nonzero to get here
         assert(nfc->free_count > 0, "told ya");
         nfc->next_free += size;
-        *(u64 *)(nfc->base + nfc->next_free) = KALLOC_MAGIC; // be sure to set magic value for the next allocation
+        if(nfc->free_count > 1) { // only write magic into the next byte if there's actually valid memory there
+            *(u64 *)(nfc->base + nfc->next_free) = KALLOC_MAGIC; // be sure to set magic value for the next allocation
+        }
     } else {
         // follow the linked list. guaranteed to not run out of memory
         nfc->next_free = *(intp*)ret;
@@ -128,12 +131,13 @@ static struct kalloc_chunk* _new_chunk_ptr()
     return (struct kalloc_chunk*)_next_from_pool(pool, sizeof(struct kalloc_chunk));
 }
 
-// Allocate and initialize a new chunk of 2^page_order pages
+// Allocate and initialize a new chunk of 2^page_order pages into pool n
 static void _increase_pool(u8 n, u8 page_order)
 {
 #if KALLOC_VERBOSE > 1
     fprintf(stderr, "kalloc: _increase_pool(n=%d, page_order=%d)\n", n, page_order);
 #endif
+    assert(n < countof(kalloc_data.pools), "pool index out of range");
 
     struct kalloc_chunk* c = _new_chunk_ptr();
     void* mem = (void*)__va_kernel(palloc_claim(page_order));
@@ -141,7 +145,7 @@ static void _increase_pool(u8 n, u8 page_order)
 
     c->base = (intp)mem;
     c->order = page_order;
-    c->free_count = 1 << (12 + page_order - n); // 4096*2^page_order / 2^n == 2^(12+page_order)/2^n == 2^(12+page_order-n) 
+    c->free_count = 1 << (12 + page_order - (n + KALLOC_MIN_N)); // 4096*2^page_order / 2^n == 2^(12+page_order)/2^n == 2^(12+page_order-n) 
 
     // first free slot is at the beginning of memory
     c->next_free = 0;
@@ -173,18 +177,19 @@ void kalloc_init()
 
 void* kalloc(u32 size)
 {
+    u8 n = next_power_of_2(size);
 #if KALLOC_VERBOSE > 1
-    fprintf(stderr, "kalloc: kalloc(size=%d)\n", size);
+    fprintf(stderr, "kalloc: kalloc(size=%d), n=%d\n", size, n);
 #endif
 
-    u8 n = next_power_of_2(size);
-    u32 wasted = size - (1 << n);
+    u32 wasted = (1 << n) - size;
     unused(wasted); // TODO
 
     struct kalloc_pool* pool = &kalloc_data.pools[n - KALLOC_MIN_N];
-    if(pool->chunks_notfull == null) _increase_pool(n, 2);
+    if(pool->chunks_notfull == null) _increase_pool(n - KALLOC_MIN_N, 3);
 
-    return (void*)_next_from_pool(pool, (1 << n));
+    void* ret = (void*)_next_from_pool(pool, (1 << n));
+    return ret;
 }
 
 // TODO replace this linear search with a red-black tree that contains all the chunks of all the size-N pools
@@ -206,7 +211,7 @@ void kfree(void* mem)
         // search both notfull and full chunk lists
         c = pool->chunks_notfull;
         while(c != null) {
-            if(memaddr >= c->base && memaddr < (c->base + (1 << c->order))) break;
+            if(memaddr >= c->base && memaddr < (c->base + (1 << (12 + c->order)))) break;
             c = c->next;
         }
 
@@ -214,7 +219,7 @@ void kfree(void* mem)
 
         c = pool->chunks_full;
         while(c != null) {
-            if(memaddr >= c->base && memaddr < (c->base + (1 << c->order))) break;
+            if(memaddr >= c->base && memaddr < (c->base + (1 << (12 + c->order)))) break;
             c = c->next;
         }
 

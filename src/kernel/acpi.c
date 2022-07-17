@@ -1,3 +1,6 @@
+#include "lai/core.h" // include before common.h
+#include "lai/helpers/sci.h"
+
 #include "common.h"
 
 #include "acpi.h"
@@ -8,6 +11,8 @@
 #include "multiboot2.h"
 #include "stdio.h"
 #include "string.h"
+
+#define CHECK_SIG(var,str) (*(u32 *)(var) == (u32)((u32)(str)[0] | ((u32)(str)[1] << 8) | ((u32)(str)[2] << 16) | ((u32)(str)[3] << 24)))
 
 struct rsdp_descriptor {
     char signature[8];
@@ -97,7 +102,7 @@ struct acpi_apic_record_local_apic_nmis {
     u8     lint_number;
 } __packed;
 
-struct acpi_hpet_address {
+struct acpi_address {
     u8     address_space_id;
     u8     register_bit_width;
     u8     register_bit_offset;
@@ -115,13 +120,79 @@ struct acpi_hpet {
     u8     legacy_replacement : 1;
     
     u16    pci_vendor_id;
-    struct acpi_hpet_address address;
+    struct acpi_address address;
     u8     hpet_number;
     u16    minimum_tick;
 
     u8     page_protection    : 4;
     u8     oem_attributes     : 4;
 } __packed;
+
+struct acpi_fadt
+{
+    struct   acpi_sdt_header header;
+    u32      firmware_control;
+    u32      dsdt;
+ 
+    // field used in ACPI 1.0; no longer in use, for compatibility only
+    u8       reserved;
+ 
+    u8       preferred_power_management_profile;
+    u16      sci_interrupt;
+    u32      smi_command_port;
+    u8       acpi_enable;
+    u8       acpi_disable;
+    u8       s4bios_req;
+    u8       pstate_control;
+    u32      pm1a_event_block;
+    u32      pm1b_event_block;
+    u32      pm1a_control_block;
+    u32      pm1b_control_block;
+    u32      pm2_control_block;
+    u32      pm_timer_block;
+    u32      gpe0_block;
+    u32      gpe1_block;
+    u8       pm1_event_length;
+    u8       pm1_control_length;
+    u8       pm2_control_length;
+    u8       pm_timer_length;
+    u8       gpe0_length;
+    u8       gpe1_length;
+    u8       gpe1_base;
+    u8       cstate_control;
+    u16      worst_c2_latency;
+    u16      worst_c3_latency;
+    u16      flush_size;
+    u16      flush_stride;
+    u8       duty_offset;
+    u8       duty_width;
+    u8       day_alarm;
+    u8       month_alarm;
+    u8       century;
+ 
+    u16      boot_architecture_flags; // reserved in ACPI 1.0; used since ACPI 2.0+
+ 
+    u8       reserved2;
+    u32      flags;
+ 
+    struct acpi_address reset_reg;
+ 
+    u8       reset_value;
+    u8       reserved3[3];
+ 
+    // 64bit pointers - Available on ACPI 2.0+
+    u64      x_firmware_control;
+    u64      x_dsdt;
+ 
+    struct acpi_address x_pm1a_event_block;
+    struct acpi_address x_pm1b_event_block;
+    struct acpi_address x_pm1a_control_block;
+    struct acpi_address x_pm1b_control_block;
+    struct acpi_address x_pm2_control_block;
+    struct acpi_address x_pm_timer_block;
+    struct acpi_address x_gpe0_block;
+    struct acpi_address x_gpe1_block;
+};
 
 static void _parse_apic_table(struct acpi_apic*);
 static void _parse_hpet_table(struct acpi_hpet*);
@@ -157,7 +228,7 @@ void acpi_init()
     char buf[7];
     memcpy(buf, desc->descv1.oem_id, 6);
     buf[6] = 0;
-    fprintf(stderr, "apci: oem_id = [%s], revision %d, rsdt = 0x%lX, xsdt = 0x%lX, xsdt length = %d\n", buf, desc->descv1.revision, desc->descv1.rsdt_address, desc->xsdt_address, desc->length);
+    //fprintf(stderr, "apci: oem_id = [%s], revision %d, rsdt = 0x%lX, xsdt = 0x%lX, xsdt length = %d\n", buf, desc->descv1.revision, desc->descv1.rsdt_address, desc->xsdt_address, desc->length);
 
 
     // validate the XSDT before parsing it
@@ -172,6 +243,7 @@ void acpi_init()
     for(u32 table_index = 0; table_index < ntables; table_index++) {
         struct acpi_sdt_header* hdr = (struct acpi_sdt_header*)xsdt->tables[table_index];
         if(*(u32*)&hdr->signature[0] == 0x54455048) num_hpets++; // 'HPET' table
+        //fprintf(stderr, "acpi: table %c%c%c%c at 0x%lX\n", hdr->signature[0], hdr->signature[1], hdr->signature[2], hdr->signature[3], (intp)hdr);
     }
     if(num_hpets > 0) hpet_notify_timer_count(num_hpets);
 
@@ -200,6 +272,112 @@ void acpi_init()
             fprintf(stderr, "acpi: unhandled table [%s], address = 0x%lX\n", buf, (intp)hdr);
         }
     }
+
+}
+
+void _enumerate_namespace(lai_state_t* state, lai_nsnode_t* node, char* path)
+{
+    //char newpath[512];
+    //sprintf(newpath, "%s\%s", path, lai_stringify_node_path(node));
+    fprintf(stderr, "node: %s (type=%d)\n", lai_stringify_node_path(node), lai_ns_get_node_type(node));
+
+    if(lai_ns_get_node_type(node) == 2 && strstr(lai_stringify_node_path(node), "_HID") != null) {
+        lai_variable_t id = LAI_VAR_INITIALIZER;
+        //lai_nsnode_t* handle = lai_resolve_path(node, "_HID");
+        if (node) {
+            lai_api_error_t err;
+            if ((err = lai_eval(&id, node, state)) == LAI_ERROR_NONE) {
+                fprintf(stderr, "_HID type = %d\n", lai_obj_get_type(&id));
+                if(lai_obj_get_type(&id) == LAI_TYPE_INTEGER) {
+                    u64 _hid = 0;
+                    lai_obj_get_integer(&id, &_hid);
+                    fprintf(stderr, "_hid = 0x%lX\n", _hid);
+                } else if(lai_obj_get_type(&id) == LAI_TYPE_STRING) {
+                    fprintf(stderr, "_hid = %s\n", lai_exec_string_access(&id));
+                }
+            } else {
+                fprintf(stderr, "Could not evaluate _HID of device\n");
+            }
+        }
+        lai_var_finalize(&id);
+    }
+
+    struct lai_ns_child_iterator child_iter;
+    lai_initialize_ns_child_iterator(&child_iter, node);
+    lai_nsnode_t* child;
+
+    while((child = lai_ns_child_iterate(&child_iter)) != null) {
+        //if(lai_ns_get_parent(child) == node) {
+            _enumerate_namespace(state, child, "");
+        //}
+    }
+}
+
+void acpi_reset()
+{
+    struct acpi_fadt* fadt = acpi_find_table("FACP", 0);
+    if(fadt == null) return;
+
+    fprintf(stderr, "fadt->reset_reg.address = 0x%lX\n", fadt->reset_reg.address);
+    *(u64*)fadt->reset_reg.address = 1;
+}
+
+// LAI requires memory allocation, so this function is called after the kernel has initialized paging and kalloc
+void acpi_init_lai()
+{
+    struct rsdp_descriptorv2* desc = (struct rsdp_descriptorv2*)multiboot2_acpi_get_rsdp();
+
+    //lai_enable_tracing(LAI_TRACE_NS | LAI_TRACE_IO | LAI_TRACE_OP);
+    lai_set_acpi_revision(desc->descv1.revision);
+    lai_create_namespace();
+    lai_enable_acpi(1);
+
+    //lai_state_t state;
+    //lai_init_state(&state);
+
+    //struct lai_ns_iterator iter;
+    //lai_initialize_ns_iterator(&iter);
+    //lai_nsnode_t* node;
+    //while((node = lai_ns_iterate(&iter)) != null) {
+    //    //determine depth
+    //    if(lai_ns_get_parent(node) == lai_ns_get_root()) {
+    //        _enumerate_namespace(&state, node, "");
+    //    }
+    //}
+
+    //lai_finalize_state(&state);
+}
+
+// return a virtual memory address pointer to the ACPI table matching signature 'sig'
+// If there are multiple tables with that signature, return the 'index'th table.
+void* acpi_find_table(char const* sig, u8 index)
+{
+    // Check for DSDT, as it's not a standard table but still gets searched for using acpi_find_table.
+    if(CHECK_SIG(sig, "DSDT")) {
+        struct acpi_fadt* fadt = acpi_find_table("FACP", 0);
+        if(fadt == null) return null;
+        if(fadt->dsdt != 0) return (void*)(u64)fadt->dsdt;
+        return (void*)fadt->x_dsdt;
+    }
+
+    // get the RSDP pointer
+    struct rsdp_descriptorv2* desc = (struct rsdp_descriptorv2*)multiboot2_acpi_get_rsdp();
+
+    // get the XSDT table
+    struct acpi_xsdt* xsdt = (struct acpi_xsdt*)desc->xsdt_address;
+
+    // compute # of tables in the XSDT
+    u32 ntables = (xsdt->header.length - sizeof(struct acpi_sdt_header)) / sizeof(u64);
+
+    // loop over tables looking for wanted index
+    for(u32 table_index = 0; table_index < ntables; table_index++) {
+        struct acpi_sdt_header* hdr = (struct acpi_sdt_header*)xsdt->tables[table_index];
+        if(*(u32*)&hdr->signature[0] == *(u32*)&sig[0]) {
+            if(index-- == 0) return (void*)hdr;
+        }
+    }
+
+    return null;
 }
 
 static void _parse_apic_table(struct acpi_apic* apic)
@@ -209,7 +387,7 @@ static void _parse_apic_table(struct acpi_apic* apic)
     struct acpi_apic_record_local_apic_nmis*           local_apic_nmis;
     struct acpi_apic_record_interrupt_source_override* interrupt_source_override;
 
-    fprintf(stderr, "acpi: LAPIC at 0x%lX", apic->lapic_base);
+    fprintf(stderr, "acpi: LAPIC at 0x%08lX", apic->lapic_base);
     if(apic->flags & ACPI_APIC_FLAG_HAS_PIC) {
         fprintf(stderr, " (with dual 8259 PICs)");
     }
@@ -270,11 +448,11 @@ static void _parse_apic_table(struct acpi_apic* apic)
 
 static void _parse_hpet_table(struct acpi_hpet* hpet)
 {
-    fprintf(stderr, "acpi: HPET timer hardware_revision_id=%d\n", hpet->hardware_revision_id);
-    fprintf(stderr, "    comparator_count=%d counter_size=%d legacy_replacement=%d\n", hpet->comparator_count, hpet->counter_size, hpet->legacy_replacement);
-    fprintf(stderr, "    pci_vendor_id=0x%04X hpet_number=%d minimum_tick=%d page_protection=%d\n", hpet->pci_vendor_id, hpet->hpet_number, hpet->minimum_tick, hpet->page_protection);
-    fprintf(stderr, "    address_space_id=%d register_bit_width=%d register_bit_offset=%d address=0x%lX\n", 
-            hpet->address.address_space_id, hpet->address.register_bit_width, hpet->address.register_bit_offset, hpet->address.address);
+    //fprintf(stderr, "acpi: HPET timer hardware_revision_id=%d\n", hpet->hardware_revision_id);
+    //fprintf(stderr, "    comparator_count=%d counter_size=%d legacy_replacement=%d\n", hpet->comparator_count, hpet->counter_size, hpet->legacy_replacement);
+    //fprintf(stderr, "    pci_vendor_id=0x%04X hpet_number=%d minimum_tick=%d page_protection=%d\n", hpet->pci_vendor_id, hpet->hpet_number, hpet->minimum_tick, hpet->page_protection);
+    //fprintf(stderr, "    address_space_id=%d register_bit_width=%d register_bit_offset=%d address=0x%lX\n", 
+    //        hpet->address.address_space_id, hpet->address.register_bit_width, hpet->address.register_bit_offset, hpet->address.address);
 
     u8 flags = 0;
     if(hpet->address.address_space_id == 1) flags |= HPET_FLAG_ADDRESS_IO;

@@ -1,4 +1,6 @@
 // Based on code from https://wiki.osdev.org/Bare_Bones
+#include "lai/helpers/pm.h"
+
 #include "common.h"
 
 #include "acpi.h"
@@ -19,7 +21,7 @@ volatile u32 blocking = 0;
 u8 scancode;
 extern u64 master_ticks;
 
-void kernel_panic(u32 error)
+noreturn void kernel_panic(u32 error)
 {
     // attempt to set the screen to all red
     //efifb_clear(COLOR(255,0,0));
@@ -72,6 +74,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // enable the kernel timer
     hpet_init();
 
+    // finish ACPI initialization
+    acpi_init_lai();
+
     // TODO enable/use high memory in palloc only after paging is initialized
 }
 
@@ -79,51 +84,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
 {
     initialize_kernel(multiboot_info);
 
-#define TEST_PALLOC(n) { \
-    void* p = palloc_claim(n); \
-    fprintf(stderr, "palloc_claim(" #n ") = $%lX\n", (intp)p); \
-    }
-
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    TEST_PALLOC(10);
-    TEST_PALLOC(9);
-    TEST_PALLOC(8);
-    //TEST_PALLOC(7);
-    void* p7 = palloc_claim(7);
-    fprintf(stderr, "palloc_claim(7) = $%lX\n", (intp)p7);
-    TEST_PALLOC(6);
-    TEST_PALLOC(5);
-    TEST_PALLOC(4);
-    TEST_PALLOC(3);
-    TEST_PALLOC(2);
-    TEST_PALLOC(1);
-    TEST_PALLOC(0);
-    TEST_PALLOC(0);
-    void* p0a = palloc_claim(0);
-    fprintf(stderr, "palloc_claim(0) = $%lX\n", (intp)p0a);
-    void* p0 = palloc_claim(0);
-    fprintf(stderr, "palloc_claim(0) = $%lX\n", (intp)p0);
-    //TEST_PALLOC(0);
-    //TEST_PALLOC(0);
-    palloc_abandon(p0, 0);
-    palloc_abandon(p0a, 0);
-    palloc_abandon(p7, 7);
-    
-    void* test_ptr = kalloc(128);
-    fprintf(stderr, "test_ptr = 0x%lX\n", (intp)test_ptr);
-    *(u64*)test_ptr = 0;
-    void* test_ptr2 = kalloc(128);
-    fprintf(stderr, "test_ptr2 = 0x%lX\n", (intp)test_ptr2);
-    kfree(test_ptr);
-    fprintf(stderr, "*test_ptr = 0x%lX\n", *(intp*)test_ptr);
+    fprintf(stderr, "kernel ready...\n");
 
     // testing loop
     u32 count = 0;
@@ -139,6 +100,14 @@ void kernel_main(struct multiboot_info* multiboot_info)
                 *(u32 *)0xf0fffefe00000000 = 1;  // gpf because address isn't canonical
             } else if(scancode == 61) {
                 __asm__ volatile("div %0" : : "c"(0));  // division by 0 error
+            } else if(scancode == 62) {
+                fprintf(stderr, "calling lai_acpi_reset()\n");
+                lai_api_error_t err = lai_acpi_reset();
+                fprintf(stderr, "error = %s\n", lai_api_error_to_string(err));
+                acpi_reset();
+            } else if(scancode == 63) {
+                fprintf(stderr, "calling lai_acpi_sleep(5)\n");
+                lai_enter_sleep(5);
             }
 
             for(u32 y = 0; y < 16; y++) {

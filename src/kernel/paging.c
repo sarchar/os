@@ -53,12 +53,12 @@ static void _map_2mb(intp phys, intp virt);
 
 static void _allocator_init()
 {
-    fprintf(stderr, "paging: ALLOCATOR_BITMAP_COUNT = %d\n", ALLOCATOR_BITMAP_COUNT);
-    fprintf(stderr, "paging: ALLOCATOR_BITMAP_SIZE = %d\n", ALLOCATOR_BITMAP_SIZE);
-    fprintf(stderr, "paging: ALLOCATOR_PTR(null,0) = 0x%lX\n", ALLOCATOR_PTR(null, 0));
+    //fprintf(stderr, "paging: ALLOCATOR_BITMAP_COUNT = %d\n", ALLOCATOR_BITMAP_COUNT);
+    //fprintf(stderr, "paging: ALLOCATOR_BITMAP_SIZE = %d\n", ALLOCATOR_BITMAP_SIZE);
+    //fprintf(stderr, "paging: ALLOCATOR_PTR(null,0) = 0x%lX\n", ALLOCATOR_PTR(null, 0));
 
     _allocator.allocator_head = (struct page_table_allocator_page*)__va_kernel(palloc_claim_one());
-    fprintf(stderr, "paging: allocator_head = 0x%lX\n", _allocator.allocator_head);
+    //fprintf(stderr, "paging: allocator_head = 0x%lX\n", _allocator.allocator_head);
     memset64(_allocator.allocator_head, 0, 512); // zero out the page
     _allocator.allocator_head->free_count = ALLOCATOR_BITMAP_COUNT;
     _allocator.npages = 1;
@@ -68,11 +68,13 @@ static struct page_table_allocator_page* _allocate_new_head()
 {
     struct page_table_allocator_page* new_head = (struct page_table_allocator_page*)__va_kernel(palloc_claim_one());
     memset64(new_head, 0, 512); // zero out the page
+
     new_head->free_count = ALLOCATOR_BITMAP_COUNT;
     _allocator.allocator_head->prev = new_head;
     new_head->next = _allocator.allocator_head;
     _allocator.allocator_head = new_head;
     _allocator.npages += 1;
+
     return new_head;
 }
 

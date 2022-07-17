@@ -1,3 +1,6 @@
 [submodule "src/pdclib"]
 	path = src/pdclib
 	url = https://github.com/DevSolar/pdclib
+[submodule "src/lai"]
+	path = src/lai
+	url = https://github.com/managarm/lai

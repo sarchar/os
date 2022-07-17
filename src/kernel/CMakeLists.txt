@@ -23,7 +23,7 @@ ADD_EXECUTABLE(os.bin acpi.c apic.c boot.asm bootmem.c efifb.c hpet.c idt.c inte
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
 
 # libs
-TARGET_LINK_LIBRARIES(os.bin gcc pdclib)
+TARGET_LINK_LIBRARIES(os.bin gcc pdclib lailib)
 
 # configure linker flags
 #SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -O2 -nostdlib -lgcc")
