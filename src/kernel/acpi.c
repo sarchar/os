@@ -9,10 +9,12 @@
 #include "hpet.h"
 #include "kernel.h"
 #include "multiboot2.h"
+#include "pci.h"
 #include "stdio.h"
 #include "string.h"
 
-#define CHECK_SIG(var,str) (*(u32 *)(var) == (u32)((u32)(str)[0] | ((u32)(str)[1] << 8) | ((u32)(str)[2] << 16) | ((u32)(str)[3] << 24)))
+#define SIG_TO_INT(str) ((u32)(str)[0] | ((u32)(str)[1] << 8) | ((u32)(str)[2] << 16) | ((u32)(str)[3] << 24))
+#define CHECK_SIG(var,str) (*(u32 *)(var) == SIG_TO_INT(str))
 
 struct rsdp_descriptor {
     char signature[8];
@@ -192,10 +194,25 @@ struct acpi_fadt
     struct acpi_address x_pm_timer_block;
     struct acpi_address x_gpe0_block;
     struct acpi_address x_gpe1_block;
-};
+} __packed;
+
+struct acpi_mcfg_configuration_space {
+    u64    base_address;
+    u16    pci_segment_group;
+    u8     start_bus;
+    u8     end_bus;
+    u32    reserved;
+} __packed;
+
+struct acpi_mcfg {
+    struct acpi_sdt_header   header;
+    u64    reserved;
+    struct acpi_mcfg_configuration_space spaces[];
+} __packed;
 
 static void _parse_apic_table(struct acpi_apic*);
 static void _parse_hpet_table(struct acpi_hpet*);
+static void _parse_mcfg_table(struct acpi_mcfg*);
 
 static void _validate_checksum(intp base, u64 size, char* msg)
 {
@@ -254,7 +271,7 @@ void acpi_init()
 
         buf[4] = 0;
         memcpy(buf, hdr->signature, 4);
-        //fprintf(stderr, "acpi: table %d signature [%s], address = 0x%lX\n", table_index, buf, (intp)hdr);
+        fprintf(stderr, "acpi: table %d signature [%s][0x%X], address = 0x%lX\n", table_index, buf, SIG_TO_INT(buf), (intp)hdr);
 
         // validate the structure
         _validate_checksum((intp)hdr, hdr->length, "table checksum not valid");
@@ -266,6 +283,10 @@ void acpi_init()
 
         case 0x54455048: // 'HPET'
             _parse_hpet_table((struct acpi_hpet*)hdr);
+            break;
+
+        case 0x4746434D: // 'MCFG'
+            _parse_mcfg_table((struct acpi_mcfg*)hdr);
             break;
 
         default:
@@ -459,5 +480,19 @@ static void _parse_hpet_table(struct acpi_hpet* hpet)
 
     hpet_notify_presence(hpet->hpet_number, hpet->hardware_revision_id, hpet->comparator_count, hpet->minimum_tick, (intp)hpet->address.address, 
                          hpet->address.register_bit_width, hpet->address.register_bit_offset, flags);
+}
+
+static void _parse_mcfg_table(struct acpi_mcfg* mcfg)
+{
+    u32 nspaces = (mcfg->header.length - sizeof(struct acpi_mcfg)) / sizeof(struct acpi_mcfg_configuration_space);
+    
+    for(u32 i = 0; i < nspaces; i++) {
+        struct acpi_mcfg_configuration_space* cs = &mcfg->spaces[i];
+    
+        fprintf(stderr, "acpi: PCI extended configuration space base=0x%lX pci_segment_group=%d start_bus=%d end_bus=%d\n", 
+                cs->base_address, cs->pci_segment_group, cs->start_bus, cs->end_bus);
+
+        pci_notify_segment_group(cs->pci_segment_group, cs->base_address, cs->start_bus, cs->end_bus);
+    }
 }
 

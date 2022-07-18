@@ -13,6 +13,7 @@
 #include "multiboot2.h"
 #include "paging.h"
 #include "palloc.h"
+#include "pci.h"
 #include "serial.h"
 #include "stdio.h"
 #include "terminal.h"
@@ -76,6 +77,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // finish ACPI initialization
     acpi_init_lai();
+
+    // begin enumerating system devices
+    pci_init();
 
     // TODO enable/use high memory in palloc only after paging is initialized
 }
