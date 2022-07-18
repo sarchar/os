@@ -393,7 +393,7 @@ static void _parse_apic_table(struct acpi_apic* apic)
     }
     fprintf(stderr, "\n");
 
-    // configure the local 
+    // configure the local apic
     apic_notify_acpi_local_apic(apic->lapic_base, apic->flags & ACPI_APIC_FLAG_HAS_PIC);
 
     // loop over all the records in the MADT table
@@ -406,7 +406,7 @@ static void _parse_apic_table(struct acpi_apic* apic)
         switch(type) {
         case ACPI_APIC_RECORD_PROCESSOR_LOCAL_APIC:
             local_apic = (struct acpi_apic_record_processor_local_apic*)current_record;
-            //fprintf(stderr, "acpi: Local APIC acpi_processor_id=%d acpi_id=%d flags=%08X\n", local_apic->acpi_processor_id, local_apic->acpi_id, local_apic->flags);
+            fprintf(stderr, "acpi: Local APIC acpi_processor_id=%d acpi_id=%d flags=%08X\n", local_apic->acpi_processor_id, local_apic->acpi_id, local_apic->flags);
             if((local_apic->flags & 0x03) != 0) {
                 apic_register_processor_lapic(local_apic->acpi_processor_id, local_apic->acpi_id, (local_apic->flags & 0x01) != 0);
             }
