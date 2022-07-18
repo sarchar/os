@@ -76,13 +76,14 @@ intp multiboot2_acpi_get_rsdp()
     return (intp)mbt_acpi->rsdp;
 }
 
-void multiboot2_framebuffer_get(u32** framebuffer, u32* width, u32* height, u8* bpp, u32* pitch)
+void multiboot2_framebuffer_get(u32** framebuffer, u32* width, u32* height, u8* bpp, u32* pitch, u8* type)
 {
     *framebuffer = (u32*)mbt_framebuffer->common.framebuffer_addr;
     *width       = mbt_framebuffer->common.framebuffer_width;
     *height      = mbt_framebuffer->common.framebuffer_height;
     *bpp         = mbt_framebuffer->common.framebuffer_bpp;
     *pitch       = mbt_framebuffer->common.framebuffer_pitch;
+    *type        = mbt_framebuffer->common.framebuffer_type;
 }
 
 void multiboot2_parse(struct multiboot_info* multiboot_info)
@@ -115,13 +116,13 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
 
         case MULTIBOOT_TAG_TYPE_FRAMEBUFFER:
             mbt_framebuffer = (struct multiboot_tag_framebuffer*)mbt;
-            //fprintf(stderr, "MBT Framebuffer: address $%lX pitch %d width %d height %d bpp %d type %d\n",
-            //        (intp)mbt_framebuffer->common.framebuffer_addr,
-            //        (intp)mbt_framebuffer->common.framebuffer_pitch,
-            //        (intp)mbt_framebuffer->common.framebuffer_width,
-            //        (intp)mbt_framebuffer->common.framebuffer_height,
-            //        (intp)mbt_framebuffer->common.framebuffer_bpp,
-            //        (intp)mbt_framebuffer->common.framebuffer_type);
+            fprintf(stderr, "MBT Framebuffer: address $%lX pitch %d width %d height %d bpp %d type %d\n",
+                    (intp)mbt_framebuffer->common.framebuffer_addr,
+                    (intp)mbt_framebuffer->common.framebuffer_pitch,
+                    (intp)mbt_framebuffer->common.framebuffer_width,
+                    (intp)mbt_framebuffer->common.framebuffer_height,
+                    (intp)mbt_framebuffer->common.framebuffer_bpp,
+                    (intp)mbt_framebuffer->common.framebuffer_type);
 
         case MULTIBOOT_TAG_TYPE_EFI_MMAP:
             {

@@ -18,7 +18,7 @@ add_custom_target(run
                                              -m 4G
                                              -bios /usr/share/ovmf/OVMF.fd
                                              -boot d
-                                             -vga std
+                                             -vga cirrus
                                              -monitor stdio
                                              -smp 4
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
@@ -33,7 +33,7 @@ add_custom_target(gdb
                                              -m 4G
                                              -bios /usr/share/ovmf/OVMF.fd
                                              -boot d
-                                             -vga std
+                                             -vga cirrus
                                              -monitor stdio
                                              -smp 4
                                              -serial file:${CMAKE_BINARY_DIR}/output.log

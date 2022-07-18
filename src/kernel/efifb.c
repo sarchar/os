@@ -15,9 +15,10 @@ struct efifb {
     u32  height;
     u8   bpp;
     u32  pitch;
+    u8   type;
 };
 
-static struct efifb global_efifb = { NULL, 0, 0, 0, 0 };
+static struct efifb global_efifb = { 0, };
 
 static bool efifb_iscompat(u32 width, u32 height, u8 bpp, u32 pitch)
 {
@@ -34,7 +35,8 @@ void efifb_init()
             &global_efifb.width,
             &global_efifb.height,
             &global_efifb.bpp,
-            &global_efifb.pitch);
+            &global_efifb.pitch,
+            &global_efifb.type);
 
     // halt if framebuffer isn't valid
     if(!efifb_iscompat(global_efifb.width, global_efifb.height, global_efifb.bpp, global_efifb.pitch)) PANIC(COLOR(0,0,0));
@@ -66,15 +68,30 @@ void efifb_putpixel(u32 x, u32 y, color c)
 {
     if(x >= global_efifb.width || y >= global_efifb.height) return;
     if(global_efifb.framebuffer != NULL) {
-        global_efifb.framebuffer[y * global_efifb.width + x] = c;
+        if(global_efifb.type == 1) {
+            u8* p = &((u8*)global_efifb.framebuffer)[y * global_efifb.pitch + 3*x];
+            p[0] = c & 0xFF;
+            p[1] = (c >> 8) & 0xFF;
+            p[2] = (c >> 16) & 0xFF;
+        } else {
+            global_efifb.framebuffer[y * global_efifb.width + x] = c;
+        }
     }
 }
 
 void efifb_clear(color clear_color)
 {
-    for(u32 y = 0; y < global_efifb.height; y++) {
-        for(u32 x = 0; x < global_efifb.width; x++) {
-            global_efifb.framebuffer[y * global_efifb.width + x] = clear_color;
+    if(global_efifb.type) {
+        u8* fb = (u8*)global_efifb.framebuffer;
+        for(u32 i = 0; i < (global_efifb.height * global_efifb.width); i++) {
+            *fb++ = clear_color & 0xFF;
+            *fb++ = (clear_color >> 8) & 0xFF;
+            *fb++ = (clear_color >> 16) & 0xFF;
+        }
+    } else {
+        u32* fb = global_efifb.framebuffer;
+        for(u32 i = 0; i < (global_efifb.height * global_efifb.width); i++) {
+            *fb++ = clear_color;
         }
     }
 }
