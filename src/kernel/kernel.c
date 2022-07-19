@@ -112,6 +112,8 @@ void kernel_main(struct multiboot_info* multiboot_info)
             } else if(scancode == 63) {
                 fprintf(stderr, "calling lai_acpi_sleep(5)\n");
                 lai_enter_sleep(5);
+            } else if(scancode == 25) { // 'p'
+                pci_dump_device_list();
             }
 
             for(u32 y = 0; y < 16; y++) {

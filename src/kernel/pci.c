@@ -2,12 +2,15 @@
 
 #include "bootmem.h"
 #include "cpu.h"
+#include "kalloc.h"
 #include "kernel.h"
 #include "pci.h"
 #include "stdio.h"
 
-#define PCI_CONF_REG_IDS   0x0000
-#define PCI_CONF_REG_CLASS 0x0008
+#define PCI_CONF_REG_IDS     0x0000
+#define PCI_CONF_REG_COMMAND 0x0004
+#define PCI_CONF_REG_CLASS   0x0008
+#define PCI_CONF_REG_HEADER  0x000C
 
 #define PCI_CONF_ADDRESS(group, bus, device, func, offset) \
     (u32 volatile*)((group)->base_address + ((((bus) - (group)->start_bus) << 20) | ((device) << 15) | ((func) << 12) | ((offset) & 0xFFC)))
@@ -24,9 +27,50 @@ struct pci_segment_group {
 static struct pci_segment_group* pci_segment_groups = null;
 static struct pci_segment_group* pci_segment_group_zero = null;
 
+struct pci_device_info {
+    struct pci_device_info* next;
+    struct pci_segment_group* group;
+
+    u32 vendor_id;
+    u32 device_id;
+
+    u8  bus;
+    u8  device;
+    u8  function;
+    u8  unused[64-35];
+
+    // class register
+    union {
+        u32 class_reg;
+        struct {
+            u8  revision_id;
+            u8  prog_if;
+            u8  subclass;
+            u8  class;
+        } __packed;
+    };
+
+    // header register
+    union {
+        u32 header_reg;
+        struct {
+            u8   cache_line_size;
+            u8   latency_timer;
+            u8   header_type   : 7;
+            bool multifunction : 1;
+            u8   bist;
+        } __packed;
+    };
+};
+
+static_assert(is_power_of_2(sizeof(struct pci_device_info)), "must be power of 2 sized struct");
+
+static struct pci_device_info* pci_device_list = null;
+
 static void _enumerate_all();
 static void _enumerate_bus(struct pci_segment_group*, u8);
 static void _handle_device(struct pci_segment_group*, u8, u8, u16, u16);
+static void _check_function(struct pci_segment_group*, u8, u8, u8, u16, u16);
 
 void pci_notify_segment_group(u16 segment_id, intp base_address, u8 start_bus, u8 end_bus)
 {
@@ -85,13 +129,57 @@ static void _enumerate_bus(struct pci_segment_group* group, u8 bus)
 
 static void _handle_device(struct pci_segment_group* group, u8 bus, u8 device, u16 vendor_id, u16 device_id)
 {
-    u32 v = pci_read_configuration_long(bus, device, 0, PCI_CONF_REG_CLASS, group);
-    u8 revision_id = v & 0xFF;
-    u8 prog_if = (v >> 8) & 0xFF;
-    u8 subclass = (v >> 16) & 0xFF;
-    u8 class = (v >> 24) & 0xFF;
+    _check_function(group, bus, device, 0, vendor_id, device_id);
+
+    // check the header type
+    u32 v = pci_read_configuration_long(bus, device, 0, PCI_CONF_REG_HEADER, group);
+    u8 header_type = (v >> 16) & 0xFF;
+    bool multifunction = (header_type & 0x80) != 0;
+
+    if(!multifunction) return;
+
+    for(u8 func = 1; func < 8; func++) {
+        u32 ids = pci_read_configuration_long(bus, device, func, PCI_CONF_REG_IDS, group);
+        u16 func_vendor_id = ids & 0xFFFF;
+        u16 func_device_id = ids >> 16;
+
+        if(func_vendor_id == 0xFFFF) continue;
+
+        _check_function(group, bus, device, func, func_vendor_id, func_device_id);
+    }
+}
+
+static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, u8 func, u16 vendor_id, u16 device_id)
+{
+    struct pci_device_info* dev = (struct pci_device_info*)kalloc(sizeof(struct pci_device_info));
     
+    dev->group     = group;
+    dev->vendor_id = vendor_id;
+    dev->device_id = device_id;
+    dev->bus       = bus;
+    dev->device    = device;
+    dev->function  = func;
+
+    // read the class of the function
+    dev->class_reg = pci_read_configuration_long(bus, device, func, PCI_CONF_REG_CLASS, group);
+
+    // get the header info
+    dev->header_reg = pci_read_configuration_long(bus, device, 0, PCI_CONF_REG_HEADER, group);
+ 
     // stash this bad boy in a database
-    fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d class=%d subclass=%d prog_IF=%d revision_id=%d\n", 
-            vendor_id, device_id, group->segment_id, bus, device, class, subclass, prog_if, revision_id);
+    dev->next = pci_device_list;
+    pci_device_list = dev;
+}
+
+void pci_dump_device_list()
+{
+    struct pci_device_info* dev = pci_device_list;
+    while(dev != null) {
+        // print device info
+        fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
+                dev->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
+        fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
+                dev->header_type, dev->multifunction ? " (multifunction)" : "", dev->cache_line_size, dev->latency_timer, dev->bist);
+        dev = dev->next;
+    }
 }
