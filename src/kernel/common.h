@@ -17,8 +17,8 @@
     } while(false);
 
 #define static_assert(cond,err) _Static_assert(cond, err)
-#define always_inline __attribute__((always_inline)) inline
-#define noreturn __attribute__((noreturn))
+#define __always_inline __attribute__((always_inline)) inline
+#define __noreturn __attribute__((noreturn))
 
 #define __packed __attribute__((packed))
 #define __aligned(x) __attribute__((aligned(x)))
@@ -60,5 +60,7 @@ typedef u32 color;
 // return n such that 2^n >= x
 // not valid for x=0 or 1
 #define next_power_of_2(x) (is_power_of_2(x) ? (63 - __builtin_clzll((u64)(x))) : (64 - __builtin_clzll((u64)(x)))) 
+// # of bytes between the next power of two and given x
+#define til_next_power_of_2(x) ((1<<next_power_of_2(x))-(x))
 
 #endif

@@ -20,7 +20,7 @@ SET_SOURCE_FILES_PROPERTIES(font.o
 ADD_EXECUTABLE(os.bin acpi.c apic.c boot.asm bootmem.c efifb.c hpet.c idt.c interrupts.c interrupts.asm kalloc.c kernel.c multiboot2.c paging.c palloc.c pci.c serial.c terminal.c font.o)
 
 # includes
-TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
+TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/uthash_impl")
 
 # libs
 TARGET_LINK_LIBRARIES(os.bin gcc pdclib lailib)

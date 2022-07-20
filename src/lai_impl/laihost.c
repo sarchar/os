@@ -15,7 +15,7 @@ void laihost_log(int level, const char *msg)
 }
 
 // Reports a fatal error, and halts.
-noreturn void laihost_panic(const char *msg)
+__noreturn void laihost_panic(const char *msg)
 {
     fprintf(stderr, "laihost_panic: %s\n", msg);
     PANIC(COLOR(32, 32, 32));

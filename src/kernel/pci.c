@@ -2,6 +2,7 @@
 
 #include "bootmem.h"
 #include "cpu.h"
+#include "hashtable.h"
 #include "kalloc.h"
 #include "kernel.h"
 #include "pci.h"
@@ -27,17 +28,19 @@ struct pci_segment_group {
 static struct pci_segment_group* pci_segment_groups = null;
 static struct pci_segment_group* pci_segment_group_zero = null;
 
-struct pci_device_info {
-    struct pci_device_info* next;
-    struct pci_segment_group* group;
+struct pci_vendor_info;
 
-    u32 vendor_id;
-    u32 device_id;
+struct pci_device_info {
+    struct pci_segment_group* group;
+    struct pci_vendor_info* vendor;
+
+    u16 device_id;
+    u16 unused0;
 
     u8  bus;
     u8  device;
     u8  function;
-    u8  unused[64-35];
+    u8  unused1;
 
     // class register
     union {
@@ -61,11 +64,25 @@ struct pci_device_info {
             u8   bist;
         } __packed;
     };
-};
+    
+    MAKE_HASH_TABLE;
+    u8  unused2[til_next_power_of_2(HT_OVERHEAD+32)];
+} __packed;
 
 static_assert(is_power_of_2(sizeof(struct pci_device_info)), "must be power of 2 sized struct");
 
-static struct pci_device_info* pci_device_list = null;
+struct pci_vendor_info {
+    MAKE_HASH_TABLE;
+
+    struct pci_device_info* devices;
+    u16    vendor_id;
+    u16    unused0;
+    u32    unused1;
+
+    u8     unused2[til_next_power_of_2(HT_OVERHEAD+16)];
+};
+
+struct pci_vendor_info* pci_device_vendors = null;
 
 static void _enumerate_all();
 static void _enumerate_bus(struct pci_segment_group*, u8);
@@ -151,10 +168,21 @@ static void _handle_device(struct pci_segment_group* group, u8 bus, u8 device, u
 
 static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, u8 func, u16 vendor_id, u16 device_id)
 {
+    // first lookup the vendor to see if it already exists
+    struct pci_vendor_info* vnd;
+    HT_FIND(pci_device_vendors, vendor_id, vnd);
+
+    if(vnd == null) { // vendor not found, create one
+        vnd = (struct pci_vendor_info*)kalloc(sizeof(struct pci_vendor_info));
+        vnd->vendor_id = vendor_id;
+        vnd->devices   = null;
+        HT_ADD(pci_device_vendors, vendor_id, vnd);
+    }
+
+    // then add the device to the vendor's list
     struct pci_device_info* dev = (struct pci_device_info*)kalloc(sizeof(struct pci_device_info));
     
     dev->group     = group;
-    dev->vendor_id = vendor_id;
     dev->device_id = device_id;
     dev->bus       = bus;
     dev->device    = device;
@@ -166,20 +194,26 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
     // get the header info
     dev->header_reg = pci_read_configuration_long(bus, device, 0, PCI_CONF_REG_HEADER, group);
  
-    // stash this bad boy in a database
-    dev->next = pci_device_list;
-    pci_device_list = dev;
+    // stash this bad boy in the hash table
+    dev->vendor = vnd;
+    HT_ADD(vnd->devices, device_id, dev);
 }
 
 void pci_dump_device_list()
 {
-    struct pci_device_info* dev = pci_device_list;
-    while(dev != null) {
-        // print device info
-        fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
-                dev->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
-        fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
-                dev->header_type, dev->multifunction ? " (multifunction)" : "", dev->cache_line_size, dev->latency_timer, dev->bist);
-        dev = dev->next;
+    struct pci_vendor_info* vnd;
+
+    HT_FOR_EACH(pci_device_vendors, vnd) {
+        struct pci_device_info* dev;
+
+        HT_FOR_EACH(vnd->devices, dev) {
+            fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
+                    vnd->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
+            fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
+                    dev->header_type, (dev->function == 0 && dev->multifunction) ? " (multifunction)" : "", dev->cache_line_size, dev->latency_timer, dev->bist);
+        }
     }
+
+    fprintf(stderr, "sizeof pci_vendor_info: %d\n", sizeof(struct pci_vendor_info));
+    fprintf(stderr, "sizeof pci_device_info: %d\n", sizeof(struct pci_device_info));
 }

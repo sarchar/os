@@ -1,0 +1,23 @@
+#ifndef __HASHTABLE_H__
+#define __HASHTABLE_H__
+
+#define uthash_fatal(msg) PANIC(COLOR(255,0,255))
+#define uthash_malloc(sz) kalloc(sz)
+#define uthash_free(ptr,sz) kfree(ptr)
+
+#include "uthash/src/uthash.h"
+
+#define MAKE_HASH_TABLE \
+    UT_hash_handle hh
+
+#define HT_OVERHEAD sizeof(UT_hash_handle)
+
+// support for sizeof() types
+// you must be absolutely consistent about the type being used for the key, so that sizeof() is always correct
+#define HT_ADD(head,field,add)    HASH_ADD(hh, head, field, sizeof((head)->field), add)
+#define HT_FIND(head,findval,out) HASH_FIND(hh, head, &findval, sizeof(findval), out)
+
+// loop over all the elements in the table
+#define HT_FOR_EACH(tbl, x) for(x = tbl; x != null; x = x->hh.next)
+
+#endif

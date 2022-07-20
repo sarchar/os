@@ -119,7 +119,7 @@ static inline void _write_comparator_register(struct hpet_comparator* comp, u8 r
     *(u64 volatile*)(comp->timer->address + HPET_COMPARATOR_REGISTERS_BASE + comp->index * HPET_COMPARATOR_REGISTERS_SIZE + reg) = value;
 }
 
-static always_inline u64 _timer_period(struct hpet_timer* timer, u64 time_in_microseconds)
+static __always_inline u64 _timer_period(struct hpet_timer* timer, u64 time_in_microseconds)
 {
     // The period specified in the hpet capabilities is actually the real world time that has to elapse to
     // increment the internal clock counter by 1.  But that value is specified in femtoseconds, so the

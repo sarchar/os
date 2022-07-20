@@ -22,7 +22,7 @@ volatile u32 blocking = 0;
 u8 scancode;
 extern u64 master_ticks;
 
-noreturn void kernel_panic(u32 error)
+__noreturn void kernel_panic(u32 error)
 {
     // attempt to set the screen to all red
     //efifb_clear(COLOR(255,0,0));
