@@ -16,73 +16,11 @@
 #define PCI_CONF_ADDRESS(group, bus, device, func, offset) \
     (u32 volatile*)((group)->base_address + ((((bus) - (group)->start_bus) << 20) | ((device) << 15) | ((func) << 12) | ((offset) & 0xFFC)))
 
-struct pci_segment_group {
-    struct pci_segment_group* next;
-    intp   base_address;
-    u16    segment_id;
-    u8     start_bus;
-    u8     end_bus;
-    u32    unused;
-};
-
-static struct pci_segment_group* pci_segment_groups = null;
-static struct pci_segment_group* pci_segment_group_zero = null;
-
-struct pci_vendor_info;
-
-struct pci_device_info {
-    struct pci_segment_group* group;
-    struct pci_vendor_info* vendor;
-
-    u16 device_id;
-    u16 unused0;
-
-    u8  bus;
-    u8  device;
-    u8  function;
-    u8  unused1;
-
-    // class register
-    union {
-        u32 class_reg;
-        struct {
-            u8  revision_id;
-            u8  prog_if;
-            u8  subclass;
-            u8  class;
-        } __packed;
-    };
-
-    // header register
-    union {
-        u32 header_reg;
-        struct {
-            u8   cache_line_size;
-            u8   latency_timer;
-            u8   header_type   : 7;
-            bool multifunction : 1;
-            u8   bist;
-        } __packed;
-    };
-    
-    MAKE_HASH_TABLE;
-    u8  unused2[til_next_power_of_2(HT_OVERHEAD+32)];
-} __packed;
-
 static_assert(is_power_of_2(sizeof(struct pci_device_info)), "must be power of 2 sized struct");
 
-struct pci_vendor_info {
-    MAKE_HASH_TABLE;
-
-    struct pci_device_info* devices;
-    u16    vendor_id;
-    u16    unused0;
-    u32    unused1;
-
-    u8     unused2[til_next_power_of_2(HT_OVERHEAD+16)];
-};
-
-struct pci_vendor_info* pci_device_vendors = null;
+static struct pci_segment_group* pci_segment_groups     = null;
+static struct pci_segment_group* pci_segment_group_zero = null;
+static struct pci_vendor_info*   pci_device_vendors     = null;
 
 static void _enumerate_all();
 static void _enumerate_bus(struct pci_segment_group*, u8);
@@ -199,7 +137,26 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
     HT_ADD(vnd->devices, device_id, dev);
 }
 
+static bool _dump_device_info(struct pci_device_info* dev, void* userdata)
+{
+    unused(userdata);
+
+    fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
+            dev->vendor->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
+    fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
+            dev->header_type, (dev->function == 0 && dev->multifunction) ? " (multifunction)" : "", dev->cache_line_size, dev->latency_timer, dev->bist);
+
+    return true;
+}
+
 void pci_dump_device_list()
+{
+    pci_iterate_devices(&_dump_device_info, null);
+    fprintf(stderr, "sizeof pci_vendor_info: %d\n", sizeof(struct pci_vendor_info));
+    fprintf(stderr, "sizeof pci_device_info: %d\n", sizeof(struct pci_device_info));
+}
+
+void pci_iterate_devices(pci_iterate_devices_cb* cb, void* userdata)
 {
     struct pci_vendor_info* vnd;
     struct pci_vendor_info* nextvnd;
@@ -209,13 +166,26 @@ void pci_dump_device_list()
         struct pci_device_info* nextdev;
 
         HT_FOR_EACH(vnd->devices, dev, nextdev) {
-            fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
-                    vnd->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
-            fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
-                    dev->header_type, (dev->function == 0 && dev->multifunction) ? " (multifunction)" : "", dev->cache_line_size, dev->latency_timer, dev->bist);
+            if(!cb(dev, userdata)) break;
         }
     }
-
-    fprintf(stderr, "sizeof pci_vendor_info: %d\n", sizeof(struct pci_vendor_info));
-    fprintf(stderr, "sizeof pci_device_info: %d\n", sizeof(struct pci_device_info));
 }
+
+// this version can greatly reduce the # of cb calls, especially for 
+// drivers that only implement a specific vendor's devices
+void pci_iterate_vendor(u16 vendor_id, pci_iterate_devices_cb* cb, void* userdata)
+{
+    struct pci_vendor_info* vnd;
+    HT_FIND(pci_device_vendors, vendor_id, vnd);
+
+    // if vendor doesn't exist, there's nothing to iterate over
+    if(vnd == null) return;
+
+    struct pci_device_info* dev;
+    struct pci_device_info* nextdev;
+
+    HT_FOR_EACH(vnd->devices, dev, nextdev) {
+        if(!cb(dev, userdata)) break;
+    }
+}
+
