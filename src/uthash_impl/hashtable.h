@@ -18,6 +18,8 @@
 #define HT_FIND(head,findval,out) HASH_FIND(hh, head, &findval, sizeof(findval), out)
 
 // loop over all the elements in the table
-#define HT_FOR_EACH(tbl, x) for(x = tbl; x != null; x = x->hh.next)
+// tbl x and next should all be the same type
+// this version allows for safe freeing/removable of x from tbl.
+#define HT_FOR_EACH(tbl, x, next) HASH_ITER(hh, tbl, x, next)
 
 #endif

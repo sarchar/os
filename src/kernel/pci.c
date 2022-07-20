@@ -202,11 +202,13 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
 void pci_dump_device_list()
 {
     struct pci_vendor_info* vnd;
+    struct pci_vendor_info* nextvnd;
 
-    HT_FOR_EACH(pci_device_vendors, vnd) {
+    HT_FOR_EACH(pci_device_vendors, vnd, nextvnd) {
         struct pci_device_info* dev;
+        struct pci_device_info* nextdev;
 
-        HT_FOR_EACH(vnd->devices, dev) {
+        HT_FOR_EACH(vnd->devices, dev, nextdev) {
             fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
                     vnd->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
             fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
