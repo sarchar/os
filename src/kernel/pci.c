@@ -151,12 +151,12 @@ static bool _dump_device_info(struct pci_device_info* dev, void* userdata)
 
 void pci_dump_device_list()
 {
-    pci_iterate_devices(&_dump_device_info, null);
+    pci_iterate_devices(_dump_device_info, null);
     fprintf(stderr, "sizeof pci_vendor_info: %d\n", sizeof(struct pci_vendor_info));
     fprintf(stderr, "sizeof pci_device_info: %d\n", sizeof(struct pci_device_info));
 }
 
-void pci_iterate_devices(pci_iterate_devices_cb* cb, void* userdata)
+void pci_iterate_devices(pci_iterate_devices_cb cb, void* userdata)
 {
     struct pci_vendor_info* vnd;
     struct pci_vendor_info* nextvnd;
@@ -173,7 +173,7 @@ void pci_iterate_devices(pci_iterate_devices_cb* cb, void* userdata)
 
 // this version can greatly reduce the # of cb calls, especially for 
 // drivers that only implement a specific vendor's devices
-void pci_iterate_vendor(u16 vendor_id, pci_iterate_devices_cb* cb, void* userdata)
+void pci_iterate_vendor_devices(u16 vendor_id, pci_iterate_devices_cb cb, void* userdata)
 {
     struct pci_vendor_info* vnd;
     HT_FIND(pci_device_vendors, vendor_id, vnd);

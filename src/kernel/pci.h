@@ -67,8 +67,8 @@ void pci_notify_segment_group(u16 segment_id, intp base_address, u8 start_bus, u
 void pci_init();
 void pci_dump_device_list();
 
-typedef bool (pci_iterate_devices_cb)(struct pci_device_info*, void*);
-void pci_iterate_vendor(u16, pci_iterate_devices_cb*, void*);
-void pci_iterate_devices(pci_iterate_devices_cb*, void*);
+typedef bool (*pci_iterate_devices_cb)(struct pci_device_info*, void*);
+void pci_iterate_devices(pci_iterate_devices_cb, void*);
+void pci_iterate_vendor_devices(u16, pci_iterate_devices_cb, void*);
 
 #endif
