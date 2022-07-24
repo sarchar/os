@@ -7,6 +7,7 @@
 #include "efifb.h"
 #include "kernel.h"
 #include "multiboot2.h"
+#include "paging.h"
 #include "terminal.h"
 
 struct efifb {
@@ -16,7 +17,8 @@ struct efifb {
     u8   bpp;
     u32  pitch;
     u8   type;
-};
+    u8   disabled;
+} __packed;
 
 static struct efifb global_efifb = { 0, };
 
@@ -64,8 +66,20 @@ void efifb_init()
     }
 }
 
+// called after kernel paging takes over so that we know to remap the efi framebuffer
+// identity map the frame buffer. it should be in lowmem
+void efifb_map()
+{
+    global_efifb.disabled = true;
+    intp region_start = (intp)global_efifb.framebuffer;
+    u64 region_size = (u64)__alignup((intp)(global_efifb.pitch * global_efifb.height), 4096);
+    paging_identity_map_region(region_start, region_size, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    global_efifb.disabled = false;
+}
+
 void efifb_putpixel(u32 x, u32 y, color c)
 {
+    if(global_efifb.disabled) return;
     if(x >= global_efifb.width || y >= global_efifb.height) return;
     if(global_efifb.framebuffer != NULL) {
         if(global_efifb.type == 1) {

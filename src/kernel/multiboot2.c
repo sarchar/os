@@ -20,7 +20,7 @@ static struct multiboot_tag_mmap*           mbt_mmap            = null;
 static struct multiboot_tag_framebuffer*    mbt_framebuffer     = null;
 static struct multiboot_tag_new_acpi*       mbt_acpi            = null;
 
-intp multiboot2_mmap_next_free_region(u64* size)
+intp multiboot2_mmap_next_free_region(u64* size, u8* region_type)
 {
     assert(mbt_load_base_addr != null, "we must know our load address before allocating regions to bootmem");
 
@@ -35,19 +35,33 @@ intp multiboot2_mmap_next_free_region(u64* size)
     intp ret = (intp)-1;
 
     while(iter_size > 0) {
+        //fprintf(stderr, "multiboot: region addr=0x%lX size=0x%lX type=%d\n", iter->addr, iter->len, iter->type);
+
         // TODO reclaim ACPI ?
         // TODO the check for <0x100000000 and for kernel region should be done in bootmem itself
         // maybe pass in a flags parameter and set flags based on the type of region it is
-        if(iter->type == MULTIBOOT_MEMORY_AVAILABLE && iter->addr < 0x100000000) {
-            // the region the kernel is loaded into cannot be used for bootmem (well, unless we use _kernel_end_address 
-            // but there's no point for that right now. TODO later we can move the kernel and reclaim the entire region
-            if(mbt_load_base_addr->load_base_addr < iter->addr 
-               || mbt_load_base_addr->load_base_addr > (iter->addr + iter->len)) {
-                //bootmem_addregion((void*)iter->addr, iter->len);
-                ret = (intp)iter->addr;
-                *size = iter->len;
-                iter->type = MULTIBOOT_MEMORY_RESERVED;
+        switch(iter->type) {
+        case MULTIBOOT_MEMORY_AVAILABLE:
+            if(iter->addr < 0x100000000) {
+                // the region the kernel is loaded into cannot be used for bootmem (well, unless we use _kernel_end_address 
+                // but there's no point for that right now. TODO later we can move the kernel and reclaim the entire region
+                if(mbt_load_base_addr->load_base_addr < iter->addr || mbt_load_base_addr->load_base_addr > (iter->addr + iter->len)) {
+                    ret = (intp)iter->addr;
+                    *size = iter->len;
+                    *region_type = MULTIBOOT_REGION_TYPE_AVAILABLE;
+                }
             }
+            break;
+
+        case MULTIBOOT_MEMORY_ACPI_RECLAIMABLE:
+            ret = (intp)iter->addr;
+            *size = iter->len;
+            *region_type = MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE;
+            break;
+
+        default:
+            ret = (intp)-1;
+            break;
         }
     
         // next entry

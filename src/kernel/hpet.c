@@ -4,6 +4,7 @@
 #include "cpu.h"
 #include "hpet.h"
 #include "kernel.h"
+#include "paging.h"
 #include "stdio.h"
 
 #define HPET_CONF_FLAG_ENABLE_LEGACY_IRQ (1ULL << 1)
@@ -163,8 +164,8 @@ void hpet_notify_presence(u8 hpet_number, u8 hardwar_revision_id, u8 comparator_
     timer->capabilities = _read_register(timer, HPET_CAPABILITIES_REGISTER);
     assert(timer->num_timers == comparator_count, "comparator_count doesn't match capabilities provided by hpet register");
 
-    fprintf(stderr, "hpet: timer %d capabilities period=0x%08X vendor_id=0x%04X legacy_capable=%d long_counter=%d num_timers=%d(+1) revision=0x%02X\n", 
-            timer->number, timer->period, timer->vendor_id, timer->legacy_capable, timer->long_counter, timer->num_timers, timer->revision);
+    fprintf(stderr, "hpet: timer %d address=0x%lX period=0x%08X vendor_id=0x%04X legacy_capable=%d long_counter=%d num_timers=%d(+1) revision=0x%02X\n", 
+            timer->number, timer->address, timer->period, timer->vendor_id, timer->legacy_capable, timer->long_counter, timer->num_timers, timer->revision);
 
     // create a comparator for each
     for(u8 i = 0; i < comparator_count + 1; i++) {
@@ -211,7 +212,11 @@ static void _enable_kernel_timer(u8 global_interrupt_number)
 void hpet_init()
 {
     for(u8 t = 0; t < num_timers; t++) {
-        struct hpet_timer* timer = timers[0];
+        struct hpet_timer* timer = timers[t];
+
+        // map the timer base address into virtual memory
+        paging_map_page(timer->address, timer->address, MAP_PAGE_FLAG_DISABLE_CACHE | MAP_PAGE_FLAG_WRITABLE);
+        paging_debug_address(timer->address);
 
         // enable the timer
         hpet_timer_enable(timer);

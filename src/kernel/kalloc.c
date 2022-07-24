@@ -49,7 +49,7 @@ static void _increase_chunk_ptr_pool(u32 page_order)
     fprintf(stderr, "kalloc: _increase_chunk_ptr_pool(page_order=%d)\n", page_order);
 #endif
 
-    struct kalloc_chunk* c = (struct kalloc_chunk*)__va_kernel(palloc_claim(page_order)); // this chunk pointer is stored within the memory itself
+    struct kalloc_chunk* c = (struct kalloc_chunk*)palloc_claim(page_order); // this chunk pointer is stored within the memory itself
     c->base = (intp)c;
 
     // we're going to be storing kalloc_chunks, but the first slot is occupied by this chunk
@@ -140,7 +140,7 @@ static void _increase_pool(u8 n, u8 page_order)
     assert(n < countof(kalloc_data.pools), "pool index out of range");
 
     struct kalloc_chunk* c = _new_chunk_ptr();
-    void* mem = (void*)__va_kernel(palloc_claim(page_order));
+    void* mem = (void*)palloc_claim(page_order);
     zero(mem);
 
     c->base = (intp)mem;

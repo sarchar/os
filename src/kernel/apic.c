@@ -3,6 +3,7 @@
 #include "apic.h"
 #include "cpu.h"
 #include "kernel.h"
+#include "paging.h"
 #include "stdio.h"
 
 #define IA32_APIC_BASE_MSR 0x1B
@@ -118,6 +119,12 @@ void apic_init()
                              local_apic.cpu.acpi_id);
 
     apic_io_apic_enable_interrupt(19); // enable the interrupt in the redirection register
+}
+
+void apic_map()
+{
+    paging_map_page(io_apic.base   , io_apic.base   , MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    paging_map_page(local_apic.base, local_apic.base, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 }
 
 // See https://wiki.osdev.org/APIC#IO_APIC_Configuration

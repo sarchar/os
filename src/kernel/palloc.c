@@ -191,10 +191,6 @@ void* palloc_claim(u8 n) // allocate 2^n pages
 
 #if PALLOC_VERBOSE > 0
     fprintf(stderr, "palloc: removed block $%lX at order %d\n", (intp)left, order);
-
-    if(left == 0x7feb6000) {
-        assert(left->next != 0x7feb6000, "what");
-    }
 #endif
 
     // split blocks all the way down to the requested size, if necessary

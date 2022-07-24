@@ -5,6 +5,7 @@
 #include "idt.h"
 #include "interrupts.h"
 #include "kernel.h"
+#include "paging.h"
 
 #define IDT_FLAG_GATE_TYPE_INTERRUPT 0x0E
 #define IDT_FLAG_GATE_TYPE_TRAP      0x0F
@@ -32,7 +33,6 @@ struct idtr {
 } __packed;
 
 __aligned(16) static struct idt_entry _idt[NUM_INTERRUPTS] = { { 0, }, }; // Create an array of IDT entries
-__aligned(16) static struct idtr _idtr;
 
 void idt_set_entry(u8 vector_number, void* interrupt_handler, u8 flags) 
 {
@@ -49,8 +49,10 @@ void idt_set_entry(u8 vector_number, void* interrupt_handler, u8 flags)
 
 void idt_init() 
 {
-    _idtr.base = (intp)&_idt[0] - (intp)&_kernel_vma_base; // the cpu wants a physical address
-    _idtr.limit = (u16)(sizeof(_idt) - 1);
+    __aligned(16) struct idtr _idtr = {
+        .base = (intp)&_idt[0],
+        .limit = (u16)(sizeof(_idt) - 1)
+    };
     
     // the first 32 interrupts are internal to the cpu
     idt_set_entry( 0, interrupt_div_by_zero, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // division by zero
@@ -91,19 +93,12 @@ void idt_init()
         idt_set_entry(i, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     }
 
-
     idt_set_entry(32, interrupt_stub_noerr, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
     idt_set_entry(33, interrupt_kb_handler, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
-
     idt_set_entry(80, interrupt_timer, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT);
 
-    // TODO I'm sure there's a cleaner way to make gcc do this properly
-    // but I haven't figured it out yet.
-    __asm__ volatile ("movabs %0, %%rax\n\t" 
-                      "movabs %1, %%rdx\n\t"
-                      "subq %%rdx, %%rax\n\t"
-                      "lidt (%%rax)\n\t"
-                        : : "i"(&_idtr), "i"(&_kernel_vma_base) : "rax", "rdx");
+    // Load the IDT
+    __asm__ volatile ("lidt %0\t" : : "m"(_idtr));
 }
 
 

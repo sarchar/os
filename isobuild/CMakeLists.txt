@@ -24,6 +24,7 @@ add_custom_target(run
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
                                              -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=virtio,media=disk,format=qcow2
                                              -usbdevice mouse
+                                             #-d int -D int.log
 )
 
 add_custom_target(gdb

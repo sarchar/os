@@ -179,7 +179,7 @@ extern void _interrupt_handler_common(void);
     __asm__(                                       \
         ".extern _" #name "\n"                     \
         ".global " #name "\n"                      \
-        ".align 16\n"                               \
+        ".align 16\n"                              \
         #name ":\n"                                \
         "\t" "push %rax\n"                         /* save rax */                                     \
         "\t" "push %rdi\n"                         /* save rdi */                                     \
@@ -194,7 +194,7 @@ extern void _interrupt_handler_common(void);
     __asm__(                                       \
         ".extern _" #name "\n"                     \
         ".global " #name "\n"                      \
-        ".align 16\n"                               \
+        ".align 16\n"                              \
         #name ":\n"                                \
         "\t" "xchg %rax,0(%rsp)\n"                 /* save rax by swapping the error code with it */  \
         "\t" "push %rdi\n"                         /* save rdi */                                     \

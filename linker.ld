@@ -27,7 +27,7 @@ SECTIONS
         *(.multiboot.text)
     }
 
-    /* Actual kernel code will exist at virtual address 0xC0000000+1MiB */
+    /* Actual kernel code will exist at virtual address _kernel_vma_base+1M */
     . += _kernel_vma_base;
 
     /* Build the text (code) section */
@@ -51,8 +51,8 @@ SECTIONS
         *(.bss)
     }
 
-
     /* Define a symbol for the end of the kernel */
+    . = ALIGN(4K);           /* align up to page size */
     _kernel_end_address = .;
 
     /DISCARD/ : {

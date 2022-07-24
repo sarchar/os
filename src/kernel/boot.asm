@@ -127,8 +127,10 @@ section .bss align=8
 ; stack is properly aligned and failure to align the stack will result in
 ; undefined behavior.
 align 16
-stack_bottom: resb 16*1024 ; 16 KiB
-stack_top:
+global _stack_bottom:function (_stack_top-_stack_bottom)
+global _stack_top:function (0)
+_stack_bottom: resb 16*1024 ; 16 KiB
+_stack_top:
 
 ; Link script defined symbols used for knowing the size of the kernel
 extern _kernel_load_address
@@ -198,7 +200,6 @@ _bootstrap_start:
 
     ; map the 4GiB
     mov edi, boot_page_table_0000 ; put pagetable for first 1GiB into edi
-    ;sub edi, _kernel_vma_base
 .fill_0000:
     sub eax, 0x200000  ; decrement by 2MiB
     mov dword [edi + (ecx - 1) * 8], eax
@@ -206,7 +207,6 @@ _bootstrap_start:
 
     ; Set control register 3 to the address of the level 4 page table
     mov ecx, boot_page_table_level4
-    ;sub ecx, _kernel_vma_base
     mov cr3, ecx
 
     ; Enable PAE
@@ -260,7 +260,7 @@ _start:
 	; To set up a stack, we set the esp register to point to the top of our
 	; stack (as it grows downwards on x86 systems). This is necessarily done
 	; in assembly as languages such as C cannot function without a stack.
-	mov rsp, stack_top - 4    ; subtract 4 for the multiboot info pointer that's on the stack now
+	mov rsp, _stack_top - 4    ; subtract 4 for the multiboot info pointer that's on the stack now
 
     ; ebx was preserved in _bootstrap_start, put it into rdi for the first parameter to kernel_main
     mov rdi, rbx
@@ -296,3 +296,15 @@ _start:
 	jmp .hang
 .end:
 
+; relocate the GDT into high kernel memory
+; rdi has new offset to add to the gdt values
+global _gdt_fixup:function (_gdt_fixup.end - _gdt_fixup)
+_gdt_fixup:
+    mov rsi, [rdi+GDT.pointer+2]    ; read the 64-bit address at GDT.pointer+2 (base to GDT), but add _kernel_vma_base
+                                    ; so that it is a virtual address already mapped
+    add rsi, rdi                    ; add the virtual address to the GDT base
+    mov [rdi+GDT.pointer+2], rsi    ; store it in GDT.pointer+2
+    add rdi, GDT.pointer            ; load GDT.pointer+_kernel_vma_base into rdi
+    lgdt [rdi]                      ; reload the GDT
+    ret
+.end:

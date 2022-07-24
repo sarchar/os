@@ -4,12 +4,14 @@
 #include "common.h"
 
 #include "acpi.h"
+#include "apic.h"
 #include "bootmem.h"
 #include "cpu.h"
 #include "efifb.h"
 #include "hpet.h"
 #include "interrupts.h"
 #include "kalloc.h"
+#include "kernel.h"
 #include "multiboot2.h"
 #include "paging.h"
 #include "palloc.h"
@@ -18,9 +20,13 @@
 #include "stdio.h"
 #include "terminal.h"
 
+#include "drivers/ahci.h"
+
 volatile u32 blocking = 0;
 u8 scancode;
 extern u64 master_ticks;
+
+extern void _gdt_fixup(intp vma_base);
 
 __noreturn void kernel_panic(u32 error)
 {
@@ -70,7 +76,20 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     kalloc_init();
 
     // take over from the page table initialized at boot
-    paging_init();
+    __cli();           // disable interrupts before changing pages
+
+    // gdt has to be fixed up to use _kernel_vma_base before switching the 
+    // page table and interrupts over to highmem
+    _gdt_fixup((intp)&_kernel_vma_base);
+
+    paging_init();     // unmaps a large portion of lowmem
+
+    // a few modules have to map new memory
+    efifb_map();       // the EFI framebuffer needs virtual mapping
+    terminal_redraw(); // remapping efifb may have missed some putpixel calls
+    apic_map();        // the APIC needs memory mapping
+
+    __sti();           // re-enable interrupts
 
     // enable the kernel timer
     hpet_init();
@@ -78,15 +97,21 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // finish ACPI initialization
     acpi_init_lai();
 
-    // begin enumerating system devices
+    // enumerate system devices
     pci_init();
 
-    // TODO enable/use high memory in palloc only after paging is initialized
+    // TODO enable high memory in palloc after paging is initialized
+}
+
+static void load_drivers()
+{
+    ahci_load();
 }
 
 void kernel_main(struct multiboot_info* multiboot_info) 
 {
     initialize_kernel(multiboot_info);
+    load_drivers();
 
     fprintf(stderr, "kernel ready...\n");
 

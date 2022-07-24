@@ -61,8 +61,17 @@ void bootmem_init()
 {
     intp region_start;
     u64  region_size;
+    u8   region_type;
 
-    while((region_start = multiboot2_mmap_next_free_region(&region_size)) != (intp)-1) {
+    while((region_start = multiboot2_mmap_next_free_region(&region_size, &region_type)) != (intp)-1) {
+        // Don't make use of lower 1MiB, since BIOS stores important structures there.
+        // We can reclaim it later
+        if(region_start < 0x100000) continue;
+
+        // Don't use AHCI regions yet either
+        if(region_type == MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE) continue;
+
+        // Add it
         bootmem_addregion((void*)region_start, region_size);
     }
 }

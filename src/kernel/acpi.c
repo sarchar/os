@@ -247,7 +247,6 @@ void acpi_init()
     buf[6] = 0;
     //fprintf(stderr, "apci: oem_id = [%s], revision %d, rsdt = 0x%lX, xsdt = 0x%lX, xsdt length = %d\n", buf, desc->descv1.revision, desc->descv1.rsdt_address, desc->xsdt_address, desc->length);
 
-
     // validate the XSDT before parsing it
     struct acpi_xsdt* xsdt = (struct acpi_xsdt*)desc->xsdt_address;
     _validate_checksum((intp)xsdt, xsdt->header.length, "XSDT checksum not valid");

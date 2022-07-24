@@ -30,6 +30,7 @@ enum {
 };
 
 void apic_init();
+void apic_map();
 void apic_notify_acpi_io_apic(u8 io_apic_id, intp io_apic_base, u8 global_system_interrupt_base);
 void apic_notify_acpi_io_apic_interrupt_source_override(u8 bus_source, u8 irq_source, u8 global_system_interrupt, u8 flags);
 void apic_notify_acpi_local_apic(intp lapic_base, bool system_has_pic);

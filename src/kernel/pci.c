@@ -5,6 +5,7 @@
 #include "hashtable.h"
 #include "kalloc.h"
 #include "kernel.h"
+#include "paging.h"
 #include "pci.h"
 #include "stdio.h"
 
@@ -22,6 +23,7 @@ static struct pci_segment_group* pci_segment_groups     = null;
 static struct pci_segment_group* pci_segment_group_zero = null;
 static struct pci_vendor_info*   pci_device_vendors     = null;
 
+static void _map_all_groups();
 static void _enumerate_all();
 static void _enumerate_bus(struct pci_segment_group*, u8);
 static void _handle_device(struct pci_segment_group*, u8, u8, u16, u16);
@@ -48,6 +50,7 @@ void pci_init()
         return;
     }
 
+    _map_all_groups();
     _enumerate_all();
 }
 
@@ -56,6 +59,16 @@ u32 pci_read_configuration_long(u8 bus, u8 device, u8 function, u16 offset, stru
 {
     if(group == null) group = pci_segment_group_zero;
     return *PCI_CONF_ADDRESS(group, bus, device, function, offset);
+}
+
+static void _map_all_groups()
+{
+    struct pci_segment_group* group = pci_segment_groups;
+    while(group != null) {
+        intp end_address = (intp)PCI_CONF_ADDRESS(group, group->end_bus + 1, 0, 0, 0);
+        paging_identity_map_region(group->base_address, end_address - group->base_address, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+        group = group->next;
+    }
 }
 
 static void _enumerate_all()
@@ -119,19 +132,14 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
 
     // then add the device to the vendor's list
     struct pci_device_info* dev = (struct pci_device_info*)kalloc(sizeof(struct pci_device_info));
-    
+
     dev->group     = group;
     dev->device_id = device_id;
     dev->bus       = bus;
     dev->device    = device;
     dev->function  = func;
+    dev->config    = (struct pci_inplace_configuration*)PCI_CONF_ADDRESS(group, bus, device, func, 0);
 
-    // read the class of the function
-    dev->class_reg = pci_read_configuration_long(bus, device, func, PCI_CONF_REG_CLASS, group);
-
-    // get the header info
-    dev->header_reg = pci_read_configuration_long(bus, device, 0, PCI_CONF_REG_HEADER, group);
- 
     // stash this bad boy in the hash table
     dev->vendor = vnd;
     HT_ADD(vnd->devices, device_id, dev);
@@ -142,9 +150,11 @@ static bool _dump_device_info(struct pci_device_info* dev, void* userdata)
     unused(userdata);
 
     fprintf(stderr, "pci: found device 0x%04X:0x%04X on seg=%d bus=%d dev=%d func=%d class=%d subclass=%d prog_if=%d revision_id=%d\n", 
-            dev->vendor->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->class, dev->subclass, dev->prog_if, dev->revision_id);
+            dev->vendor->vendor_id, dev->device_id, dev->group->segment_id, dev->bus, dev->device, dev->function, dev->config->class, 
+            dev->config->subclass, dev->config->prog_if, dev->config->revision_id);
     fprintf(stderr, "     header_type=0x%02X%s cache_line_size=%d latency_timer=%d bist=%d\n",
-            dev->header_type, (dev->function == 0 && dev->multifunction) ? " (multifunction)" : "", dev->cache_line_size, dev->latency_timer, dev->bist);
+            dev->config->header_type, (dev->function == 0 && dev->config->multifunction) ? " (multifunction)" : "", dev->config->cache_line_size, 
+            dev->config->latency_timer, dev->config->bist);
 
     return true;
 }

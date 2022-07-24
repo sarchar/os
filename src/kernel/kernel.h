@@ -14,6 +14,8 @@
 extern u64 _kernel_vma_base;
 extern u64 _kernel_load_address;
 extern u64 _kernel_end_address;
+extern u64 _stack_bottom;
+extern u64 _stack_top;
 
 #define PANIC(c)   kernel_panic(c)
 __noreturn void kernel_panic(u32 error); // hack to not include the color type
