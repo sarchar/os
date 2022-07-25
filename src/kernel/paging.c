@@ -264,3 +264,16 @@ void paging_identity_map_region(intp region_start, u64 region_size, u32 flags)
     }
 }
 
+// TODO this eventually needs to move into a virtual memory manager
+// map a single page at physical address phys to a newly allocated virtual
+// memory address
+intp vmem_map_page(intp phys, u32 flags)
+{
+    // TODO for now, I know that paging_ only allocates memory in the 0-4GB region
+    // TODO and so we just pick some address in unoccupied high memory and map it there directly
+    assert(phys < 0x100000000, "TODO only working with low mem for now");
+    intp virtual_address = phys | 0xFFFF800000000000ULL;
+
+    paging_map_page(phys, virtual_address, flags);
+    return virtual_address;
+}

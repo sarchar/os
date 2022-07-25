@@ -137,6 +137,9 @@ static void _increase_pool(u8 n, u8 page_order)
 #if KALLOC_VERBOSE > 1
     fprintf(stderr, "kalloc: _increase_pool(n=%d, page_order=%d)\n", n, page_order);
 #endif
+    if(n >= countof(kalloc_data.pools)) {
+        fprintf(stderr, "kalloc: _increase_pool(n=%d, page_order=%d)\n", n, page_order);
+    }
     assert(n < countof(kalloc_data.pools), "pool index out of range");
 
     struct kalloc_chunk* c = _new_chunk_ptr();
@@ -178,6 +181,8 @@ void kalloc_init()
 void* kalloc(u32 size)
 {
     u8 n = next_power_of_2(size);
+    n = max(KALLOC_MIN_N, n); // set a minimum value of KALLOC_MIN_N
+
 #if KALLOC_VERBOSE > 1
     fprintf(stderr, "kalloc: kalloc(size=%d), n=%d\n", size, n);
 #endif

@@ -28,4 +28,7 @@ void paging_identity_map_region(intp region_start, u64 size, u32 flags);
 // dump page table information for a given virtual address
 void paging_debug_address(intp);
 
+// TODO this eventually needs to move into a virtual memory manager
+intp vmem_map_page(intp phys, u32 flags);
+
 #endif

@@ -63,4 +63,30 @@ typedef u32 color;
 // # of bytes between the next power of two and given x
 #define til_next_power_of_2(x) ((1<<next_power_of_2(x))-(x))
 
+// to use wait_bit_set you need to include hpet.h
+// cnd must be a volatile boolean check
+// timeout is in microseconds
+// tmp needs to be any u64 
+//
+// use like:
+// u64 volatile* mem;
+// u64 tmp;
+// wait_until_true(mem & SOME_BIT, 1000000, tmp) { 
+//      timeout_condition();
+// } else {
+//      condition_is_true();
+// }
+#define _wutd(start)  /* wait until timer delta */ \
+        (hpet_kernel_timer_delta_to_us((start), hpet_get_kernel_timer_value()))
+
+#define wait_until_true(cnd, timeout, tmp)         \
+        (tmp) = hpet_get_kernel_timer_value();     \
+        while(!(cnd) && _wutd(tmp) < timeout) ;    \
+        if(_wutd(tmp) >= timeout)
+
+#define wait_until_false(cnd, timeout, tmp)        \
+        (tmp) = hpet_get_kernel_timer_value();     \
+        while((cnd) && _wutd(tmp) < timeout) ;     \
+        if(_wutd(tmp) >= timeout)
+
 #endif

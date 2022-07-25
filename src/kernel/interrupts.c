@@ -9,7 +9,7 @@
 #include "stdio.h"
 #include "terminal.h"
 
-u64 volatile master_ticks = 0;
+u64 volatile global_ticks = 0;
 
 // Temporarily use PIC to enable some basic interrputs. This will all be wiped once APIC is implemented.
 #define PIC1_COMMAND    0x20        // IO base address for master PIC
@@ -267,6 +267,6 @@ DEFINE_INTERRUPT_HANDLER(interrupt_kb_handler)
 DEFINE_INTERRUPT_HANDLER(interrupt_timer)
 {
     unused(fault_addr);
-    master_ticks++;
+    global_ticks++;
 }
 

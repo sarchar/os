@@ -24,7 +24,7 @@
 
 volatile u32 blocking = 0;
 u8 scancode;
-extern u64 master_ticks;
+extern u64 global_ticks;
 
 extern void _gdt_fixup(intp vma_base);
 
@@ -120,7 +120,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     while(1) {
         while(blocking > 0) {
             __cli();
-            fprintf(stderr, "kb: %d, master_ticks = %llu\n", scancode, master_ticks);
+            fprintf(stderr, "kb: %d, global_ticks = %llu\n", scancode, global_ticks);
 
             // F1 - page fault, F2 - gpf, F3 - division by 0
             if(scancode == 59) {
@@ -138,7 +138,8 @@ void kernel_main(struct multiboot_info* multiboot_info)
                 fprintf(stderr, "calling lai_acpi_sleep(5)\n");
                 lai_enter_sleep(5);
             } else if(scancode == 25) { // 'p'
-                pci_dump_device_list();
+                //pci_dump_device_list();
+                ahci_dump_registers();
             }
 
             for(u32 y = 0; y < 16; y++) {

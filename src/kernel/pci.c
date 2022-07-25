@@ -140,6 +140,12 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
     dev->function  = func;
     dev->config    = (struct pci_inplace_configuration*)PCI_CONF_ADDRESS(group, bus, device, func, 0);
 
+    // TODO get all BAR sizes. Requires knowing if addresses are 32/64 in size
+    if(dev->config->header_type == PCI_HEADER_TYPE_GENERIC) {
+        for(u8 i = 0; i < 6; i++) {
+        }
+    }
+
     // stash this bad boy in the hash table
     dev->vendor = vnd;
     HT_ADD(vnd->devices, device_id, dev);
@@ -156,6 +162,9 @@ static bool _dump_device_info(struct pci_device_info* dev, void* userdata)
             dev->config->header_type, (dev->function == 0 && dev->config->multifunction) ? " (multifunction)" : "", dev->config->cache_line_size, 
             dev->config->latency_timer, dev->config->bist);
 
+    if(dev->config->status & PCI_STATUS_FLAG_CAPABILITIES_LIST) {
+        fprintf(stderr, "     capabilities_list=0x%lX\n", dev->config->h0.capability_pointer);
+    }
     return true;
 }
 

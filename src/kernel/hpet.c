@@ -231,3 +231,25 @@ void hpet_init()
     _enable_kernel_timer(19);
 }
 
+u64 hpet_kernel_timer_delta_to_us(u64 start, u64 end)
+{
+    // one timer value increment == (cycles_per_femptosecond/10^15) seconds
+    // formula is seconds_per_tick_value * (end - start)
+    //fprintf(stderr, "start = %llu end = %llu\n", start, end);
+    return ((end - start) * timers[0]->period) / 1000000000ULL;
+}
+
+u64 hpet_kernel_timer_delta_to_ns(u64 start, u64 end)
+{
+    // one timer value increment == (cycles_per_femptosecond/10^15) seconds
+    // formula is seconds_per_tick_value * (end - start)
+    //fprintf(stderr, "start = %llu end = %llu\n", start, end);
+    return ((end - start) * timers[0]->period) / 1000000;
+}
+
+
+u64 hpet_get_kernel_timer_value()
+{
+    return _read_register(timers[0], HPET_COUNTER_VALUE_REGISTER);
+}
+
