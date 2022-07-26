@@ -21,8 +21,11 @@ add_custom_target(run
                                              -monitor stdio
                                              -smp 4
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
-                                             -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=virtio,media=disk,format=qcow2
-                                             -drive file=${CMAKE_BINARY_DIR}/os.iso,if=virtio,media=cdrom,format=raw
+                                             -drive file=${CMAKE_BINARY_DIR}/os.iso,if=none,media=cdrom,format=raw,id=boot
+                                             -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=none,media=disk,format=qcow2,id=extra
+                                             -device ahci,id=ahci
+                                             -device ide-cd,drive=boot,bus=ahci.0
+                                             -device ide-hd,drive=extra,bus=ahci.1
                                              -usbdevice mouse
                                              #-d int -D int.log
 )

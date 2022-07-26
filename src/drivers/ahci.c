@@ -17,6 +17,7 @@
 #define HBA_PORT_DET_PRESENT 3
 
 #define CLEAR_ERROR(p) (p)->sata_error = (p)->sata_error
+#define HBAP_COMMAND_HEADER_PTR(a,slot) (&((struct hba_command_header*)(a)->command_list_address)[slot])  // virtual memory ptr
 
 enum HBA_CAPABILITIES {
     HBA_CAPABILITIES_NUMBER_OF_PORTS                  = 0x1F << 0,
@@ -148,6 +149,11 @@ enum HBAP_INTERRUPT_ENABLE_FLAGS {
     HBAP_INTERRUPT_ENABLE_FLAG_COLD_PRESENCE_DETECT      = 1 << 31
 };
 
+enum HBAP_INTERRUPT_STATUS_FLAGS {
+    HBAP_INTERRUPT_STATUS_FLAG_D2H_REGISTER_FIS = 1 << 0,
+    HBAP_INTERRUPT_STATUS_FLAG_PIO_SETUP        = 1 << 1,
+};
+
 enum HBAP_TASK_FILE_DATA_FLAGS {
     HBAP_TASK_FILE_DATA_FLAG_STATUS         = 0xFF << 0,
     HBAP_TASK_FILE_DATA_FLAG_STATUS_SHIFT   = 0,
@@ -156,6 +162,17 @@ enum HBAP_TASK_FILE_DATA_FLAGS {
     HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY    = 1 << 7,
     HBAP_TASK_FILE_DATA_FLAG_ERROR          = 0xFF << 8,
     HBAP_TASK_FILE_DATA_FLAG_ERROR_SHIFT    = 8
+};
+
+enum FIS_TYPES {
+    FIS_TYPE_REGISTER_H2D = 0x27,
+    FIS_TYPE_REGISTER_D2H = 0x34,
+    FIS_TYPE_PIO_SETUP    = 0x5F
+};
+
+enum ATA_COMMANDS {
+    ATA_COMMAND_IDENTIFY_PACKET_DEVICE = 0xA1,
+    ATA_COMMAND_IDENTIFY               = 0xEC
 };
 
 struct hba_port {
@@ -209,7 +226,9 @@ struct ahci_device_port {
     intp   received_fis_address;
     intp   free_mem_phys_address;
     intp   free_mem_address;
-    intp   reserved0;
+    u8     num_command_slots;
+    bool   is_atapi;
+    u8     reserved0[6];
     intp   reserved1;
 };
 
@@ -248,20 +267,53 @@ struct hba_command_header {
 // PRD - Physical Region Descriptor table entry
 struct hba_prdt_entry {
     u32 data_base_address;      // Data base address
-    u32 data_base_address_h;     // Data base address upper 32 bits
+    u32 data_base_address_h;    // Data base address upper 32 bits
     u32 reserved0;              // Reserved
  
     u32 data_byte_count         : 22;  // Byte count, 4M max
     u32 reserved1               : 9;   // Reserved
     u32 interrupt_on_completion : 1;   // Interrupt on completion
-};
+} __packed;
 
 struct hba_command_table {
     u8  command_fis[64];    // Command FIS, up to 64 bytes
     u8  atapi_command[16];  // ATAPI command, 12 or 16 bytes
     u8  reserved0[48];      // Reserved
     struct hba_prdt_entry   prdt_entries[];  // Physical region descriptor table entries, 0 ~ 65535
-};
+} __packed;
+
+struct fis_register_host_to_device {
+    // word 0
+    u8 fis_type;     // FIS_TYPE_REG_D2H
+
+    u8 port_multiplier_port : 4;    // Port multiplier
+    u8 reserved0            : 3;    // Reserved
+    u8 cmdcntrl             : 1;    // 1 = command, 0 = control
+
+    u8 command;      // command register
+    u8 featurel;     // feature register
+
+    // word 1
+    u8 lba0;         // LBA low register, 7:0
+    u8 lba1;         // LBA mid register, 15:8
+    u8 lba2;         // LBA high register, 23:16
+    u8 device;       // Device register
+
+    // word 2
+    u8 lba3;         // LBA register, 31:24
+    u8 lba4;         // LBA register, 39:32
+    u8 lba5;         // LBA register, 47:40
+    u8 featureh;     // feature register high
+
+    // word 3
+    u8 countl;       // Count register, 7:0
+    u8 counth;       // Count register, 15:8
+    u8 iso;          // isochronous command completion
+    u8 control;      // Control register
+
+    // word 4
+    u8 reserved4[4]; // Reserved
+} __packed;
 
 struct fis {
     u8  blargh[256];
@@ -277,6 +329,8 @@ static inline bool _stop_port_processing(struct hba_port volatile*);
 static void _reset_and_probe_ports();
 static void _deactivate_port(u8);
 static void _dump_port_registers(u8, char*);
+static inline s8 _find_free_command_slot(u8);
+static void _identify_device(u8);
 
 static bool _find_ahci_device_cb(struct pci_device_info* dev, void* userinfo)
 {
@@ -374,7 +428,14 @@ void ahci_load()
         hba_port->interrupt_enable |= 0xFFFFFFFF; // TODO enable all for now
     }
 
+    // probe all ports for valid devices
     _reset_and_probe_ports();
+
+    // identify all remaining devices
+    for(u8 i = 0; i < 32; i++) {
+        if(ahci_device_ports[i] == null) continue;
+        _identify_device(i);
+    }
 }
 
 static bool _declare_ownership()
@@ -558,6 +619,7 @@ static struct ahci_device_port* _try_initialize_port(u8 port_index, u32 ncmds)
     aport->received_fis_address           = virt_addr + 1024;
     aport->free_mem_phys_address          = phys_page + 1024 + sizeof(struct fis);
     aport->free_mem_address               = virt_addr + 1024 + sizeof(struct fis);
+    aport->num_command_slots              = ncmds;
 
     // disable transitions to sleep states
     hba_port->sata_control |= (HBAP_SATA_CONTROL_FLAG_IPM_NO_PARTIAL | HBAP_SATA_CONTROL_FLAG_IPM_NO_SLUMBER);
@@ -670,7 +732,7 @@ static bool _probe_port(u8 port_index)
 
     default:
         fprintf(stderr, "ahci: port %d sig=0x%08X unknown\n", port_index, hba_port->signature);
-        break;
+        return false;
     }
 
     // wait until drive isn't busy (up to 30 seconds!)
@@ -690,7 +752,8 @@ static bool _probe_port(u8 port_index)
     }
 
     // for ATAPI drives, set the commandstatus bit to tell the HBA to activate the desktop LED (why?)
-    if(hba_port->signature == SATA_SIG_ATAPI) {
+    aport->is_atapi = (hba_port->signature == SATA_SIG_ATAPI);
+    if(aport->is_atapi) {
         hba_port->commandstatus |= HBAP_CMDSTAT_FLAG_ATAPI;
     } else {
         hba_port->commandstatus &= ~HBAP_CMDSTAT_FLAG_ATAPI;
@@ -770,3 +833,105 @@ static void _dump_port_registers(u8 port_index, char* prefix)
     fprintf(stderr, "%ssata_notification = 0x%lX\n", prefix, hba_port->sata_notification);
     fprintf(stderr, "%sfis_switch_control = 0x%lX\n", prefix, hba_port->fis_switch_control);
 }
+
+// Find a free command list slot
+static inline s8 _find_free_command_slot(u8 port_index)
+{
+    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    assert(aport != null, "don't call this function on an inactive port");
+
+    // a slot is free only if it's not active and not issued
+	u32 slots = (hba_port->sata_active | hba_port->command_issue);
+
+	for(u8 i = 0; i < aport->num_command_slots; i++) {
+        if((slots & (1 << i)) == 0) return (s8)i;
+	}
+
+	return -1;
+}
+
+static void _identify_device(u8 port_index)
+{
+    u64 tmp;
+    s8 cmdslot;
+
+    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    assert(aport != null, "don't call this function on an inactive port");
+
+    wait_until_false((cmdslot = _find_free_command_slot(port_index)) < 0, 1000000, tmp) {
+        fprintf(stderr, "ahci: couldn't find a free command slot for port %d after 1s\n", port_index);
+        return;
+    }
+
+    struct hba_command_header* hdr = HBAP_COMMAND_HEADER_PTR(aport, cmdslot);
+	zero(hdr);
+    fprintf(stderr, "ahci: command header %d at 0x%lX\n", cmdslot, (intp)hdr);
+
+    // allocate space for a command table and PRDs
+    intp cmd_table_phys = (intp)palloc_claim_one();
+    intp cmd_table_virt = vmem_map_page(cmd_table_phys, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+
+    // point the header at the new command table
+    struct hba_command_table* tbl = (struct hba_command_table*)cmd_table_virt;
+	zero(tbl);
+    hdr->command_table_base       = (u32)(cmd_table_phys & 0xFFFFFFFF);
+    hdr->command_table_base_h     = (u32)(cmd_table_phys >> 32);
+
+    // set up the IDENTIFY command
+    struct fis_register_host_to_device* command_fis = (struct fis_register_host_to_device*)tbl->command_fis;
+    command_fis->fis_type = FIS_TYPE_REGISTER_H2D;
+    command_fis->cmdcntrl  = 1; // command, not control
+    command_fis->command   = aport->is_atapi ? ATA_COMMAND_IDENTIFY_PACKET_DEVICE : ATA_COMMAND_IDENTIFY;
+    command_fis->device    = 0; // master device
+
+    // set up a destination PRDT
+    // the memory pointed to by the command table is one page (4096) long
+    // but the table itself takes up 128 bytes with the remaining space available to
+    // PRDT entries. So (4096-128)/16 = 248 max PRDTs
+    struct hba_prdt_entry* prdt_entry = &tbl->prdt_entries[0];
+    intp dest_phys = (intp)palloc_claim_one();
+    intp dest_virt = vmem_map_page(dest_phys, MAP_PAGE_FLAG_WRITABLE);
+    prdt_entry->data_base_address       = (u32)(dest_phys & 0xFFFFFFFF);
+    prdt_entry->data_base_address_h     = (u32)(dest_phys >> 32);
+    prdt_entry->data_byte_count         = 512; // size of ATA device info block
+    prdt_entry->interrupt_on_completion = 1; // tell me when you're done
+
+    // set up the rest of the command header
+    hdr->fis_length          = sizeof(*command_fis) / sizeof(u32);
+    hdr->host_to_device      = 0; // read from device
+	hdr->atapi               = 0;
+    hdr->prdt_transfer_count = 0;
+    hdr->prdt_length         = 1;
+
+    // OK, signal to the HBA that there's a command on that port
+    fprintf(stderr, "ahci: issuing command on port %d\n", port_index);
+    hba_port->command_issue |= (1 << cmdslot);
+
+    // Wait for completion
+    wait_until_false(hba_port->command_issue & (1 << cmdslot), 10000000, tmp) {
+        fprintf(stderr, "ahci: command did not activate\n");
+    } else {
+        fprintf(stderr, "ahci: command active!\n");
+    }
+
+    wait_until_false(hba_port->task_file_data & (HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY | HBAP_TASK_FILE_DATA_FLAG_STATUS_REQUEST), 1000000, tmp) {
+        fprintf(stderr, "ahci: port %d timeout on drive busy\n", port_index);
+    } else {
+        fprintf(stderr, "ahci: port %d drive no longer busy\n", port_index);
+    }
+
+    if(hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_ERROR) {
+        fprintf(stderr, "ahci: port %d ata command error\n", port_index);
+        fprintf(stderr, "ahci: sata_error = 0x%lX\n", hba_port->sata_error);
+    }
+
+    // Wait for PIO Setup IRQ
+    wait_until_true(hba_port->interrupt_status & HBAP_INTERRUPT_STATUS_FLAG_PIO_SETUP, 1000000, tmp) {
+        fprintf(stderr, "ahci: port %d timed out waiting for PIO Setup interrupt\n", port_index);
+    } else {
+        fprintf(stderr, "ahci: port %d PIO Setup completed\n", port_index);
+    }
+}
+
