@@ -275,6 +275,8 @@ static struct ahci_device_port* _try_initialize_port(u8, u32);
 static inline bool _start_port_processing(struct hba_port volatile*);
 static inline bool _stop_port_processing(struct hba_port volatile*);
 static void _reset_and_probe_ports();
+static void _deactivate_port(u8);
+static void _dump_port_registers(u8, char*);
 
 static bool _find_ahci_device_cb(struct pci_device_info* dev, void* userinfo)
 {
@@ -356,8 +358,12 @@ void ahci_load()
     for(u8 i = 0; i < 32; i++) {
         if(ahci_device_ports[i] == null) continue;
 
-        // start up processing on the port
         struct hba_port volatile* hba_port = &ahci_base_memory->ports[i];
+
+        // clear interrupt status first
+        hba_port->interrupt_status = hba_port->interrupt_status;
+
+        // start up processing on the port
         if(!_start_port_processing(hba_port)) {
             // weird timeout error, don't continue with this port? delete and free all memory
             assert(false, "TODO");
@@ -468,6 +474,12 @@ void ahci_dump_registers()
     }
     if(ahci_base_memory->capabilities & HBA_CAPABILITIES_64BIT_ADDRESSING) {
         fprintf(stderr, "    supports 64-bit addressing\n");
+    }
+
+    for(u8 i = 0; i < 32; i++) {
+        if(ahci_device_ports[i] == null) continue;
+        fprintf(stderr, "ahci: port %d registers:\n", i);
+        _dump_port_registers(i, "      ");
     }
 
 #define SHOW_SIZEOF(strct) \
@@ -709,10 +721,52 @@ static void _reset_and_probe_ports()
         // next device
         if(_reset_and_probe_port(i)) {
             fprintf(stderr, "ahci: port %d is connected to a device and working\n", i);
+            continue;
         }
 
         // disable all future access to this port
-        // TODO _deactivate_port(i);
+        _deactivate_port(i);
     }
 }
 
+static void _deactivate_port(u8 port_index)
+{
+    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
+    _stop_port_processing(hba_port); // even if this times out, we don't care any more
+
+    // free the allocated memory
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+
+    // TODO unmap the memory
+    // vmem_unmap_page(virt_addr);
+
+    // free the page
+    palloc_abandon((void*)aport->command_list_phys_address, 0); // command_list_phys_address is always at the start of the allocated page
+
+    // free the ahci_device_port node
+    kfree(aport);
+
+    // clear the pointer in ahci_device_ports
+    ahci_device_ports[port_index] = null;
+}
+
+static void _dump_port_registers(u8 port_index, char* prefix)
+{
+    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    assert(aport != null, "don't call this function on an inactive port");
+
+    fprintf(stderr, "%scommand_list_base_address = 0x%lX\n", prefix, ((u64)hba_port->command_list_base_address_h << 32) | (u64)hba_port->command_list_base_address);
+    fprintf(stderr, "%sreceived_fis_base_address = 0x%lX\n", prefix, ((u64)hba_port->received_fis_base_address_h << 32) | (u64)hba_port->received_fis_base_address);
+    fprintf(stderr, "%sinterrupt_status = 0x%lX\n", prefix, hba_port->interrupt_status);
+    fprintf(stderr, "%scommandstatus = 0x%lX\n", prefix, hba_port->commandstatus);
+    fprintf(stderr, "%stask_file_data = 0x%lX\n", prefix, hba_port->task_file_data);
+    fprintf(stderr, "%ssignature = 0x%lX\n", prefix, hba_port->signature);
+    fprintf(stderr, "%ssata_status = 0x%lX\n", prefix, hba_port->sata_status);
+    fprintf(stderr, "%ssata_control = 0x%lX\n", prefix, hba_port->sata_control);
+    fprintf(stderr, "%ssata_error = 0x%lX\n", prefix, hba_port->sata_error);
+    fprintf(stderr, "%ssata_active = 0x%lX\n", prefix, hba_port->sata_active);
+    fprintf(stderr, "%scommand_issue = 0x%lX\n", prefix, hba_port->command_issue);
+    fprintf(stderr, "%ssata_notification = 0x%lX\n", prefix, hba_port->sata_notification);
+    fprintf(stderr, "%sfis_switch_control = 0x%lX\n", prefix, hba_port->fis_switch_control);
+}
