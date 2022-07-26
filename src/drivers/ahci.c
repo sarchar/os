@@ -16,6 +16,8 @@
 #define HBA_PORT_IPM_ACTIVE 1
 #define HBA_PORT_DET_PRESENT 3
 
+#define CLEAR_ERROR(p) (p)->sata_error = (p)->sata_error
+
 enum HBA_CAPABILITIES {
     HBA_CAPABILITIES_NUMBER_OF_PORTS                  = 0x1F << 0,
     HBA_CAPABILITIES_NUMBER_OF_PORTS_SHIFT            = 0,
@@ -95,6 +97,8 @@ enum HBAP_CMDSTAT_FLAGS {
 };
 
 enum HBAP_SATA_CONTROL_FLAGS {
+    HBAP_SATA_CONTROL_FLAG_DET             = 0x0F << 0,
+    HBAP_SATA_CONTROL_FLAG_DET_SHIFT       = 0,
     HBAP_SATA_CONTROL_FLAG_DET_INITIALIZE  = 1 << 0,
     HBAP_SATA_CONTROL_FLAG_DET_DISABLE     = 1 << 2,
     HBAP_SATA_CONTROL_FLAG_SPD_GEN1        = 1 << 4, // limit to Gen 1
@@ -103,6 +107,55 @@ enum HBAP_SATA_CONTROL_FLAGS {
     HBAP_SATA_CONTROL_FLAG_IPM_NO_PARTIAL  = 1 << 8,
     HBAP_SATA_CONTROL_FLAG_IPM_NO_SLUMBER  = 1 << 9,
     HBAP_SATA_CONTROL_FLAG_IPM_NO_DEVSLEEP = 1 << 10
+};
+
+enum HBAP_SATA_STATUS_FLAGS {
+    HBAP_SATA_STATUS_FLAG_DET                       = 0x0F << 0,
+    HBAP_SATA_STATUS_FLAG_DET_SHIFT                 = 0,
+    HBAP_SATA_STATUS_FLAG_DET_DEVICE_PRESENT_NO_PHY = 1 << 0,
+    HBAP_SATA_STATUS_FLAG_DET_DEVICE_PRESENT        = 3 << 0,
+    HBAP_SATA_STATUS_FLAG_DET_PHY_OFFLINE           = 4 << 0,
+    HBAP_SATA_STATUS_FLAG_SPEED                     = 0x0F << 4,
+    HBAP_SATA_STATUS_FLAG_SPEED_SHIFT               = 4,
+    HBAP_SATA_STATUS_FLAG_SPEED_GEN1                = 1 << 4,
+    HBAP_SATA_STATUS_FLAG_SPEED_GEN2                = 2 << 4,
+    HBAP_SATA_STATUS_FLAG_SPEED_GEN3                = 3 << 4,
+    HBAP_SATA_STATUS_FLAG_POWER_STATE               = 0x0F << 8,
+    HBAP_SATA_STATUS_FLAG_POWER_STATE_SHIFT         = 8,
+    HBAP_SATA_STATUS_FLAG_POWER_STATE_ACTIVE        = 1 << 8,
+    HBAP_SATA_STATUS_FLAG_POWER_STATE_PARTIAL       = 2 << 8,
+    HBAP_SATA_STATUS_FLAG_POWER_STATE_SLUMBER       = 6 << 8,
+    HBAP_SATA_STATUS_FLAG_POWER_STATE_DEVSLEEP      = 8 << 8
+};
+
+enum HBAP_INTERRUPT_ENABLE_FLAGS {
+    HBAP_INTERRUPT_ENABLE_FLAG_D2H_FIS                   = 1 << 0,
+    HBAP_INTERRUPT_ENABLE_FLAG_PIO_SETUP_FIS             = 1 << 1,
+    HBAP_INTERRUPT_ENABLE_FLAG_DMA_SETUP_FIS             = 1 << 2,
+    HBAP_INTERRUPT_ENABLE_FLAG_SET_DEVICE_BITS_FIS       = 1 << 3,
+    HBAP_INTERRUPT_ENABLE_FLAG_UNKONWN_FIS               = 1 << 4,
+    HBAP_INTERRUPT_ENABLE_FLAG_DESCRIPTOR_PROCESSED      = 1 << 5,
+    HBAP_INTERRUPT_ENABLE_FLAG_PORT_CHANGE               = 1 << 6,
+    HBAP_INTERRUPT_ENABLE_FLAG_MECHANICAL_PRESENCE       = 1 << 7,
+    HBAP_INTERRUPT_ENABLE_FLAG_PHYRDY_CHANGE             = 1 << 22,
+    HBAP_INTERRUPT_ENABLE_FLAG_INCORRECT_PORT_MULTIPLIER = 1 << 23,
+    HBAP_INTERRUPT_ENABLE_FLAG_OVERFLOW                  = 1 << 24,
+    HBAP_INTERRUPT_ENABLE_FLAG_INTERFACE_NONFATAL_ERROR  = 1 << 26,
+    HBAP_INTERRUPT_ENABLE_FLAG_INTERFACE_FATAL_ERROR     = 1 << 27,
+    HBAP_INTERRUPT_ENABLE_FLAG_HOST_BUS_DATA_ERROR       = 1 << 28,
+    HBAP_INTERRUPT_ENABLE_FLAG_HOST_BUS_FATAL_ERROR      = 1 << 29,
+    HBAP_INTERRUPT_ENABLE_FLAG_TASK_FILE_ERROR           = 1 << 30,
+    HBAP_INTERRUPT_ENABLE_FLAG_COLD_PRESENCE_DETECT      = 1 << 31
+};
+
+enum HBAP_TASK_FILE_DATA_FLAGS {
+    HBAP_TASK_FILE_DATA_FLAG_STATUS         = 0xFF << 0,
+    HBAP_TASK_FILE_DATA_FLAG_STATUS_SHIFT   = 0,
+    HBAP_TASK_FILE_DATA_FLAG_STATUS_ERROR   = 1 << 0,
+    HBAP_TASK_FILE_DATA_FLAG_STATUS_REQUEST = 1 << 3,
+    HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY    = 1 << 7,
+    HBAP_TASK_FILE_DATA_FLAG_ERROR          = 0xFF << 8,
+    HBAP_TASK_FILE_DATA_FLAG_ERROR_SHIFT    = 8
 };
 
 struct hba_port {
@@ -165,7 +218,7 @@ struct hba_command_header {
         u8 dw0;
         struct {
             u8  fis_length     : 5; // Command FIS length in DWORDS, 2 ~ 16
-            u8  atapi          : 1; // ATAPI
+            u8  atapi          : 1; // is an ATAPI command
             u8  host_to_device : 1; // Write, 1: H2D, 0: D2H
             u8  prefetchable   : 1; // Prefetchable
         } __packed;
@@ -182,9 +235,9 @@ struct hba_command_header {
         } __packed;
     };
  
-    u16 physical_rdt_length;       // Physical region descriptor table length in entries
+    u16 prdt_length;               // Physical region descriptor table length in entries
  
-    u32 physical_rdt_xfer_count;   // Physical region descriptor byte count transferred
+    u32 prdt_transfer_count;       // Physical region descriptor byte count transferred
  
     u32 command_table_base;        // Command table descriptor base address
     u32 command_table_base_h;      // Command table descriptor base address upper 32 bits
@@ -218,7 +271,10 @@ static struct ahci_device_port* ahci_device_ports[32];
 
 static bool _declare_ownership();
 static bool _reset_controller();
-static void _try_initialize_port(u8, u32);
+static struct ahci_device_port* _try_initialize_port(u8, u32);
+static inline bool _start_port_processing(struct hba_port volatile*);
+static inline bool _stop_port_processing(struct hba_port volatile*);
+static void _reset_and_probe_ports();
 
 static bool _find_ahci_device_cb(struct pci_device_info* dev, void* userinfo)
 {
@@ -286,9 +342,33 @@ void ahci_load()
         if(det != HBA_PORT_DET_PRESENT) continue;
         if(ipm != HBA_PORT_IPM_ACTIVE) continue;
 
-        // device exists
-        _try_initialize_port(i, ncmds);
+        // device might exist, try enabling it
+        ahci_device_ports[i] = _try_initialize_port(i, ncmds); // does not enable command processing just yet
     }
+
+    // Like with hba_ports, writing a 1 to any interrupt bit that was set clears it
+    ahci_base_memory->interrupt_status = ahci_base_memory->interrupt_status;
+
+    // enable global interrupt mask in the HBA
+    ahci_base_memory->global_host_control |= HBA_GHC_FLAG_INTERRUPT_ENABLE;
+
+    // enable processing on all the ports
+    for(u8 i = 0; i < 32; i++) {
+        if(ahci_device_ports[i] == null) continue;
+
+        // start up processing on the port
+        struct hba_port volatile* hba_port = &ahci_base_memory->ports[i];
+        if(!_start_port_processing(hba_port)) {
+            // weird timeout error, don't continue with this port? delete and free all memory
+            assert(false, "TODO");
+            continue;
+        }
+
+        // enable interrupts from that specific port
+        hba_port->interrupt_enable |= 0xFFFFFFFF; // TODO enable all for now
+    }
+
+    _reset_and_probe_ports();
 }
 
 static bool _declare_ownership()
@@ -400,6 +480,15 @@ void ahci_dump_registers()
 #undef SHOW_SIZEOF
 }
 
+static inline bool _start_port_processing(struct hba_port volatile* hba_port)
+{
+    assert((hba_port->commandstatus & HBAP_CMDSTAT_FLAG_COMMAND_LIST_RUNNING) == 0, "port should be stopped before calling start");
+    hba_port->commandstatus |= (HBAP_CMDSTAT_FLAG_START_COMMAND_LIST | HBAP_CMDSTAT_FLAG_FIS_RECEIVE_ENABLE);
+    u64 tmp;
+    wait_until_true(hba_port->commandstatus & HBAP_CMDSTAT_FLAG_COMMAND_LIST_RUNNING, 5000000, tmp) return false;
+    return true;
+}
+
 static inline bool _stop_port_processing(struct hba_port volatile* hba_port)
 {
     hba_port->commandstatus &= ~(HBAP_CMDSTAT_FLAG_FIS_RECEIVE_ENABLE | HBAP_CMDSTAT_FLAG_START_COMMAND_LIST);
@@ -410,14 +499,13 @@ static inline bool _stop_port_processing(struct hba_port volatile* hba_port)
     return true;
 }
 
-static void _try_initialize_port(u8 port_index, u32 ncmds)
+static struct ahci_device_port* _try_initialize_port(u8 port_index, u32 ncmds)
 {
     fprintf(stderr, "ahci: initializing port %d...\n", port_index);
 
     struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
 
-    ahci_device_ports[port_index] = (struct ahci_device_port*)kalloc(sizeof(struct ahci_device_port));
-    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    struct ahci_device_port* aport = (struct ahci_device_port*)kalloc(sizeof(struct ahci_device_port));
     zero(aport);
    
     // we need uncached memory for the command list and FIS, so we allocate a page of memory
@@ -437,7 +525,12 @@ static void _try_initialize_port(u8 port_index, u32 ncmds)
     assert(__alignof(fis_base_address, 256) == 0, "alignment must be 256");
 
     // before we can change pointers in the hba_port, we must disable the receive FIS buffer and wait for the FIS engine to stop
-    _stop_port_processing(hba_port);
+    if(!_stop_port_processing(hba_port)) {
+        // TODO vmem_unmap_page(virt_addr)
+        palloc_abandon((void*)phys_page, 0);
+        kfree(aport);
+        return null;
+    }
 
     // set the pointers in hba_port
     // kalloc() returns an identity mapped address
@@ -462,7 +555,7 @@ static void _try_initialize_port(u8 port_index, u32 ncmds)
     hba_port->interrupt_status = hba_port->interrupt_status;
 
     // same for any error bits
-    hba_port->sata_error = hba_port->sata_error;
+    CLEAR_ERROR(hba_port);
 
     // power on drive, spin up drive, set ICC to active, and enable the Receive FIS buffer
     u32 cmdstat = hba_port->commandstatus;
@@ -470,14 +563,156 @@ static void _try_initialize_port(u8 port_index, u32 ncmds)
     cmdstat = (cmdstat & ~HBAP_CMDSTAT_FLAG_INTERFACE_COMMUNICATION_CONTROL) | HBAP_CMDSTAT_FLAG_INTERFACE_COMMUNICATION_CONTROL_ACTIVE;
     hba_port->commandstatus = cmdstat;
 
+    // clear all command issues
+    hba_port->command_issue = 0;
+
+    return aport;
+}
+
+static bool _reset_port(struct hba_port volatile* hba_port, u8 port_index)
+{
+    u64 tmp;
+
+    if(!_stop_port_processing(hba_port)) {
+        fprintf(stderr, "ahci: failed to stop processing on port %d\n", port_index);
+        return false;
+    }
+
+    // clear port error field
+    CLEAR_ERROR(hba_port);
+
+    // wait for ATA idle, and if it doesn't occur perform COMRESET
+    wait_until_false(hba_port->task_file_data & (HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY | HBAP_TASK_FILE_DATA_FLAG_STATUS_REQUEST), 5000, tmp) {
+        fprintf(stderr, "ahci: performing COMRESET on port %d\n", port_index);
+
+        // disallow IPM and set DET to Initialize. this hard resets the port
+        hba_port->sata_control = (HBAP_SATA_CONTROL_FLAG_IPM_NO_PARTIAL | HBAP_SATA_CONTROL_FLAG_IPM_NO_SLUMBER | HBAP_SATA_CONTROL_FLAG_DET_INITIALIZE);
+
+        // software needs to wait a minimum of 1ms before continuing
+        usleep(2000);
+
+        // clear the initialize command from DET
+        hba_port->sata_control &= ~HBAP_SATA_CONTROL_FLAG_DET;
+    }
+
+    // re-enable the port
+    if(!_start_port_processing(hba_port)) {
+        fprintf(stderr, "ahci: failed to start port processing on port %d\n", port_index);
+        return false;
+    }
+
+    // wait for drive communication to be reestablished
+    wait_until_true((hba_port->sata_status & HBAP_SATA_STATUS_FLAG_DET) == HBAP_SATA_STATUS_FLAG_DET_DEVICE_PRESENT, 5000000, tmp) {
+        fprintf(stderr, "ahci: port %d timeout waiting on drive communication\n", port_index);
+        return false;
+    }
+
+    // finally, clear errors
+    CLEAR_ERROR(hba_port);
+
+    fprintf(stderr, "ahci: reset of port %d completed\n", port_index);
+    return true;
+}
+
+// Check to see if the device at this port is working and one we care about
+static bool _probe_port(u8 port_index)
+{
+    u64 tmp;
+    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    assert(aport != null, "don't call this function on an inactive port");
+
+    // wait for drive to be ready
+    // TODO not sure what this one is doing
+    wait_until_true((hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_STATUS) != 0xFF, 10000000, tmp) {
+        fprintf(stderr, "ahci: port %d drive timeout for ready state\n", port_index);
+        return false;
+    }
+
+    switch(hba_port->sata_status & HBAP_SATA_STATUS_FLAG_SPEED) {
+    case HBAP_SATA_STATUS_FLAG_SPEED_GEN1:
+        fprintf(stderr, "ahci: port %d link speed 1.5Gbps\n", port_index);
+        break;
+
+    case HBAP_SATA_STATUS_FLAG_SPEED_GEN2:
+        fprintf(stderr, "ahci: port %d link speed 3Gbps\n", port_index);
+        break;
+
+    case HBAP_SATA_STATUS_FLAG_SPEED_GEN3:
+        fprintf(stderr, "ahci: port %d link speed 6Gbps\n", port_index);
+        break;
+    
+    default:
+        fprintf(stderr, "ahci: port %d link speed unknown\n", port_index);
+        break;
+    }
+
     switch(hba_port->signature) {
-    case 0xEB140101:
-        fprintf(stderr, "ahci: port %d has SATA drive (sig=0x%08X)\n", port_index, hba_port->signature);
+    case SATA_SIG_ATA:
+        fprintf(stderr, "ahci: port %d has ATA drive (sig=0x%08X)\n", port_index, hba_port->signature);
+        break;
+
+    case SATA_SIG_ATAPI:
+        fprintf(stderr, "ahci: port %d has ATAPI drive (sig=0x%08X)\n", port_index, hba_port->signature);
         break;
 
     default:
         fprintf(stderr, "ahci: port %d sig=0x%08X unknown\n", port_index, hba_port->signature);
         break;
+    }
+
+    // wait until drive isn't busy (up to 30 seconds!)
+    // see section 10.12 in the SATA 1.3.1 spec
+    if(hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY) {
+        fprintf(stderr, "ahci: waiting for port %d drive not clear busy flag (up to 30 seconds)\n", port_index);
+    }
+
+    wait_until_false(hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY, 30000000, tmp) {
+        fprintf(stderr, "ahci: drive on port %d didn't complete request within 30 seconds\n", port_index);
+        return false;
+    }
+
+    if((hba_port->sata_status & HBAP_SATA_STATUS_FLAG_DET) != HBAP_SATA_STATUS_FLAG_DET_DEVICE_PRESENT) {
+        fprintf(stderr, "ahci: no drive on port %d present (or PHY is not communicating)\n", port_index);
+        return false;
+    }
+
+    // for ATAPI drives, set the commandstatus bit to tell the HBA to activate the desktop LED (why?)
+    if(hba_port->signature == SATA_SIG_ATAPI) {
+        hba_port->commandstatus |= HBAP_CMDSTAT_FLAG_ATAPI;
+    } else {
+        hba_port->commandstatus &= ~HBAP_CMDSTAT_FLAG_ATAPI;
+    }
+
+    return true;
+}
+
+static bool _reset_and_probe_port(u8 port_index)
+{
+    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    assert(aport != null, "don't call this function on an inactive port");
+
+    if(!_reset_port(hba_port, port_index)) {
+        fprintf(stderr, "ahci: failed to reset port %d\n", port_index);
+        return false;
+    }
+
+    return _probe_port(port_index);
+}
+
+static void _reset_and_probe_ports()
+{
+    for(u8 i = 0; i < 32; i++) {
+        if(ahci_device_ports[i] == null) continue;
+
+        // next device
+        if(_reset_and_probe_port(i)) {
+            fprintf(stderr, "ahci: port %d is connected to a device and working\n", i);
+        }
+
+        // disable all future access to this port
+        // TODO _deactivate_port(i);
     }
 }
 

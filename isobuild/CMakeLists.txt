@@ -14,7 +14,6 @@ add_custom_target(os_iso ALL
 add_custom_target(run
                   DEPENDS os_iso 
                   COMMAND qemu-system-x86_64 -machine q35
-                                             -cdrom ${CMAKE_BINARY_DIR}/os.iso
                                              -m 4G
                                              -bios /usr/share/ovmf/OVMF.fd
                                              -boot d
@@ -23,6 +22,7 @@ add_custom_target(run
                                              -smp 4
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
                                              -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=virtio,media=disk,format=qcow2
+                                             -drive file=${CMAKE_BINARY_DIR}/os.iso,if=virtio,media=cdrom,format=raw
                                              -usbdevice mouse
                                              #-d int -D int.log
 )
@@ -30,7 +30,6 @@ add_custom_target(run
 add_custom_target(gdb
                   DEPENDS os_iso 
                   COMMAND qemu-system-x86_64 -machine q35
-                                             -cdrom ${CMAKE_BINARY_DIR}/os.iso
                                              -m 4G
                                              -bios /usr/share/ovmf/OVMF.fd
                                              -boot d
@@ -39,6 +38,7 @@ add_custom_target(gdb
                                              -smp 4
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
                                              -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=virtio,media=disk,format=qcow2
+                                             -drive file=${CMAKE_BINARY_DIR}/os.iso,if=virtio,media=cdrom,format=raw
                                              -usbdevice mouse
                                              -s -S
 )

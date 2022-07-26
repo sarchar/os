@@ -89,4 +89,8 @@ typedef u32 color;
         while((cnd) && _wutd(tmp) < timeout) ;     \
         if(_wutd(tmp) >= timeout)
 
+
+// with the above functions we can hack in a simple usleep function
+#define usleep(us) { u64 tmp; wait_until_false(true, us, tmp) {}; }
+
 #endif
