@@ -5,6 +5,6 @@
 
 void palloc_init();
 void* palloc_claim(u8 n); // allocate 2^n pages
-void palloc_abandon(void* base, u8 n); //base is 2^n pages
+void palloc_abandon(intp base, u8 n); //base is 2^n pages
 
 #endif

@@ -227,7 +227,7 @@ void* palloc_claim(u8 n) // allocate 2^n pages
     return (void*)left;
 }
 
-void palloc_abandon(void* base, u8 n)
+void palloc_abandon(intp base, u8 n)
 {
     assert(n < PALLOC_MAX_ORDER, "n must be a valid order size");
 
@@ -237,26 +237,26 @@ void palloc_abandon(void* base, u8 n)
     while(true) {
         // start by determining if the buddy is available or not
         u64 block_size = 1 << (order + 12); // 2^n*4096
-        void* buddy_addr = (void*)((intp)base ^ block_size); // toggle the bit to get the buddy address
+        intp buddy_addr = base ^ block_size; // toggle the bit to get the buddy address
 
         // buddy_addr and 'base' both have the same bitmap index
         // but we try to set buddy_addr first (most of the time it succeeds),
         // but if buddy_addr isn't valid, then flip the bit on base and return
         u8 bit;
         bool buddy_valid;
-        if(!(buddy_valid = palloc_togglebit(buddy_addr, order, &bit))) {
-            palloc_togglebit(base, order, &bit);
+        if(!(buddy_valid = palloc_togglebit((struct free_page*)buddy_addr, order, &bit))) {
+            palloc_togglebit((struct free_page*)base, order, &bit);
         }
 
 #if PALLOC_VERBOSE > 0
-        fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", (intp)base, order, bit, (u8)buddy_valid);
+        fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", base, order, bit, (u8)buddy_valid);
 #endif
 
         // a released block with no buddy must stay at this level, otherwise
         // try combining to larger blocks
         if(buddy_valid && (bit == 0) && order < PALLOC_MAX_ORDER - 1) {
 #if PALLOC_VERBOSE > 0
-            fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", (intp)base, (intp)buddy_addr, order + 1);
+            fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", base, buddy_addr, order + 1);
 #endif
 
             // bit is 0, so buddy must be in the free blocks list
@@ -275,7 +275,7 @@ void palloc_abandon(void* base, u8 n)
             buddy->next->prev = buddy->prev;
 
             // use the lower address and add try combining in the next higher order
-            base = (void*)((intp)base & ~block_size);
+            base &= ~block_size;
             order++;
         } else {
             // not combing with a buddy, so add to current order and break out

@@ -26,29 +26,36 @@ enum CPU_PAGE_TABLE_ENTRY_FLAGS {
 
 struct page_table {
     u64*   _cpu_table;             // always one page, and page aligned. this is the table sent to the cpu
-    u64    flags;                  // TODO fun flaggies
     struct page_table** entries;   // always 512 entries, might as well be page aligned since it takes 4096 bytes
-    struct page_table_allocator_page* alloc_page; // pointer to the alloc page this page table data resides in
+    u64    flags;                  // TODO fun flaggies
+    u8     num_entries;
+    u8     unused0[7];
 };
 
 static struct page_table* paging_root;
 
 static void _map_page(intp phys, intp virt, u32 flags);
+static intp _unmap_page(intp virt);
 static void _map_2mb(intp phys, intp virt, u32 flags);
 
 static struct page_table* _allocate_page_table()
 {
     struct page_table* pt = kalloc(sizeof(struct page_table));
 
-    pt->_cpu_table = (u64*)palloc_claim_one();
-    pt->entries    = (struct page_table**)palloc_claim_one();
-    pt->alloc_page = null;
-    pt->flags      = 0;
+    pt->_cpu_table  = (u64*)palloc_claim_one();
+    pt->entries     = (struct page_table**)palloc_claim_one();
+    pt->num_entries = 0;
+    pt->flags       = 0;
 
     memset64(pt->_cpu_table, 0, 512);
     memset64(pt->entries, 0, 512);
 
     return pt;
+}
+
+static void _free_page_table(struct page_table* pt)
+{
+    kfree(pt);
 }
 
 static void _map_kernel()
@@ -123,6 +130,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
         pdpt = _allocate_page_table();
         paging_root->entries[pml4_index] = pdpt;
         paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        paging_root->num_entries++;
     }
 
     // create a level 2 page table (page directory) if necessary
@@ -132,6 +140,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
         pd = _allocate_page_table();
         pdpt->entries[pdpt_index] = pd;
         pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        pdpt->num_entries++;
     }
 
     // create a level 1 page table if necessary
@@ -141,6 +150,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
         pt = _allocate_page_table();
         pd->entries[pd_index] = pt;
         pd->_cpu_table[pd_index] = (intp)pt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        pd->num_entries++;
     }
 
     // create the entry in the lowest level table (page table). if it already exists, error out
@@ -153,18 +163,128 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(flags & MAP_PAGE_FLAG_DISABLE_CACHE) pt_flags |= CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE;
     if(flags & MAP_PAGE_FLAG_WRITABLE) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
     *pte = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_4KB) | pt_flags;
+    pt->num_entries++;
 }
 
+// _unmap_page simply removes the entry that 'virt' resolves to from the lowest level page table
+static intp _unmap_page(intp virt)
+{
+    assert((virt >> 47) == 0 || (virt >> 47) == 0x1FFFF, "virtual address must be canonical");
+    assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
+
+    fprintf(stderr, "paging: unmapping page at 0x%08lX\n", virt);
+
+    // shift right 12 for pt1
+    // shift right 21 for pt2
+    // shift right 30 for pt3
+    // shift right 39 for pt4
+
+    // find the level 3 page table (page directory pointers), and error out if it doesn't exist
+    u32 pml4_index = (virt >> 39) & 0x1FF;
+    assert(paging_root->_cpu_table[pml4_index] & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT, "virtual address mapping not found");
+    struct page_table* pdpt = paging_root->entries[pml4_index];
+
+    // find the level 2 page table (page directory pointers), and error out if it doesn't exist
+    u32 pdpt_index = (virt >> 30) & 0x1FF;
+    assert(pdpt->_cpu_table[pdpt_index] & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT, "virtual address mapping not found");
+    struct page_table* pd = pdpt->entries[pdpt_index];
+
+    // find the level 1 page table (page directory pointers), and error out if it doesn't exist
+    u32 pd_index = (virt >> 21) & 0x1FF;
+    assert(pd->_cpu_table[pd_index] & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT, "virtual address not found");
+    struct page_table* pt = pd->entries[pd_index];
+
+    // make sure the level 0 page table entry exists
+    u32 pt_index = (virt >> 12) & 0x1FF;
+    u64* pte = &pt->_cpu_table[pt_index];
+    assert(*pte & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT, "page table entry not present");
+
+    // free the page table entry
+    intp ret = *pte & CPU_PAGE_TABLE_ADDRESS_MASK_4KB;
+    *pte = 0;
+
+    // free nested page tables if they become empty
+    if(--pt->num_entries != 0) goto done;
+
+    _free_page_table(pt);
+    pd->entries[pd_index] = null;
+    pd->_cpu_table[pd_index] = 0;  // TODO do these have to be invalidated?
+
+    if(--pd->num_entries != 0) goto done;
+
+    _free_page_table(pd);
+    pdpt->entries[pdpt_index] = null;
+    pdpt->_cpu_table[pdpt_index] = 0;  // TODO do these have to be invalidated?
+
+    if(--pdpt->num_entries != 0) goto done;
+
+    _free_page_table(pdpt);
+    paging_root->entries[pml4_index] = null;
+    paging_root->_cpu_table[pml4_index] = 0; // TODO do these have to be invalidated?
+    pdpt->num_entries -= 1;
+
+done:
+    return ret;
+}
+
+
 // Dump information on how a virtual address is decoded
+void _make_flags_string(char* buf, u64 v)
+{
+    if(v & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT) buf[1] = 'P';
+    else                                      buf[1] = 'p';
+    if(v & CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE) buf[2] = 'W';
+    else                                        buf[2] = 'w';
+    if(v & CPU_PAGE_TABLE_ENTRY_FLAG_SUPERUSER) buf[3] = 'S';
+    else                                        buf[3] = 's';
+    if(v & CPU_PAGE_TABLE_ENTRY_WRITE_THROUGH) buf[4] = 'T';
+    else                                       buf[4] = 't';
+    if(v & CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE) buf[5] = 'C';
+    else                                       buf[5] = 'c';
+    if(v & CPU_PAGE_TABLE_ENTRY_ACCESSED)      buf[6] = 'A';
+    else                                       buf[6] = 'a';
+    if(v & CPU_PAGE_TABLE_ENTRY_DIRTY)         buf[7] = 'D';
+    else                                       buf[7] = 'd';
+    if(v & CPU_PAGE_TABLE_ENTRY_FLAG_HUGE)     buf[8] = 'H';
+    else                                       buf[8] = 'h';
+}
+
 void paging_debug_address(intp virt)
 {
-    // create a level 3 page table (page directory pointers) if necessary
+    char buf[] = "[........]";
+
+    fprintf(stderr, "paging: table dump for address 0x%016lX\n", virt);
+    fprintf(stderr, "0x%016lX (paging_root)\n", paging_root->_cpu_table);
+
+    // print pml4 entry
     u32 pml4_index = (virt >> 39) & 0x1FF;
-    fprintf(stderr, "paging: pml4_index=%d (0x%03X)\n", pml4_index, pml4_index);
     struct page_table* pdpt = paging_root->entries[pml4_index];
-    fprintf(stderr, "paging: paging_root=0x%lX\n", paging_root);
-    fprintf(stderr, "paging: paging_root->_cpu_table[pml4_index]=0x%lX\n", paging_root->_cpu_table[pml4_index]);
-    fprintf(stderr, "paging: paging_root->entries[pml4_index]=0x%lX\n", pdpt);
+    _make_flags_string(buf, paging_root->_cpu_table[pml4_index]);
+    u64 base = pml4_index * (1ULL << 39);
+    fprintf(stderr, "`- [%d] 0x%016X (pdpt), 0x%016lX .. 0x%016lX flags=%s\n", pml4_index, paging_root->_cpu_table[pml4_index], base, (base + (1ULL << 39)) - 1, buf);
+    if(buf[1] == 'p' || buf[7] == 'H') return;
+
+    // print page directory pointers table entry
+    u32 pdpt_index = (virt >> 30) & 0x1FF;
+    struct page_table* pd = pdpt->entries[pdpt_index];
+    _make_flags_string(buf, pdpt->_cpu_table[pdpt_index]);
+    base += pdpt_index * (1ULL << 30);
+    fprintf(stderr, "   `- [%d] 0x%016X (pd), 0x%016lX .. 0x%016lX flags=%s\n", pdpt_index, pdpt->_cpu_table[pdpt_index], base, (base + (1ULL << 30)) - 1, buf);
+    if(buf[1] == 'p' || buf[7] == 'H') return;
+
+    // print page directory table entry
+    u32 pd_index = (virt >> 21) & 0x1FF;
+    struct page_table* pt = pd->entries[pd_index];
+    _make_flags_string(buf, pd->_cpu_table[pd_index]);
+    base += pd_index * (1ULL << 21);
+    fprintf(stderr, "      `- [%d] 0x%016X (pt), 0x%016lX .. 0x%016lX flags=%s\n", pd_index, pd->_cpu_table[pd_index], base, (base + (1ULL << 21)) - 1, buf);
+    if(buf[1] == 'p' || buf[7] == 'H') return;
+
+    // print page table entry
+    u32 pt_index = (virt >> 12) & 0x1FF;
+    _make_flags_string(buf, pt->_cpu_table[pt_index]);
+    base += pt_index * (1ULL << 12);
+    fprintf(stderr, "         `- [%d] 0x%016X (pte), 0x%016lX .. 0x%016lX flags=%s\n", pt_index, pt->_cpu_table[pt_index], base, (base + (1ULL << 12)) - 1, buf);
 }
 
 void paging_map_page(intp phys, intp virt, u32 flags)
@@ -172,6 +292,11 @@ void paging_map_page(intp phys, intp virt, u32 flags)
     // call _map_page and then flushes TLB
     _map_page(phys, virt, flags);
     __invlpg(virt);
+}
+
+intp paging_unmap_page(intp virt)
+{
+    return _unmap_page(virt);
 }
 
 // _map_2mb does the hard work of mapping the physical address into the specified virtual address
@@ -276,4 +401,9 @@ intp vmem_map_page(intp phys, u32 flags)
 
     paging_map_page(phys, virtual_address, flags);
     return virtual_address;
+}
+
+intp vmem_unmap_page(intp virt)
+{
+    return paging_unmap_page(virt);
 }

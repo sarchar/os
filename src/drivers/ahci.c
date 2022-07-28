@@ -1,6 +1,7 @@
 #include "common.h"
 
 #include "ahci.h"
+#include "ata.h"
 #include "hpet.h"
 #include "kalloc.h"
 #include "paging.h"
@@ -170,11 +171,6 @@ enum FIS_TYPES {
     FIS_TYPE_PIO_SETUP    = 0x5F
 };
 
-enum ATA_COMMANDS {
-    ATA_COMMAND_IDENTIFY_PACKET_DEVICE = 0xA1,
-    ATA_COMMAND_IDENTIFY               = 0xEC
-};
-
 struct hba_port {
     u32 command_list_base_address;
     u32 command_list_base_address_h;
@@ -229,7 +225,7 @@ struct ahci_device_port {
     u8     num_command_slots;
     bool   is_atapi;
     u8     reserved0[6];
-    intp   reserved1;
+    struct ata_identify_device_response* identify_device_response;
 };
 
 struct hba_command_header {
@@ -319,509 +315,6 @@ struct fis {
     u8  blargh[256];
 } __packed;
 
-// This specification is annoyingly combined from two sources:
-// 1. most of the description comes from the ATA8-ACS specification under section 7.16 IDENTIFY DEVICE
-// 2. more description is found in the Serial ATA 3.x specification under section 13.2 IDENTIFY (PACKET) DEVICE
-// It seems like *2* is authoritative over *1*, i.e., some fields are renamed or reused in *2*.
-struct ata_identify_reponse {
-    union {
-        u16 general_configuration;
-        struct {
-            u32 reserved00          : 2;
-            u32 response_incomplete : 1;
-            u32 reserved01          : 12;
-            u32 ata_device          : 1;   // 0 == ATA device
-        } __packed ata;
-        struct {
-            u32 command_packet_size : 2;  // 0 = 12-byte command packet, 1 = 16-byte command packet
-            u32 response_incomplete : 1;
-            u32 reserved00          : 2;
-            u32 drq_speed           : 2;  // 0 = device sets DRQ to 1 within 3 ms of receiving PACKET command, 2 = within 50us
-            u32 reserved01          : 1;
-            u32 command_packet_set  : 5;  // indicates the command packet set used by the device
-            u32 reserved02          : 1;
-            u32 atapi_device        : 2;  // 2 = ATAPI device, invalid otherwise
-        } __packed atapi;
-    };
-
-    u16 reserved1;
-    u16 specific_configuration;   // optional
-    u16 reserved2[7];
-
-    u16 serial_number[10];        // string with byte-swapped words
-    u16 reserved3[3];
-
-    u16 firmware_revision[4];
-    u16 model_number[20];
-
-    u8 multiple_count;  // value of 0x01 to 0x10 - maximum number of sectors that shall be transfered per interrupt on READ/WRITE MULTIPLE commands
-    u8 reserved4;       // should be 0x80 but at least on QEMU, it isn't
-
-    u16 reserved5;
-
-    union {
-        u16 capabilities;
-        struct {
-            u32 reserved60        : 8;
-            u32 dma_supported     : 1; // 1 = DMA supported
-            u32 lba_supported     : 1; // 1 = LBA supported
-            u32 may_disable_iordy : 1; // IORDY may be disabled
-            u32 iordy_supported   : 1; // 1 = IORDY is supported, 0 = not supported
-            u32 reserved61        : 1;
-            u32 standby_timer     : 1; // 1 = standby timer is supported, 0 = timer values are managed by the device
-            u32 reserved62        : 2;
-        } __packed cap;
-    };
-
-    // word #50
-    union {
-        u16 capabilities2;
-        struct {
-            u32 standby_timer_minimum : 1; // set to 1 to indicate there's a vendor specific minimum value for the standby timer
-            u32 reserved70            : 13; 
-            u32 reserved71            : 1; // must be set to 1
-            u32 reserved72            : 1; // must be set to 0
-        } __packed cap2;
-    };
-
-    u16 reserved8[2];
-
-    struct {
-        u32 reserved90                     : 1;
-        u32 fields_in_words_64_to_70_valid : 1; // 1=the fields reported in words[64:70] are valid, 0=not valid
-        u32 fields_in_word_88_valid        : 1; // 1=the fields reported in word[88] are valid, 0=not valid
-        u32 reserved91                     : 13;
-    } __packed;
-
-    u16 reserved10[5];
-
-    struct {
-        u32 sectors_per_drq_data_block     : 8; // the current setting for number of logical sectors that are transfered per DRQ data block
-                                                // on READ/WRITE multiple commands
-        u32 multiple_sector_setting_valid  : 1;
-        u32 reserved11                     : 7;
-    } __packed;
-
-    // word #60
-    u16 total_logical_sectors[2]; // total number of user addressable logical sectors
-    u16 reserved12;
-
-    struct {
-        u32 multiword_dma_mode0_supported : 1; 
-        u32 multiword_dma_mode1_supported : 1;  // mode 1 and below
-        u32 multiword_dma_mode2_supported : 1;  // mode 2 and below
-        u32 reserved130                   : 5;
-        u32 multiword_dma_mode0_selected  : 1;
-        u32 multiword_dma_mode1_selected  : 1;
-        u32 multiword_dma_mode2_selected  : 1;
-        u32 reserved131                   : 5;
-    } __packed;
-
-    struct {
-        u32 pio_modes_supported : 8;
-        u32 reserved140         : 8;
-    } __packed;
-
-    u16 min_multiword_dma_transfer_cycle_time; // per word, in nanoseconds
-    u16 mfrs_recommended_multiword_dma_transfer_cycle_time; // per word, in nanoseconds
-    u16 min_pio_transfer_cycle_time; // (without flow control) per word, in nanoseconds
-    u16 min_pio_transfer_iordy_cycle_time; // (with IORDY flow control) per word, in nanoseconds
-
-    struct {
-        u32 reserved150                             : 3;
-        u32 extended_number_of_addressable_sectors  : 1; // 1=supports extended # of user addressable logical sectors
-        u32 device_encrypts_user_data               : 1; // 1=device does encrypt all data, 0=device might not encrypt
-        u32 reserved151                             : 4;
-        u32 download_microcode_dma_supported        : 1;
-        u32 set_max_password_unlock_dma_supported   : 1; // both SET MAX PASSWORD DMA and SET MAX UNLOCK DMA are supported
-        u32 write_buffer_dma_supported              : 1;
-        u32 read_buffer_dma_supported               : 1;
-        u32 device_conf_identify_dma_supported      : 1; // both DEVICE CONFIGURATION IDENTIFY DMA and DEVICE CONFIGURATION SET DMA are supported
-        u32 long_sector_alignment_error_support     : 1; // long physical sector alignment error reporting control is supported
-        u32 deterministic_read_after_trim_supported : 1;
-        u32 cfast_specification_supported           : 1;
-    } __packed;
-
-    // word #70
-    u16 reserved16[5];
-
-    struct {
-        u32 maximum_queue_depth : 5; // maximum queue depth minus 1
-        u32 reserved170         : 11;
-    } __packed;
-    
-    struct {
-        u32 reserved180                                    : 1;
-        u32 sata_gen1_speed_supported                      : 1;
-        u32 sata_gen2_speed_supported                      : 1;
-        u32 sata_gen3_speed_supported                      : 1;
-        u32 reserved181                                    : 4;
-        u32 native_command_queuing_supported               : 1;
-        u32 host_power_management_requests_supported       : 1;
-        u32 phy_event_counters_supported                   : 1;
-        u32 unload_with_ncq_outstanding_supported          : 1;
-        u32 native_command_queuing_priority_info_supported : 1;
-        u32 host_automatic_partial_to_slumber_supported    : 1;
-        u32 device_automatic_partial_to_slumber_supported  : 1;
-        u32 read_log_dma_ext_supported                     : 1;
-    } __packed;
-
-    u16 sata_additional_features_and_capabilities[3];  // TODO? all be zeros in qemu
-
-    // word #80
-    struct {
-        u32 reserved190           : 4;
-        u32 ata_atapi_v4_support  : 1;
-        u32 ata_atapi_v5_support  : 1;
-        u32 ata_atapi_v6_support  : 1;
-        u32 ata_atapi_v7_support  : 1;
-        u32 ata_atapi_v8_support  : 1;
-        u32 ata_atapi_v9_support  : 1;
-        u32 ata_atapi_v10_support : 1;
-        u32 ata_atapi_v11_support : 1;
-        u32 ata_atapi_v12_support : 1;
-        u32 ata_atapi_v13_support : 1;
-        u32 ata_atapi_v14_support : 1;
-        u32 reserved191           : 1;
-    } __packed;
-
-    u16 minor_version;
-
-    struct {
-        u32 smart_feature_supported              : 1;
-        u32 security_feature_supported           : 1;
-        u32 reserved200                          : 1;
-        u32 mandatory_power_management_supported : 1;
-        u32 packet_feature_set_supported         : 1;
-        u32 volatile_write_cache_supported       : 1;
-        u32 read_lookahead_supported             : 1;
-        u32 release_interrupt_supported          : 1;
-        u32 service_interrupt_supported          : 1;
-        u32 device_reset_command_supported       : 1;
-        u32 hpa_feature_set_supported            : 1;
-        u32 reserved201                          : 1;
-        u32 write_buffer_command_supported       : 1;
-        u32 read_buffer_command_supported        : 1;
-        u32 nop_command_supported                : 1;
-        u32 reserved202                          : 1;
-    } __packed;
-
-    struct {
-        u32 download_microcode_command_supported    : 1;
-        u32 tcq_feature_set_supported               : 1;
-        u32 cfa_feature_set_supported               : 1;
-        u32 apm_feature_set_supported               : 1;
-        u32 reserved210                             : 1;
-        u32 puis_feature_set_supported              : 1;
-        u32 set_features_required_for_spinup        : 1;
-        u32 reserved_for_offset_area_boot_method    : 1;
-        u32 set_max_security_extension_supported    : 1;
-        u32 amm_feature_set_supported               : 1;
-        u32 lba48_address_feature_set_supported     : 1;
-        u32 dco_feature_set_supported               : 1;
-        u32 mandatory_flush_cache_command_supported : 1;
-        u32 flush_cache_ext_command_supported       : 1;
-        u32 reserved211                             : 1; // must be 1
-        u32 reserved212                             : 1; // must be 0
-    } __packed;
-
-    struct {
-        u32 smart_error_reporting_supported              : 1;
-        u32 smart_self_test_supported                    : 1;
-        u32 media_serial_number_supported                : 1;
-        u32 media_card_passthrough_feature_set_supported : 1;
-        u32 streaming_feature_set_supported              : 1;
-        u32 gpl_feature_set_supported                    : 1; // general purpose logging
-        u32 write_dma_fua_ext_supported                  : 1;
-        u32 write_dma_queued_fua_ext_supported           : 1;
-        u32 world_wide_name_64bit_supported              : 1;
-        u32 reserved220                                  : 4;
-        u32 idle_immediate_command_supported             : 1;
-        u32 reserved221                                  : 1; // must be set to 1
-        u32 reserved222                                  : 1; // must be set to 0
-    } __packed;
-
-    // A number of these _enabled bits are likely just copies of the corresponding _supported bit field
-    // I just don't know the ATA spec well enough (or at all, really) to understand all of their meanings
-    struct {
-        u32 smart_feature_enabled              : 1;
-        u32 security_feature_enabled           : 1;
-        u32 reserved230                        : 1;
-        u32 mandatory_power_management_enabled : 1;
-        u32 packet_feature_set_enabled         : 1;
-        u32 volatile_write_cache_enabled       : 1;
-        u32 read_lookahead_enabled             : 1;
-        u32 release_interrupt_enabled          : 1;
-        u32 service_interrupt_enabled          : 1;
-        u32 device_reset_command_enabled       : 1;
-        u32 hpa_feature_set_enabled            : 1;
-        u32 reserved231                        : 1;
-        u32 write_buffer_command_enabled       : 1;
-        u32 read_buffer_command_enabled        : 1;
-        u32 nop_command_enabled                : 1;
-        u32 reserved232                        : 1;
-    } __packed;
-
-    struct {
-        u32 download_microcode_dma_enabled               : 1;
-        u32 tcq_feature_set_enabled                      : 1;
-        u32 cfa_feature_set_enabled                      : 1;
-        u32 apm_feature_set_enabled                      : 1;
-        u32 reserved240                                  : 1;
-        u32 puis_feature_set_enabled                     : 1;
-        u32 set_features_required_for_spinup_enabled     : 1;
-        u32 reserved_for_offset_area_boot_method_enabled : 1;
-        u32 set_max_security_extension_enabled           : 1;
-        u32 amm_feature_set_enabled                      : 1;
-        u32 lba48_address_feature_set_enabled            : 1;
-        u32 dco_feature_set_enabled                      : 1;
-        u32 mandatory_flush_cache_command_enabled        : 1;
-        u32 flush_cache_ext_command_enabled              : 1;
-        u32 reserved241                                  : 1;
-        u32 words_119_to_120_valid                       : 1;
-    } __packed;
-
-    struct {
-        u32 smart_error_reporting_enabled              : 1;
-        u32 smart_self_test_enabled                    : 1;
-        u32 media_serial_number_enabled                : 1;
-        u32 media_card_passthrough_feature_set_enabled : 1;
-        u32 streaming_feature_set_enabled              : 1;
-        u32 gpl_feature_set_enabled                    : 1; // general purpose logging
-        u32 write_dma_fua_ext_enabled                  : 1;
-        u32 write_dma_queued_fua_ext_enabled           : 1;
-        u32 world_wide_name_64bit_enabled              : 1;
-        u32 reserved250                                : 4;
-        u32 idle_immediate_command_enabled             : 1;
-        u32 reserved251                                : 1; // must be set to 1
-        u32 reserved252                                : 1; // must be set to 0
-    } __packed;
-
-    struct {
-        u32 ultra_dma_mode0_supported : 1; // modeX_supported => mode X and below are supported
-        u32 ultra_dma_mode1_supported : 1;
-        u32 ultra_dma_mode2_supported : 1;
-        u32 ultra_dma_mode3_supported : 1;
-        u32 ultra_dma_mode4_supported : 1;
-        u32 ultra_dma_mode5_supported : 1;
-        u32 ultra_dma_mode6_supported : 1;
-        u32 reserved260               : 1;
-        u32 ultra_dma_mode0_selected  : 1;
-        u32 ultra_dma_mode1_selected  : 1;
-        u32 ultra_dma_mode2_selected  : 1;
-        u32 ultra_dma_mode3_selected  : 1;
-        u32 ultra_dma_mode4_selected  : 1;
-        u32 ultra_dma_mode5_selected  : 1;
-        u32 ultra_dma_mode6_selected  : 1;
-        u32 reserved261               : 1;
-    } __packed;
-
-    u16 normal_security_erase_unit_time; // nanoseconds?
-
-    // word #90
-    u16 enhanced_security_erase_unit_time;
-    u16 current_apm_level;
-    u16 master_password_identifier;
-
-    struct {
-        u32 reserved270                            : 1;  // must be 1
-        u32 device0_number_determined_mode         : 2; // 1 = a jumper was used, 2 = CSEL signal, 3 = some other method/unknown
-        u32 device0_passed_diagnostics             : 1;
-        u32 device0_pdiag_detected                 : 1;
-        u32 device0_dasp_detected                  : 1;
-        u32 device0_responds_when_device1_selected : 1;
-        u32 reserved271                            : 1;
-        u32 reserved272                            : 1;  // must be 1
-        u32 device1_number_determined_mode         : 2; // 1 = a jumper was used, 2 = CSEL signal, 3 = some other method/unknown
-        u32 device1_pdiag_asserted                 : 1;
-        u32 reserved273                            : 1;
-        u32 device1_detected_cblid_above_vihb      : 1;
-        u32 reserved274                            : 1; // set to 1
-        u32 reserved275                            : 1; // set to 0
-    } __packed;
-
-    struct {
-        u32 current_aam_value             : 8;
-        u32 vendors_recommended_aam_value : 8;
-    } __packed;
-
-    u16 stream_minimum_request_size;
-    u16 streaming_dma_transfer_time;
-    u16 streaming_access_latency;
-    u16 streaming_performance_granularity[2]; // 32-bit
-
-    // word #100...sheesh will this ever end?
-    u16 total_logical_sectors_lba48[4]; // total number of user addressable logical sectors for 48-bit commands (64-bit)
-    u16 streaming_pio_transfer_time;
-    u16 reserved28;
-
-    struct {
-        u32 log2_logical_sectors_per_physical_sector     : 4;
-        u32 reserved290                                  : 8;
-        u32 logical_sector_longer_than_256_words         : 1; // if the device has a logical sector size >256 words (512 bytes), this is set to 1
-                                                              // and the actual sector size is listed in logical_sector_size below
-        u32 multiple_logical_sectors_per_physical_sector : 1;
-        u32 reserved291                                  : 1; // must be 1
-        u32 reserved292                                  : 1; // must be 0;
-    } __packed;
-
-    u16 reserved30;
-    u16 world_wide_name[4];
-    u16 reserved31[5];
-
-    // word #117
-    u16 logical_sector_size[2]; // u32, only valid when logical_sector_longer_than_256_words is set
-
-    struct {
-        u32 reserved320                                     : 1;
-        u32 read_write_verify_feature_set_supported         : 1;
-        u32 write_uncorrectable_ext_command_supported       : 1;
-        u32 read_write_log_dma_ext_commands_supported       : 1;
-        u32 download_microcode_command_mode3_supported      : 1;
-        u32 free_fall_control_feature_set_supported         : 1;
-        u32 extended_status_reporting_feature_set_supported : 1;
-        u32 reserved321                                     : 7;
-        u32 reserved322                                     : 1; // must be set to 1
-        u32 reserved323                                     : 1; // must be set to 0
-    } __packed;
-
-    // word #120
-    struct {
-        u32 reserved330                                    : 1;
-        u32 read_write_verify_feature_set_enabled          : 1;
-        u32 write_uncorrectable_ext_command_enabled        : 1;
-        u32 read_write_log_dma_ext_commands_enabled        : 1;
-        u32 download_microcode_command_mode3_enabled       : 1;
-        u32 free_fall_control_feature_set_enabled          : 1;
-        u32 extended_status_reporting_feature_set_enabled  : 1;
-        u32 reserved331                                    : 7;
-        u32 reserved332                                    : 1; // must be set to 1
-        u32 reserved333                                    : 1; // must be set to 0
-    } __packed;
-
-    u16 reserved34[7];
-
-    struct {
-        u32 security_supported                : 1;
-        u32 security_enabled                  : 1;
-        u32 security_locked                   : 1;
-        u32 security_frozen                   : 1;
-        u32 security_count_expired            : 1;
-        u32 enhanced_security_erase_supported : 1;
-        u32 reserved350                       : 2;
-        u32 master_password_capability        : 1; // 0 = high, 1 = maximum
-        u32 reserved351                       : 7;
-    } __packed;
-
-    u16 reserved36[31];
-
-    // word #160
-    struct {
-        u32 maximum_current                            : 12; // in mA
-        u32 cfa_power_mode1_disabled                   : 1;
-        u32 cfa_power_mode1_required_for_some_commands : 1;
-        u32 reserved370                                : 1;
-        u32 word_160_supported                         : 1; // this word is only valid if this bit is set to 1
-    } __packed;
-
-    u16 reserved38[7]; // for CompactFlash association
-
-    struct {
-        u32 device_form_factor : 4;
-        u32 reserved390        : 12;
-    } __packed;
-
-    struct {
-        u32 trim_bit_in_data_set_management_supported : 1;
-        u32 reserved400                               : 15;
-    } __packed;
-
-    // word 170
-    u16 additional_product_identifier[4];
-    u16 reserved41[2];
-    u16 current_media_serial_number[30];
-
-    // word 206
-    struct {
-        u32 sct_command_transport_supported              : 1;
-        u32 reserved420                                  : 1;
-        u32 sct_write_same_command_supported             : 1;
-        u32 sct_error_recovery_control_command_supported : 1;
-        u32 sct_feature_control_command_supported        : 1;
-        u32 sct_data_tables_command_supported            : 1;
-        u32 reserved421                                  : 6;
-        u32 reserved422                                  : 4; // vendor specific
-    } __packed;
-
-    u16 reserved43[2];
-
-    struct {
-        u32 logical_sector_offset : 14;
-        u32 reserved440           : 1; // must be 1
-        u32 reserved441           : 1; // must be 0
-    } __packed;
-
-    // word 210
-    u16 write_read_verify_mode3_sector_count[2]; // 32-bit
-    u16 write_read_verify_mode2_sector_count[2]; // 32-bit
-
-    struct {
-        u32 nv_cache_power_mode_feature_set_supported : 1;
-        u32 nv_cache_power_mode_feature_set_enabled   : 1;
-        u32 reserved450                               : 2;
-        u32 nv_cache_feature_set_enabled              : 1;
-        u32 reserved451                               : 3;
-        u32 nv_cache_power_mode_feature_set_version   : 4;
-        u32 nv_cache_feature_set_version              : 4;
-    } __packed;
-
-    u16 nv_cache_size[2]; // 32-bit, count in # of logical sectors
-
-    u16 media_rotation_rate;
-    u16 reserved46;
-
-    struct {
-        u32 estimated_spinup_time : 8; // in seconds
-        u32 reserved47            : 8;
-    } __packed;
-
-    // word 220
-    struct {
-        u32 read_write_verify_current_mode : 8;
-        u32 reserved48                     : 8;
-    } __packed;
-
-    u16 reserved49;
-
-    struct {
-        u32 ata8_ast          : 1;
-        u32 sata_1_0a         : 1;
-        u32 sata_2_extensions : 1;
-        u32 sata_rev_2_5      : 1;
-        u32 sata_rev_2_6      : 1;
-        u32 reserved500       : 7;
-        u32 transport_type    : 4; // 0=parallel, 1=serial
-    } __packed;
-
-    u16 transport_minor_version;
-    u16 reserved51[10];
-
-    // word 234
-    u16 minimum_blocks_per_download_microcode_command_mode3;
-    u16 maximum_blocks_per_download_microcode_command_mode3;
-    u16 reserved52[19];
-
-    struct {
-        u16 checksum_validity_indicator : 8;
-        u16 checksum                    : 8;
-    } __packed;
-
-} __packed;
-
-static char const* const device_form_factor_descriptions[] = {
-    "not reported", "5.25 inch", "3.5 inch", "2.5 inch", "1.8 inch", "less than 1.8 inch"
-};
-
 static struct ahci_device_port* ahci_device_ports[32];
 
 static bool _declare_ownership();
@@ -856,9 +349,6 @@ void ahci_load()
     }
 
     fprintf(stderr, "ahci: found device %04X:%04X\n", dev->vendor->vendor_id, dev->device_id);
-    fprintf(stderr, "ahci: BAR[5]=0x%08X\n", dev->config->h0.bar[5]);
-    fprintf(stderr, "ahci: sizeof(struct hba_memory)=%d\n", sizeof(struct hba_memory));
-    fprintf(stderr, "ahci: sizeof(struct hba_port)=%d\n", sizeof(struct hba_port));
 
     // also known as ABAR in the documentation
     ahci_base_memory = (struct hba_memory*)(intp)dev->config->h0.bar[5];
@@ -944,7 +434,9 @@ void ahci_load()
 static bool _declare_ownership()
 {
     if((ahci_base_memory->extended_capabilities & HBA_CAPABILITIES_BIOS_HANDOVER) == 0) {
+#if 0
         fprintf(stderr, "ahci: HBA doesn't support BIOS handover...assuming ownership.\n");
+#endif
         return true; // no error, assume ownership already
     }
 
@@ -968,7 +460,7 @@ static bool _reset_controller()
     // enable AHCI
     ahci_base_memory->global_host_control |= HBA_GHC_FLAG_AHCI_ENABLE;
 
-    fprintf(stderr, "ahci: HBA reset successful pi=%08X\n", ahci_cached_memory.ports_implemented);
+    fprintf(stderr, "ahci: HBA reset successful\n");
     return true;
 }
 
@@ -1102,8 +594,8 @@ static struct ahci_device_port* _try_initialize_port(u8 port_index, u32 ncmds)
 
     // before we can change pointers in the hba_port, we must disable the receive FIS buffer and wait for the FIS engine to stop
     if(!_stop_port_processing(hba_port)) {
-        // TODO vmem_unmap_page(virt_addr)
-        palloc_abandon((void*)phys_page, 0);
+        vmem_unmap_page(virt_addr);
+        palloc_abandon(phys_page, 0);
         kfree(aport);
         return null;
     }
@@ -1300,14 +792,17 @@ static void _deactivate_port(u8 port_index)
     struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
     _stop_port_processing(hba_port); // even if this times out, we don't care any more
 
-    // free the allocated memory
     struct ahci_device_port* aport = ahci_device_ports[port_index];
 
-    // TODO unmap the memory
-    // vmem_unmap_page(virt_addr);
+    // if an IDENTIFY exists, free the memory
+    if(aport->identify_device_response) {
+        intp phys = vmem_unmap_page((intp)aport->identify_device_response);
+        palloc_abandon(phys, 0);
+    }
 
-    // free the page
-    palloc_abandon((void*)aport->command_list_phys_address, 0); // command_list_phys_address is always at the start of the allocated page
+    // unmap the memory used by command_list_address and free the page associated with it
+    vmem_unmap_page(aport->command_list_address);
+    palloc_abandon(aport->command_list_phys_address, 0); // command_list_phys_address is always at the start of the allocated page
 
     // free the ahci_device_port node
     kfree(aport);
@@ -1354,22 +849,21 @@ static inline s8 _find_free_command_slot(u8 port_index)
 	return -1;
 }
 
-static inline void byte_swapped_ascii(u16* string, u16 inlen, char* output)
+static void _print_device_size(u8 port_index)
 {
-    while(inlen-- != 0) {
-        *output++ = *string >> 8;
-        *output++ = *string++ & 0xFF;
-    }
-    *output = 0;
-}
+    struct ahci_device_port* aport = ahci_device_ports[port_index];
+    assert(aport != null, "don't call this function on an inactive port");
+    assert(aport->identify_device_response != null, "must issue IDENTIFY DEVICE first");
 
-static char const* get_rotation_rate_string(u16 value)
-{
-    static char buf[128];
-    if(value == 0) return "rate not reported";
-    if(value == 1) return "non-rotating (solid state)";
-    sprintf(buf, "%d rpm", value);
-    return (char const*)buf;
+    struct ata_identify_device_response* resp = aport->identify_device_response;
+
+    u64 logical_sector_size = 2*(((u32)resp->logical_sector_size[0] | ((u32)resp->logical_sector_size[1] << 16)));
+    if(!resp->logical_sector_longer_than_256_words) logical_sector_size = 512;
+    u64 logical_sector_count = (u64)resp->total_logical_sectors_lba48[0] | ((u64)resp->total_logical_sectors_lba48[1] << 16) 
+                               | ((u64)resp->total_logical_sectors_lba48[2] << 32) | ((u64)resp->total_logical_sectors_lba48[3] << 48);
+    //if(!resp->lba48_address_feature_set_supported) 
+        logical_sector_count = (u32)resp->total_logical_sectors[0] | ((u64)resp->total_logical_sectors[1] << 16);
+    fprintf(stderr, "ahci: port %d device has size=%llu bytes, sector size = %d\n", port_index, logical_sector_count * logical_sector_size, logical_sector_size);
 }
 
 static void _identify_device(u8 port_index)
@@ -1403,7 +897,7 @@ static void _identify_device(u8 port_index)
     struct fis_register_host_to_device* command_fis = (struct fis_register_host_to_device*)tbl->command_fis;
     command_fis->fis_type = FIS_TYPE_REGISTER_H2D;
     command_fis->cmdcntrl  = 1; // command, not control
-    command_fis->command   = aport->is_atapi ? ATA_COMMAND_IDENTIFY_PACKET_DEVICE : ATA_COMMAND_IDENTIFY;
+    command_fis->command   = aport->is_atapi ? ATA_COMMAND_IDENTIFY_PACKET_DEVICE : ATA_COMMAND_IDENTIFY_DEVICE;
     command_fis->device    = 0; // master device
 
     // set up a destination PRDT
@@ -1426,263 +920,48 @@ static void _identify_device(u8 port_index)
     hdr->prdt_length         = 1;
 
     // OK, signal to the HBA that there's a command on that port
-    fprintf(stderr, "ahci: issuing command on port %d\n", port_index);
+    fprintf(stderr, "ahci: issuing IDENTIFY DEVICE on port %d\n", port_index);
     hba_port->command_issue |= (1 << cmdslot);
 
     // Wait for completion
     wait_until_false(hba_port->command_issue & (1 << cmdslot), 10000000, tmp) {
         fprintf(stderr, "ahci: command did not activate\n");
-    } else {
-        fprintf(stderr, "ahci: command active!\n");
-    }
+        // TODO free memory and return error
+    } 
 
     wait_until_false(hba_port->task_file_data & (HBAP_TASK_FILE_DATA_FLAG_STATUS_BUSY | HBAP_TASK_FILE_DATA_FLAG_STATUS_REQUEST), 1000000, tmp) {
         fprintf(stderr, "ahci: port %d timeout on drive busy\n", port_index);
-    } else {
-        fprintf(stderr, "ahci: port %d drive no longer busy\n", port_index);
-    }
+        // TODO free memory and return error
+    } 
 
     if(hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_ERROR) {
         fprintf(stderr, "ahci: port %d ata command error\n", port_index);
         fprintf(stderr, "ahci: sata_error = 0x%lX\n", hba_port->sata_error);
+        // TODO free memory and return error
     }
 
     // Wait for PIO Setup IRQ
     wait_until_true(hba_port->interrupt_status & HBAP_INTERRUPT_STATUS_FLAG_PIO_SETUP, 1000000, tmp) {
         fprintf(stderr, "ahci: port %d timed out waiting for PIO Setup interrupt\n", port_index);
-    } else {
-        fprintf(stderr, "ahci: port %d PIO Setup completed\n", port_index);
-    }
+        // TODO free memory and return error
+    } 
 
-    struct ata_identify_reponse* ident = (struct ata_identify_reponse*)dest_virt;
-    
-    char buf[512], buf2[512], buf3[512];
-    fprintf(stderr, "ahci: port %d IDENTIFY response:\n", port_index);
-    if(ident->ata.ata_device == 0) {
-        fprintf(stderr, "    ata_device=%d (0 for ATA) ata.response_incomplete=%d specific_configuration=%d\n", ident->ata.ata_device, ident->ata.response_incomplete, ident->specific_configuration);
-    }
-    if(ident->atapi.atapi_device == 2) {
-        fprintf(stderr, "    atapi_device=%d (2 for ATAPI) atapi.response_incomplete=%d specific_configuration=%d\n", ident->atapi.atapi_device, ident->atapi.response_incomplete, ident->specific_configuration);
-    }
-    byte_swapped_ascii(ident->serial_number, countof(ident->serial_number), buf);
-    byte_swapped_ascii(ident->firmware_revision, countof(ident->firmware_revision), buf2);
-    byte_swapped_ascii(ident->model_number, countof(ident->model_number), buf3);
-    fprintf(stderr, "    serial_number    =[%s]\n    firmware_revision=[%s]\n    model_number     =[%s]\n", buf, buf2, buf3);
-    byte_swapped_ascii(ident->additional_product_identifier, countof(ident->additional_product_identifier), buf);
-    fprintf(stderr, "    additional_product_identifier=[%s]\n", buf); // I feel like there should be a _supported bit for this, but not sure which one it is
-    byte_swapped_ascii(ident->current_media_serial_number, countof(ident->current_media_serial_number), buf);
-    fprintf(stderr, "    current_media_serial_number=[%s]\n", ident->media_serial_number_supported ? buf : "not supported");
-    fprintf(stderr, "    device_form_factor=%s\n", (ident->device_form_factor < countof(device_form_factor_descriptions)) ? device_form_factor_descriptions[ident->device_form_factor] : "not valid");
-    fprintf(stderr, "    media_rotation_rate=%s\n", get_rotation_rate_string(ident->media_rotation_rate));
-    fprintf(stderr, "    estimated_spinup_time=%d\n", ident->estimated_spinup_time);
-    fprintf(stderr, "    transport_type=%d ata8_ast=%d sata_1_0a=%d sata_2_extensions=%d sata_rev_2_5=%d sata_rev_2_6=%d\n", 
-            ident->transport_type, ident->ata8_ast, ident->sata_1_0a, ident->sata_2_extensions, ident->sata_rev_2_5, ident->sata_rev_2_6);
-    fprintf(stderr, "    multiple_count=0x%02X reserved4=0x%02X (will be 0x80 if multiple_count is used)\n", ident->multiple_count, ident->reserved4);
-    fprintf(stderr, "    minor_version=0x%04X\n", ident->minor_version);
-    fprintf(stderr, "    capabilities=0x%04X\n", ident->capabilities);
-    fprintf(stderr, "        cap.lba_supported=%d cap.dma_supported=%d\n", ident->cap.lba_supported, ident->cap.dma_supported);
-    fprintf(stderr, "        cap.iordy_supported=%d cap.may_disable_iordy=%d\n", ident->cap.may_disable_iordy, ident->cap.may_disable_iordy);
-    fprintf(stderr, "        cap.standby_timer=%d\n", ident->cap.standby_timer);
-    fprintf(stderr, "    capabilities2=0x%04X\n", ident->capabilities2);
-    fprintf(stderr, "        cap2.standby_timer=%d\n", ident->cap2.standby_timer_minimum);
-    fprintf(stderr, "    fields_in_words_64_to_70_valid=%d fields_in_word_88_valid=%d words_119_to_120_valid=%d\n", 
-            ident->fields_in_words_64_to_70_valid, ident->fields_in_word_88_valid, ident->words_119_to_120_valid);
-    fprintf(stderr, "    sectors_per_drq_data_block=%d multiple_sector_setting_valid=%d\n", ident->sectors_per_drq_data_block, ident->multiple_sector_setting_valid);
-    fprintf(stderr, "    total_logical_sectors=%d\n", (u32)ident->total_logical_sectors[0] | ((u32)ident->total_logical_sectors[1] << 16));
-    fprintf(stderr, "    total_logical_sectors_lba48=%llu\n", 
-            ident->lba48_address_feature_set_supported ?
-                            ((u64)ident->total_logical_sectors_lba48[0] | ((u64)ident->total_logical_sectors_lba48[1] << 16) |
-                            ((u64)ident->total_logical_sectors_lba48[2] << 32) | ((u64)ident->total_logical_sectors_lba48[3] << 48)) : 0);
-    fprintf(stderr, "    logical_sector_offset=%d\n", ident->logical_sector_offset);
-    fprintf(stderr, "    log2_logical_sectors_per_physical_sector=%d (2^x = %d)\n",
-            ident->log2_logical_sectors_per_physical_sector, (u32)1 << ident->log2_logical_sectors_per_physical_sector);
-    fprintf(stderr, "    logical_sector_longer_than_256_words=%d\n", ident->logical_sector_longer_than_256_words);
-    fprintf(stderr, "    multiple_logical_sectors_per_physical_sector=%d\n", ident->multiple_logical_sectors_per_physical_sector);
-    fprintf(stderr, "    logical_sector_size=%d bytes\n", 
-            ident->logical_sector_longer_than_256_words ? 2*(((u32)ident->logical_sector_size[0] | ((u32)ident->logical_sector_size[1] << 16))) : 512);
-    fprintf(stderr, "    multiword_dma_mode0_supported=%d multiword_dma_mode0_selected=%d\n", ident->multiword_dma_mode0_supported, ident->multiword_dma_mode0_selected);
-    fprintf(stderr, "    multiword_dma_mode1_supported=%d multiword_dma_mode1_selected=%d\n", ident->multiword_dma_mode1_supported, ident->multiword_dma_mode1_selected);
-    fprintf(stderr, "    multiword_dma_mode2_supported=%d multiword_dma_mode2_selected=%d\n", ident->multiword_dma_mode2_supported, ident->multiword_dma_mode2_selected);
-    fprintf(stderr, "    pio_modes_supported=0x%02X\n", ident->pio_modes_supported);
-    fprintf(stderr, "    min_multiword_dma_transfer_cycle_time=%d mfrs_recommended_multiword_dma_transfer_cycle_time=%d\n", 
-            ident->min_multiword_dma_transfer_cycle_time, ident->mfrs_recommended_multiword_dma_transfer_cycle_time);
-    fprintf(stderr, "    min_pio_transfer_cycle_time=%d min_pio_transfer_iordy_cycle_time=%d\n", ident->min_pio_transfer_cycle_time, ident->min_pio_transfer_iordy_cycle_time);
-    fprintf(stderr, "    additional supported features:\n");
-    fprintf(stderr, "        extended_number_of_addressable_sectors=%d\n", ident->extended_number_of_addressable_sectors);
-    fprintf(stderr, "        device_encrypts_user_data=%d\n", ident->device_encrypts_user_data);
-    fprintf(stderr, "        download_microcode_dma_supported=%d\n", ident->download_microcode_dma_supported);
-    fprintf(stderr, "        set_max_password_unlock_dma_supported=%d\n", ident->set_max_password_unlock_dma_supported);
-    fprintf(stderr, "        write_buffer_dma_supported=%d\n", ident->write_buffer_dma_supported);
-    fprintf(stderr, "        read_buffer_dma_supported=%d\n", ident->read_buffer_dma_supported);
-    fprintf(stderr, "        device_conf_identify_dma_supported=%d\n", ident->device_conf_identify_dma_supported);
-    fprintf(stderr, "        long_sector_alignment_error_support=%d\n", ident->long_sector_alignment_error_support);
-    fprintf(stderr, "        deterministic_read_after_trim_supported=%d\n", ident->deterministic_read_after_trim_supported);
-    fprintf(stderr, "        cfast_specification_supported=%d\n", ident->cfast_specification_supported);
-    fprintf(stderr, "    maximum_queue_depth=%d\n", ident->maximum_queue_depth);
-    fprintf(stderr, "    SATA capabilities:\n");
-    fprintf(stderr, "        sata_gen1_speed_supported=%d\n", ident->sata_gen1_speed_supported);
-    fprintf(stderr, "        sata_gen2_speed_supported=%d\n", ident->sata_gen2_speed_supported);
-    fprintf(stderr, "        sata_gen3_speed_supported=%d\n", ident->sata_gen3_speed_supported);
-    fprintf(stderr, "        native_command_queuing_supported=%d\n", ident->native_command_queuing_supported);
-    fprintf(stderr, "        native_command_queuing_priority_info_supported=%d\n", ident->native_command_queuing_priority_info_supported);
-    fprintf(stderr, "        unload_with_ncq_outstanding_supported=%d\n", ident->unload_with_ncq_outstanding_supported);
-    fprintf(stderr, "        host_power_management_requests_supported=%d\n", ident->host_power_management_requests_supported);
-    fprintf(stderr, "        host_automatic_partial_to_slumber_supported=%d\n", ident->host_automatic_partial_to_slumber_supported);
-    fprintf(stderr, "        device_automatic_partial_to_slumber_supported=%d\n", ident->device_automatic_partial_to_slumber_supported);
-    fprintf(stderr, "        phy_event_counters_supported=%d\n", ident->phy_event_counters_supported);
-    fprintf(stderr, "        read_log_dma_ext_supported=%d\n", ident->read_log_dma_ext_supported);
-    fprintf(stderr, "    sata_additional_features_and_capabilities=0x%02X 0x%02X 0x%02X\n",
-            ident->sata_additional_features_and_capabilities[0], ident->sata_additional_features_and_capabilities[1], ident->sata_additional_features_and_capabilities[2]);
-    fprintf(stderr, "    ata_atapi_v4..v14_support=%d%d%d%d%d%d%d%d%d%d%d\n",
-            ident->ata_atapi_v4_support, ident->ata_atapi_v5_support, ident->ata_atapi_v6_support, ident->ata_atapi_v7_support, ident->ata_atapi_v8_support,
-            ident->ata_atapi_v9_support, ident->ata_atapi_v10_support, ident->ata_atapi_v11_support, ident->ata_atapi_v12_support, ident->ata_atapi_v13_support,
-            ident->ata_atapi_v14_support);
-    fprintf(stderr, "    commands and feature sets:\n");
-    fprintf(stderr, "        smart_feature_supported=%d\n", ident->smart_feature_supported);
-    fprintf(stderr, "        security_feature_supported=%d\n", ident->security_feature_supported);
-    fprintf(stderr, "        security_feature_enabled=%d\n", ident->security_feature_enabled);
-    fprintf(stderr, "        mandatory_power_management_supported=%d\n", ident->mandatory_power_management_supported);
-    fprintf(stderr, "        mandatory_power_management_enabled=%d\n", ident->mandatory_power_management_enabled);
-    fprintf(stderr, "        packet_feature_set_supported=%d\n", ident->packet_feature_set_supported);
-    fprintf(stderr, "        packet_feature_set_enabled=%d\n", ident->packet_feature_set_enabled);
-    fprintf(stderr, "        volatile_write_cache_supported=%d\n", ident->volatile_write_cache_supported);
-    fprintf(stderr, "        volatile_write_cache_enabled=%d\n", ident->volatile_write_cache_enabled);
-    fprintf(stderr, "        read_lookahead_supported=%d\n", ident->read_lookahead_supported);
-    fprintf(stderr, "        read_lookahead_enabled=%d\n", ident->read_lookahead_enabled);
-    fprintf(stderr, "        release_interrupt_supported=%d\n", ident->release_interrupt_supported);
-    fprintf(stderr, "        release_interrupt_enabled=%d\n", ident->release_interrupt_enabled);
-    fprintf(stderr, "        service_interrupt_supported=%d\n", ident->service_interrupt_supported);
-    fprintf(stderr, "        service_interrupt_enabled=%d\n", ident->service_interrupt_enabled);
-    fprintf(stderr, "        device_reset_command_supported=%d\n", ident->device_reset_command_supported);
-    fprintf(stderr, "        device_reset_command_enabled=%d\n", ident->device_reset_command_enabled);
-    fprintf(stderr, "        hpa_feature_set_supported=%d\n", ident->hpa_feature_set_supported);
-    fprintf(stderr, "        hpa_feature_set_enabled=%d\n", ident->hpa_feature_set_enabled);
-    fprintf(stderr, "        write_buffer_command_supported=%d\n", ident->write_buffer_command_supported);
-    fprintf(stderr, "        write_buffer_command_enabled=%d\n", ident->write_buffer_command_enabled);
-    fprintf(stderr, "        read_buffer_command_supported=%d\n", ident->read_buffer_command_supported);
-    fprintf(stderr, "        read_buffer_command_enabled=%d\n", ident->read_buffer_command_enabled);
-    fprintf(stderr, "        nop_command_supported=%d\n", ident->nop_command_supported);
-    fprintf(stderr, "        nop_command_enabled=%d\n", ident->nop_command_enabled);
-    fprintf(stderr, "        download_microcode_dma_supported=%d\n", ident->download_microcode_dma_supported);
-    fprintf(stderr, "        download_microcode_dma_enabled=%d\n", ident->download_microcode_dma_enabled);
-    fprintf(stderr, "        tcq_feature_set_supported=%d\n", ident->tcq_feature_set_supported);
-    fprintf(stderr, "        tcq_feature_set_enabled=%d\n", ident->tcq_feature_set_enabled);
-    fprintf(stderr, "        cfa_feature_set_supported=%d\n", ident->cfa_feature_set_supported);
-    fprintf(stderr, "        cfa_feature_set_enabled=%d\n", ident->cfa_feature_set_enabled);
-    fprintf(stderr, "        apm_feature_set_supported=%d\n", ident->apm_feature_set_supported);
-    fprintf(stderr, "        apm_feature_set_enabled=%d\n", ident->apm_feature_set_enabled);
-    fprintf(stderr, "        puis_feature_set_supported=%d\n", ident->puis_feature_set_supported);
-    fprintf(stderr, "        puis_feature_set_enabled=%d\n", ident->puis_feature_set_enabled);
-    fprintf(stderr, "        set_features_required_for_spinup=%d\n", ident->set_features_required_for_spinup);
-    fprintf(stderr, "        set_features_required_for_spinup_enabled=%d\n", ident->set_features_required_for_spinup_enabled);
-    fprintf(stderr, "        reserved_for_offset_area_boot_method=%d\n", ident->reserved_for_offset_area_boot_method);
-    fprintf(stderr, "        reserved_for_offset_area_boot_method_enabled=%d\n", ident->reserved_for_offset_area_boot_method_enabled);
-    fprintf(stderr, "        set_max_security_extension_supported=%d\n", ident->set_max_security_extension_supported);
-    fprintf(stderr, "        set_max_security_extension_enabled=%d\n", ident->set_max_security_extension_enabled);
-    fprintf(stderr, "        amm_feature_set_supported=%d\n", ident->amm_feature_set_supported);
-    fprintf(stderr, "        amm_feature_set_enabled=%d\n", ident->amm_feature_set_enabled);
-    fprintf(stderr, "        lba48_address_feature_set_supported=%d\n", ident->lba48_address_feature_set_supported);
-    fprintf(stderr, "        lba48_address_feature_set_enabled=%d\n", ident->lba48_address_feature_set_enabled);
-    fprintf(stderr, "        dco_feature_set_supported=%d\n", ident->dco_feature_set_supported);
-    fprintf(stderr, "        dco_feature_set_enabled=%d\n", ident->dco_feature_set_enabled);
-    fprintf(stderr, "        mandatory_flush_cache_command_supported=%d\n", ident->mandatory_flush_cache_command_supported);
-    fprintf(stderr, "        mandatory_flush_cache_command_enabled=%d\n", ident->mandatory_flush_cache_command_enabled);
-    fprintf(stderr, "        flush_cache_ext_command_supported=%d\n", ident->flush_cache_ext_command_supported);
-    fprintf(stderr, "        flush_cache_ext_command_enabled=%d\n", ident->flush_cache_ext_command_enabled);
-    fprintf(stderr, "        smart_error_reporting_supported=%d\n", ident->smart_error_reporting_supported);
-    fprintf(stderr, "        smart_error_reporting_enabled=%d\n", ident->smart_error_reporting_enabled);
-    fprintf(stderr, "        smart_self_test_supported=%d\n", ident->smart_self_test_supported);
-    fprintf(stderr, "        smart_self_test_enabled=%d\n", ident->smart_self_test_enabled);
-    fprintf(stderr, "        media_serial_number_supported=%d\n", ident->media_serial_number_supported);
-    fprintf(stderr, "        media_serial_number_enabled=%d\n", ident->media_serial_number_enabled);
-    fprintf(stderr, "        media_card_passthrough_feature_set_supported=%d\n", ident->media_card_passthrough_feature_set_supported);
-    fprintf(stderr, "        media_card_passthrough_feature_set_enabled=%d\n", ident->media_card_passthrough_feature_set_enabled);
-    fprintf(stderr, "        streaming_feature_set_supported=%d\n", ident->streaming_feature_set_supported);
-    fprintf(stderr, "        streaming_feature_set_enabled=%d\n", ident->streaming_feature_set_enabled);
-    fprintf(stderr, "        gpl_feature_set_supported=%d\n", ident->gpl_feature_set_supported);
-    fprintf(stderr, "        gpl_feature_set_enabled=%d\n", ident->gpl_feature_set_enabled);
-    fprintf(stderr, "        write_dma_fua_ext_supported=%d\n", ident->write_dma_fua_ext_supported);
-    fprintf(stderr, "        write_dma_fua_ext_enabled=%d\n", ident->write_dma_fua_ext_enabled);
-    fprintf(stderr, "        write_dma_queued_fua_ext_supported=%d\n", ident->write_dma_queued_fua_ext_supported);
-    fprintf(stderr, "        write_dma_queued_fua_ext_enabled=%d\n", ident->write_dma_queued_fua_ext_enabled);
-    fprintf(stderr, "        world_wide_name_64bit_supported=%d\n", ident->world_wide_name_64bit_supported);
-    fprintf(stderr, "        world_wide_name_64bit_enabled=%d\n", ident->world_wide_name_64bit_enabled);
-    fprintf(stderr, "        idle_immediate_command_supported=%d\n", ident->idle_immediate_command_supported);
-    fprintf(stderr, "        idle_immediate_command_enabled=%d\n", ident->idle_immediate_command_enabled);
-    fprintf(stderr, "        read_write_verify_feature_set_supported=%d\n", ident->read_write_verify_feature_set_supported);
-    fprintf(stderr, "        read_write_verify_feature_set_enabled=%d\n", ident->read_write_verify_feature_set_enabled);
-    fprintf(stderr, "        write_uncorrectable_ext_command_supported=%d\n", ident->write_uncorrectable_ext_command_supported);
-    fprintf(stderr, "        write_uncorrectable_ext_command_enabled=%d\n", ident->write_uncorrectable_ext_command_enabled);
-    fprintf(stderr, "        read_write_log_dma_ext_commands_supported=%d\n", ident->read_write_log_dma_ext_commands_supported);
-    fprintf(stderr, "        read_write_log_dma_ext_commands_enabled=%d\n", ident->read_write_log_dma_ext_commands_enabled);
-    fprintf(stderr, "        download_microcode_command_mode3_supported=%d\n", ident->download_microcode_command_mode3_supported);
-    fprintf(stderr, "        download_microcode_command_mode3_enabled=%d\n", ident->download_microcode_command_mode3_enabled);
-    fprintf(stderr, "        free_fall_control_feature_set_supported=%d\n", ident->free_fall_control_feature_set_supported);
-    fprintf(stderr, "        free_fall_control_feature_set_enabled=%d\n", ident->free_fall_control_feature_set_enabled);
-    fprintf(stderr, "        extended_status_reporting_feature_set_supported=%d\n", ident->extended_status_reporting_feature_set_supported);
-    fprintf(stderr, "        extended_status_reporting_feature_set_enabled=%d\n", ident->extended_status_reporting_feature_set_enabled);
-    fprintf(stderr, "        trim_bit_in_data_set_management_supported=%d\n", ident->trim_bit_in_data_set_management_supported);
-    fprintf(stderr, "    ultra dma modes0..6 supported=%d%d%d%d%d%d%d\n", 
-            ident->ultra_dma_mode0_supported, ident->ultra_dma_mode1_supported, ident->ultra_dma_mode2_supported, ident->ultra_dma_mode3_supported,
-            ident->ultra_dma_mode4_supported, ident->ultra_dma_mode5_supported, ident->ultra_dma_mode6_supported);
-    fprintf(stderr, "    ultra dma modes0..6 selected =%d%d%d%d%d%d%d\n", 
-            ident->ultra_dma_mode0_selected, ident->ultra_dma_mode1_selected, ident->ultra_dma_mode2_selected, ident->ultra_dma_mode3_selected,
-            ident->ultra_dma_mode4_selected, ident->ultra_dma_mode5_selected, ident->ultra_dma_mode6_selected);
-    fprintf(stderr, "    normal_security_erase_unit_time=%d enhanced_security_erase_unit_time=%d\n", ident->normal_security_erase_unit_time, ident->enhanced_security_erase_unit_time);
-    fprintf(stderr, "    current_apm_level=%d\n", ident->current_apm_level);
-    fprintf(stderr, "    master_password_identifier=%d\n", ident->master_password_identifier);
-    fprintf(stderr, "    COMRESET result:\n");
-    fprintf(stderr, "        device0_number_determined_mode=%d\n", ident->device0_number_determined_mode);
-    fprintf(stderr, "        device0_passed_diagnostics=%d\n", ident->device0_passed_diagnostics);
-    fprintf(stderr, "        device0_pdiag_detected=%d\n", ident->device0_pdiag_detected);
-    fprintf(stderr, "        device0_dasp_detected=%d\n", ident->device0_dasp_detected);
-    fprintf(stderr, "        device0_responds_when_device1_selected=%d\n", ident->device0_responds_when_device1_selected);
-    fprintf(stderr, "        device1_number_determined_mode=%d\n", ident->device1_number_determined_mode);
-    fprintf(stderr, "        device1_pdiag_asserted=%d\n", ident->device1_pdiag_asserted);
-    fprintf(stderr, "        device1_detected_cblid_above_vihb=%d\n", ident->device1_detected_cblid_above_vihb);
-    fprintf(stderr, "    current_aam_value=%d vendors_recommended_aam_value=%d\n", ident->current_aam_value, ident->vendors_recommended_aam_value);
-    fprintf(stderr, "    streaming:\n");
-    fprintf(stderr, "        stream_minimum_request_size=%d\n", ident->stream_minimum_request_size);
-    fprintf(stderr, "        streaming_dma_transfer_time=%d\n", ident->streaming_dma_transfer_time);
-    fprintf(stderr, "        streaming_pio_transfer_time=%d\n", ident->streaming_pio_transfer_time);
-    fprintf(stderr, "        streaming_access_latency=%d\n", ident->streaming_access_latency);
-    fprintf(stderr, "        streaming_performance_granularity=%d\n", (u32)ident->streaming_performance_granularity[0] | ((u32)ident->streaming_performance_granularity[1] << 16));
-    fprintf(stderr, "    security:\n");
-    fprintf(stderr, "        security_supported=%d\n", ident->security_supported);
-    fprintf(stderr, "        security_enabled=%d\n", ident->security_enabled);
-    fprintf(stderr, "        security_locked=%d\n", ident->security_locked);
-    fprintf(stderr, "        security_frozen=%d\n", ident->security_frozen);
-    fprintf(stderr, "        security_count_expired=%d\n", ident->security_count_expired);
-    fprintf(stderr, "        master_password_capability=%d\n", ident->master_password_capability);
-    fprintf(stderr, "    CFA power mode1:\n");
-    fprintf(stderr, "        word_160_supported=%d\n", ident->word_160_supported);
-    fprintf(stderr, "        maximum_current=%d\n", ident->maximum_current);
-    fprintf(stderr, "        cfa_power_mode1_disabled=%d\n", ident->cfa_power_mode1_disabled);
-    fprintf(stderr, "        cfa_power_mode1_required_for_some_commands=%d\n", ident->cfa_power_mode1_required_for_some_commands);
-    fprintf(stderr, "    SCT Command Transport:\n");
-    fprintf(stderr, "        sct_command_transport_supported=%d\n", ident->sct_command_transport_supported);
-    fprintf(stderr, "        sct_write_same_command_supported=%d\n", ident->sct_write_same_command_supported);
-    fprintf(stderr, "        sct_error_recovery_control_command_supported=%d\n", ident->sct_error_recovery_control_command_supported);
-    fprintf(stderr, "        sct_feature_control_command_supported=%d\n", ident->sct_feature_control_command_supported);
-    fprintf(stderr, "        sct_data_tables_command_supported=%d\n", ident->sct_data_tables_command_supported);
-    fprintf(stderr, "    NV Cache:\n");
-    fprintf(stderr, "        nv_cache_power_mode_feature_set_supported=%d\n", ident->nv_cache_power_mode_feature_set_supported);
-    fprintf(stderr, "        nv_cache_power_mode_feature_set_enabled=%d\n", ident->nv_cache_power_mode_feature_set_enabled);
-    fprintf(stderr, "        nv_cache_power_mode_feature_set_version=%d\n", ident->nv_cache_power_mode_feature_set_version);
-    fprintf(stderr, "        nv_cache_feature_set_enabled=%d\n", ident->nv_cache_feature_set_enabled);
-    fprintf(stderr, "        nv_cache_feature_set_version=%d\n", ident->nv_cache_feature_set_version);
-    fprintf(stderr, "        nv_cache_size=%d\n", (u32)ident->nv_cache_size[0] | ((u32)ident->nv_cache_size[1] << 16));
-    fprintf(stderr, "    write_read_verify_mode3_sector_count=%d\n", (u32)ident->write_read_verify_mode3_sector_count[0] | ((u32)ident->write_read_verify_mode3_sector_count[1] << 16));
-    fprintf(stderr, "    write_read_verify_mode2_sector_count=%d\n", (u32)ident->write_read_verify_mode2_sector_count[0] | ((u32)ident->write_read_verify_mode2_sector_count[1] << 16));
-    fprintf(stderr, "    read_write_verify_current_mode=%d\n", ident->read_write_verify_current_mode);
-    fprintf(stderr, "    checksum_validity_indicator=0x%02X checksum=0x%02X\n", ident->checksum_validity_indicator, ident->checksum);
+    // Clear interrupt request
+    hba_port->interrupt_status = hba_port->interrupt_status;
 
-    //// Dump 512 bytes at dest_virt
-    //for(u32 i = 0; i < 512; i++) {
-    //    for(u32 j = 0; j < 16; j++, i++) {
-    //        fprintf(stderr, "%02X ", ((u8*)dest_virt)[i]);
-    //    }
-    //    fprintf(stderr, "\n");
-    //}
+#if 0
+    ata_dump_identify_device_response(port_index, (struct ata_identify_device_response*)dest_virt);
+#endif
+
+    // Save the response
+    aport->identify_device_response = (struct ata_identify_device_response*)dest_virt;
+
+    // Calculate the drive space and 
+    _print_device_size(port_index);
+
+    // Free the memory associated with the command table
+    vmem_unmap_page(cmd_table_virt);
+    palloc_abandon(cmd_table_phys, 0);
 }
+
 

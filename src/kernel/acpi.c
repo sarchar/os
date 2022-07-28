@@ -295,7 +295,7 @@ void acpi_init()
 
 }
 
-void _enumerate_namespace(lai_state_t* state, lai_nsnode_t* node, char* path)
+void _enumerate_namespace(lai_state_t* state, lai_nsnode_t* node)
 {
     //char newpath[512];
     //sprintf(newpath, "%s\%s", path, lai_stringify_node_path(node));
@@ -327,9 +327,7 @@ void _enumerate_namespace(lai_state_t* state, lai_nsnode_t* node, char* path)
     lai_nsnode_t* child;
 
     while((child = lai_ns_child_iterate(&child_iter)) != null) {
-        //if(lai_ns_get_parent(child) == node) {
-            _enumerate_namespace(state, child, "");
-        //}
+        _enumerate_namespace(state, child);
     }
 }
 
@@ -350,7 +348,12 @@ void acpi_init_lai()
     //lai_enable_tracing(LAI_TRACE_NS | LAI_TRACE_IO | LAI_TRACE_OP);
     lai_set_acpi_revision(desc->descv1.revision);
     lai_create_namespace();
-    lai_enable_acpi(1);
+    if(lai_enable_acpi(1) != 0) {
+        fprintf(stderr, "acpi: error trying to enable ACPI\n");
+        assert(false, "couldn't enable ACPI, debug me");
+    } else {
+        fprintf(stderr, "acpi: ACPI enabled\n");
+    }
 
     //lai_state_t state;
     //lai_init_state(&state);

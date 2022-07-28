@@ -15,6 +15,7 @@ void paging_init();
 // map a single page into virtual memory
 // flags uses enum MAP_PAGE_FLAGS
 void paging_map_page(intp phys, intp virt, u32 flags);
+intp paging_unmap_page(intp virt); // returns the physical address stored in that page table entry
 
 // unmap a single page
 
@@ -30,5 +31,6 @@ void paging_debug_address(intp);
 
 // TODO this eventually needs to move into a virtual memory manager
 intp vmem_map_page(intp phys, u32 flags);
+intp vmem_unmap_page(intp virt);  // returns the physical address stored in that page table entry
 
 #endif

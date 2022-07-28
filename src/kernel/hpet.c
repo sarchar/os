@@ -216,7 +216,7 @@ void hpet_init()
 
         // map the timer base address into virtual memory
         paging_map_page(timer->address, timer->address, MAP_PAGE_FLAG_DISABLE_CACHE | MAP_PAGE_FLAG_WRITABLE);
-        paging_debug_address(timer->address);
+        //paging_debug_address(timer->address);
 
         // enable the timer
         hpet_timer_enable(timer);

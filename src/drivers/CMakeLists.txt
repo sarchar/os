@@ -1,6 +1,6 @@
 
 # define the target build
-ADD_LIBRARY(drivers STATIC ahci.c)
+ADD_LIBRARY(drivers STATIC ahci.c ata.c)
 
 TARGET_INCLUDE_DIRECTORIES(drivers SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src")
 TARGET_INCLUDE_DIRECTORIES(drivers SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src/uthash_impl")
