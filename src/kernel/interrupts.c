@@ -259,9 +259,6 @@ DEFINE_INTERRUPT_HANDLER(interrupt_kb_handler)
     // read the keyboard character
     scancode = __inb(0x60);
     blocking++;
-
-    // all PIC interrupts need to send the controller the end-of-interrupt command
-    //pic_send_eoi(1);
 }
 
 DEFINE_INTERRUPT_HANDLER(interrupt_timer)

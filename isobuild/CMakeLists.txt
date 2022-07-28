@@ -26,7 +26,9 @@ add_custom_target(run
                                              -device ahci,id=ahci
                                              -device ide-cd,drive=boot,bus=ahci.0
                                              -device ide-hd,drive=extra,bus=ahci.1
-                                             -usbdevice mouse
+                                             -usb
+                                             -device usb-mouse
+                                             -k en-us
                                              #-d int -D int.log
 )
 
@@ -40,8 +42,13 @@ add_custom_target(gdb
                                              -monitor stdio
                                              -smp 4
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
-                                             -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=virtio,media=disk,format=qcow2
-                                             -drive file=${CMAKE_BINARY_DIR}/os.iso,if=virtio,media=cdrom,format=raw
-                                             -usbdevice mouse
+                                             -drive file=${CMAKE_BINARY_DIR}/os.iso,if=none,media=cdrom,format=raw,id=boot
+                                             -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=none,media=disk,format=qcow2,id=extra
+                                             -device ahci,id=ahci
+                                             -device ide-cd,drive=boot,bus=ahci.0
+                                             -device ide-hd,drive=extra,bus=ahci.1
+                                             -usb
+                                             -device usb-mouse
+                                             -k en-us
                                              -s -S
 )
