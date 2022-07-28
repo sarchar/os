@@ -861,8 +861,7 @@ static void _print_device_size(u8 port_index)
     if(!resp->logical_sector_longer_than_256_words) logical_sector_size = 512;
     u64 logical_sector_count = (u64)resp->total_logical_sectors_lba48[0] | ((u64)resp->total_logical_sectors_lba48[1] << 16) 
                                | ((u64)resp->total_logical_sectors_lba48[2] << 32) | ((u64)resp->total_logical_sectors_lba48[3] << 48);
-    //if(!resp->lba48_address_feature_set_supported) 
-        logical_sector_count = (u32)resp->total_logical_sectors[0] | ((u64)resp->total_logical_sectors[1] << 16);
+    if(!resp->lba48_address_feature_set_supported) logical_sector_count = (u32)resp->total_logical_sectors[0] | ((u64)resp->total_logical_sectors[1] << 16);
     fprintf(stderr, "ahci: port %d device has size=%llu bytes, sector size = %d\n", port_index, logical_sector_count * logical_sector_size, logical_sector_size);
 }
 
