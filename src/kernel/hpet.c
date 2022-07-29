@@ -3,6 +3,7 @@
 #include "bootmem.h"
 #include "cpu.h"
 #include "hpet.h"
+#include "interrupts.h"
 #include "kernel.h"
 #include "paging.h"
 #include "stdio.h"
@@ -100,6 +101,8 @@ static struct hpet_timer** timers = null;
 static u8 num_timers;
 static u8 num_comparators;
 
+u64 volatile global_ticks = 0;
+
 static inline u64 _read_register(struct hpet_timer* timer, u8 reg)
 {
     return *(u64 volatile*)(timer->address + reg);
@@ -130,6 +133,13 @@ static __always_inline u64 _timer_period(struct hpet_timer* timer, u64 time_in_m
     // by 10^15/10^15 to get t*10^15/time_per_tick_in_femtoseconds.  Now let's specify t in microseconds
     // to get (t/10^6)*10^15/time_per_tick_in_femtoseconds = t*10^9/time_per_tick_in_femtoseconds:
     return (time_in_microseconds * 1000000000ULL) / timer->period;
+}
+
+static void _timer_interrupt(intp pc, void* userdata)
+{
+    unused(pc);
+    unused(userdata);
+    global_ticks++;
 }
 
 void hpet_notify_timer_count(u8 num_hpets)
@@ -185,19 +195,19 @@ void hpet_timer_enable(struct hpet_timer* timer)
     _write_register(timer, HPET_CONFIGURATION_REGISTER, HPET_CONF_FLAG_ENABLE_TIMER);
 }
 
-static void _enable_kernel_timer(u8 global_interrupt_number)
+static void _enable_kernel_timer(u8 io_apic_interrupt_line)
 {
     struct hpet_comparator* comp = &timers[0]->comparators[0];
     u64 timer_period = _timer_period(comp->timer, 1000); // 1ms/1kHz
     //fprintf(stderr, "hpet: 1ms timer requires counter ticks=%u for timer with clock=%ue-15 sec/cycle\n",
     //        timer_period, comp->timer->period);
 
-    assert((comp->interrupt_map & (global_interrupt_number << 1)) != 0, "must be capable of routing that irq");
+    assert((comp->interrupt_map & (io_apic_interrupt_line << 1)) != 0, "must be capable of routing that irq");
 
     u64 configuration = comp->cap_conf & HPET_COMPARATOR_CAP_CONF_WRITABLE_BITS_MASK;
 
     configuration &= ~HPET_COMPARATOR_CONF_ALL_MASKS;
-    configuration |= (global_interrupt_number << HPET_COMPARATOR_CONF_APIC_ROUTE_SHIFT) | 
+    configuration |= (io_apic_interrupt_line << HPET_COMPARATOR_CONF_APIC_ROUTE_SHIFT) | 
                      HPET_COMPARATOR_CONF_SET_VALUE_MASK | HPET_COMPARATOR_CONF_MODE_MASK; // MODE_MASK enables periodic mode
 
     _write_comparator_register(comp, HPET_COMPARATOR_CAPABILITIES_REGISTER, configuration);
@@ -226,8 +236,11 @@ void hpet_init()
     // TODO loop over valid irqs (comp->interrupt_map)
     // TODO and convert global irq number to cpu irq number
     // TODO apic_is_irq_slot_available / apic_map_global_to_cpu
-    // TODO install interrupt handler with local function
+    // install interrupt handler with local function
+    interrupts_install_handler(80, _timer_interrupt, null);
     // then map the timer/comparator to the global irq number
+
+    // finally, enable the timer on with I/O APIC irq number 19 (TODO dynamically allocate this #)
     _enable_kernel_timer(19);
 }
 

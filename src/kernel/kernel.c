@@ -24,7 +24,6 @@
 
 volatile u32 blocking = 0;
 u8 scancode;
-extern u64 global_ticks;
 
 extern void _gdt_fixup(intp vma_base);
 
@@ -43,6 +42,16 @@ __noreturn void kernel_panic(u32 error)
 }
 
 void kernel_main(struct multiboot_info*);
+
+static void _kb_interrupt(intp pc, void* userdata)
+{
+    unused(pc);
+    unused(userdata);
+
+    // read the keyboard character
+    scancode = __inb(0x60);
+    blocking++;
+}
 
 static void initialize_kernel(struct multiboot_info* multiboot_info)
 {
@@ -70,6 +79,7 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // immediately setup and enable interrupts
     interrupts_init();
+    interrupts_install_handler(33, _kb_interrupt, null);
 
     // take over from the bootmem allocator
     palloc_init();
@@ -94,11 +104,17 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // enable the kernel timer
     hpet_init();
 
+    // map PCI into virtual memory
+    pci_init();
+
     // finish ACPI initialization
     acpi_init_lai();
 
     // enumerate system devices
-    pci_init();
+    // in the future, this could happen after all drivers are "loaded",
+    // and then as devices are discovered they can be mapped into their respective drivers
+    // right now, drivers search for devices they're interested in
+    pci_enumerate_devices();
 
     // TODO enable high memory in palloc after paging is initialized
 }
@@ -138,8 +154,8 @@ void kernel_main(struct multiboot_info* multiboot_info)
                 fprintf(stderr, "calling lai_acpi_sleep(5)\n");
                 lai_enter_sleep(5);
             } else if(scancode == 25) { // 'p'
-                //pci_dump_device_list();
-                ahci_dump_registers();
+                pci_dump_device_list();
+                //ahci_dump_registers();
             }
 
             for(u32 y = 0; y < 16; y++) {

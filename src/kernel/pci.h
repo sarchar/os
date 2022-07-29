@@ -69,6 +69,14 @@ enum PCI_STATUS_FLAG {
     PCI_STATUS_FLAG_DETECTED_PARITY_ERROR    = 1 << 15,
 };
 
+enum PCI_BAR {
+    PCI_BAR_TYPE             = 0x03 << 1,
+    PCI_BAR_TYPE_32BIT       = 0x0 << 1,
+    PCI_BAR_TYPE_64BIT       = 0x2 << 1,
+    PCI_BAR_PREFETCHABLE     = 1 << 3,
+    PCI_BAR_NON_ADDRESS_BITS = 0x0F
+};
+
 struct pci_segment_group {
     struct pci_segment_group* next;
     intp   base_address;
@@ -91,21 +99,22 @@ struct pci_vendor_info {
 };
 
 struct pci_inplace_configuration;
+struct pci_msi;
+
 struct pci_device_info {
     struct pci_segment_group* group;
     struct pci_vendor_info* vendor;
-    struct pci_inplace_configuration* config;
-
-    u16 device_id;
-    u16 unused0;
+    struct pci_inplace_configuration volatile* config;
+    struct pci_msi volatile* msi;
 
     u8  bus;
     u8  device;
     u8  function;
-    u8  unused1;
+    u8  unused0;
+    u32 unused1;
 
     MAKE_HASH_TABLE;
-    u8  unused2[til_next_power_of_2(HT_OVERHEAD+32)];
+    u8  unused2[til_next_power_of_2(HT_OVERHEAD+40)];
 } __packed;
 
 // maps PCI configuration space exactly to this struct so that it's convenient to access
@@ -208,12 +217,56 @@ struct pci_inplace_configuration {
     };
 } __packed;
 
+enum PCI_CAPABILITY_IDS {
+    PCI_CAPABILITY_ID_MSI = 0x05
+};
+
+struct pci_capability_header {
+    u8 capability_id;
+    u8 next_pointer;
+} __packed;
+
+struct pci_msi {
+    struct pci_capability_header header; // PCI_CAPABILITY_ID_MSI
+
+    struct {
+        u8 enable                     : 1;
+        u8 multiple_message_capable   : 3;
+        u8 multiple_message_enable    : 3;
+        u8 address_64bit              : 1;
+        u8 per_vector_masking_capable : 1;
+        u8 reserved0                  : 7;
+    } __packed;
+
+    u32 message_address;
+    u32 message_address_h;
+
+    u16 message_data;
+    u16 reserved1;
+
+    u32 mask;
+    u32 pending;
+} __packed;
+
 void pci_notify_segment_group(u16 segment_id, intp base_address, u8 start_bus, u8 end_bus);
 void pci_init();
+void pci_enumerate_devices();
 void pci_dump_device_list();
 
 typedef bool (*pci_iterate_devices_cb)(struct pci_device_info*, void*);
 void pci_iterate_devices(pci_iterate_devices_cb, void*);
 void pci_iterate_vendor_devices(u16, pci_iterate_devices_cb, void*);
+
+u64 pci_device_get_bar_size(struct pci_device_info*, u8);
+intp pci_device_map_bar(struct pci_device_info*, u8);
+void pci_device_unmap_bar(struct pci_device_info*, u8, intp);
+
+u32 pci_setup_msi(struct pci_device_info*, u8);
+void pci_set_enable_msi(struct pci_device_info*, bool);
+
+// direct access to reading from configuration space without using inplace headers
+u32 pci_read_configuration_u32(u8, u8, u8, u16, struct pci_segment_group*);
+u16 pci_read_configuration_u16(u8, u8, u8, u16, struct pci_segment_group*);
+u8  pci_read_configuration_u8(u8, u8, u8, u16, struct pci_segment_group*);
 
 #endif

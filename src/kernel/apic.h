@@ -41,4 +41,6 @@ void apic_set_io_apic_redirection(u8 io_apic_irq, u8 cpu_irq, u8 delivery_mode, 
 void apic_io_apic_enable_interrupt(u8 io_apic_irq);
 void apic_io_apic_disable_interrupt(u8 io_apic_irq);
 
+intp apic_get_lapic_base(u8 lapic_index);
+
 #endif

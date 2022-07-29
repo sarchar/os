@@ -180,6 +180,7 @@ void apic_notify_acpi_io_apic_interrupt_source_override(u8 bus_source, u8 irq_so
     unused(bus_source);
     unused(irq_source);
     unused(global_system_interrupt);
+    fprintf(stderr, "apic: registering interrupt source override bus=%d irq=%d gsi=%d flags=%d\n", bus_source, irq_source, global_system_interrupt, flags);
 }
 
 void apic_notify_acpi_local_apic(intp lapic_base, bool system_has_pic)
@@ -216,3 +217,9 @@ void _send_lapic_eoi()
     _write_lapic(LAPIC_EOI_REG, 0);
 }
 
+intp apic_get_lapic_base(u8 lapic_index)
+{
+    assert(_has_lapic(), "must be initialized before this call");
+    assert(lapic_index == 0, "TODO only supports lapic 0 for now");
+    return local_apic.base;
+}

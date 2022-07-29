@@ -9,17 +9,19 @@ global _interrupt_handler_common:function (_interrupt_handler_common.end - _inte
 _interrupt_handler_common:
     ; the caller to this function has placed the error code, if any, into rdi, the actual irq handler into rax
     ; and has saved both of those registers before jumping here
-    push rdx             ; Save registers. TODO save allll the registers.
+
+    ; TODO save allll the registers.
 
     cld                  ; C code following the SysV ABI requires DF to be clear on function entry
     call rax             ; Call the C function handler
     call _send_lapic_eoi ; end of interrupt
 
-    pop rdx              ; Restore all the registers
+    ; TODO Restore alllll the registers
 
     ; these registers were saved before the call to _interrupt_handler_common
     pop rsi
     pop rdi
+    pop rdx
     pop rax
 
     iretq               ; Return from interrupt

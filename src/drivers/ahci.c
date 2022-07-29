@@ -3,6 +3,7 @@
 #include "ahci.h"
 #include "ata.h"
 #include "hpet.h"
+#include "interrupts.h"
 #include "kalloc.h"
 #include "paging.h"
 #include "palloc.h"
@@ -328,6 +329,14 @@ static void _dump_port_registers(u8, char*);
 static inline s8 _find_free_command_slot(u8);
 static void _identify_device(u8);
 
+static u64 ahci_irq = 0;
+static void _ahci_interrupt(intp pc, void* userdata)
+{
+    unused(pc);
+    unused(userdata);
+    ahci_irq = 1;
+}
+
 static bool _find_ahci_device_cb(struct pci_device_info* dev, void* userinfo)
 {
     if(dev->config->class == PCI_CLASS_MASS_STORAGE && dev->config->subclass == PCI_SUBCLASS_MS_SATA) {
@@ -348,13 +357,10 @@ void ahci_load()
         return;
     }
 
-    fprintf(stderr, "ahci: found device %04X:%04X\n", dev->vendor->vendor_id, dev->device_id);
+    fprintf(stderr, "ahci: found device %04X:%04X (irq = %d)\n", dev->config->vendor_id, dev->config->device_id, dev->config->h0.interrupt_line);
 
     // also known as ABAR in the documentation
-    ahci_base_memory = (struct hba_memory*)(intp)dev->config->h0.bar[5];
-
-    // memory map one page at ABAR
-    paging_map_page((intp)ahci_base_memory, (intp)ahci_base_memory, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    ahci_base_memory = (struct hba_memory*)pci_device_map_bar(dev, 5);
 
     // copy over a few cached items that will be lost upon HBA reset
     ahci_cached_memory.capabilities = ahci_base_memory->capabilities;
@@ -370,7 +376,10 @@ void ahci_load()
     // perform OS handover
     _declare_ownership();
 
-    // TODO map the interrupt from the PCI device to a new interrupt callback here in this module
+    // map the interrupt from the PCI device to a new interrupt callback here in this module
+    u32 cpu_irq = pci_setup_msi(dev, 1);
+    pci_set_enable_msi(dev, true);
+    interrupts_install_handler(cpu_irq, _ahci_interrupt, null);
 
     // reset the HBA
     if(!_reset_controller()) return;
@@ -865,6 +874,7 @@ static void _print_device_size(u8 port_index)
     fprintf(stderr, "ahci: port %d device has size=%llu bytes, sector size = %d\n", port_index, logical_sector_count * logical_sector_size, logical_sector_size);
 }
 
+
 static void _identify_device(u8 port_index)
 {
     u64 tmp;
@@ -883,7 +893,7 @@ static void _identify_device(u8 port_index)
 	zero(hdr);
 
     // allocate space for a command table and PRDs
-    intp cmd_table_phys = (intp)palloc_claim_one();
+    intp cmd_table_phys = (intp)palloc_claim_one(); // command table must be 128 byte aligned
     intp cmd_table_virt = vmem_map_page(cmd_table_phys, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 
     // point the header at the new command table
@@ -940,8 +950,9 @@ static void _identify_device(u8 port_index)
     }
 
     // Wait for PIO Setup IRQ
-    wait_until_true(hba_port->interrupt_status & HBAP_INTERRUPT_STATUS_FLAG_PIO_SETUP, 1000000, tmp) {
-        fprintf(stderr, "ahci: port %d timed out waiting for PIO Setup interrupt\n", port_index);
+//    wait_until_true(hba_port->interrupt_status & HBAP_INTERRUPT_STATUS_FLAG_D2H_REGISTER_FIS, 1000000, tmp) {
+    wait_until_true(ahci_irq, 1000000, tmp) {
+        fprintf(stderr, "ahci: port %d timed out waiting for D2H interrupt\n", port_index);
         // TODO free memory and return error
     } 
 
@@ -961,6 +972,8 @@ static void _identify_device(u8 port_index)
     // Free the memory associated with the command table
     vmem_unmap_page(cmd_table_virt);
     palloc_abandon(cmd_table_phys, 0);
+    hdr->command_table_base   = 0;
+    hdr->command_table_base_h = 0;
 }
 
 

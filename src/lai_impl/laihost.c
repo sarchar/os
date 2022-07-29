@@ -6,11 +6,14 @@
 #include "cpu.h"
 #include "kalloc.h"
 #include "kernel.h"
+#include "pci.h"
 #include "stdio.h"
 
 // Logs a message. level can either be LAI_DEBUG_LOG for debugging info, or LAI_WARN_LOG for warnings 
 void laihost_log(int level, const char *msg)
 {
+    unused(level);
+    unused(msg);
 //    fprintf(stderr, "acpi: lai(%d): %s\n", level, msg);
 }
 
@@ -89,39 +92,24 @@ uint8_t laihost_pci_readb(uint16_t seg, uint8_t bus, uint8_t slot, uint8_t fun, 
 {
 //    fprintf(stderr, "laihost_pci_readb(seg=%d, bus=%d, slot=%d, fun=%d, offset=%d)\n",
 //            seg, bus, slot, fun, offset);
-
-//    __outl(0xCF8, (bus << 16) | (slot << 11) | (fun << 8) | (offset & 0xFFFF) | 0x80000000);
-//    return __inb(0xCFC + (offset % 4));
-    unused(seg);
-    unused(bus);
-    unused(slot);
-    unused(fun);
-    unused(offset);
-    return 0xFF;
+    assert(seg == 0, "for now seg must be 0");
+    return pci_read_configuration_u8(bus, slot, fun, offset, null);
 }
 
 uint16_t laihost_pci_readw(uint16_t seg, uint8_t bus, uint8_t slot, uint8_t fun, uint16_t offset)
 {
 //    fprintf(stderr, "laihost_pci_readw(seg=%d, bus=%d, slot=%d, fun=%d, offset=%d)\n",
 //            seg, bus, slot, fun, offset);
-    unused(seg);
-    unused(bus);
-    unused(slot);
-    unused(fun);
-    unused(offset);
-    return 0xFF;
+    assert(seg == 0, "for now seg must be 0");
+    return pci_read_configuration_u16(bus, slot, fun, offset, null);
 }
 
 uint32_t laihost_pci_readd(uint16_t seg, uint8_t bus, uint8_t slot, uint8_t fun, uint16_t offset)
 {
 //    fprintf(stderr, "laihost_pci_readd(seg=%d, bus=%d, slot=%d, fun=%d, offset=%d)\n",
 //            seg, bus, slot, fun, offset);
-    unused(seg);
-    unused(bus);
-    unused(slot);
-    unused(fun);
-    unused(offset);
-    return 0xFF;
+    assert(seg == 0, "for now seg must be 0");
+    return pci_read_configuration_u32(bus, slot, fun, offset, null);
 }
 
 // Sleeps for the given amount of milliseconds. Can be stubbed on emulators 
@@ -138,7 +126,7 @@ void* laihost_map(size_t address, size_t count)
     unused(count);
     // AHCI has already been mapped and any 'address' that has been allocated from kalloc() will have been
     // allocated from an identity-mapped memory pool. TODO one day I'll have a kernel space virtual memory manager!
-//    fprintf(stderr, "laihost_map(address=0x%lX, count=%d)\n", address, count);
+    fprintf(stderr, "laihost_map(address=0x%lX, count=%d)\n", address, count);
     return (void*)address;
 }
 

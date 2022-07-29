@@ -355,20 +355,22 @@ void acpi_init_lai()
         fprintf(stderr, "acpi: ACPI enabled\n");
     }
 
-    //lai_state_t state;
-    //lai_init_state(&state);
+#if 0
+    lai_state_t state;
+    lai_init_state(&state);
 
-    //struct lai_ns_iterator iter;
-    //lai_initialize_ns_iterator(&iter);
-    //lai_nsnode_t* node;
-    //while((node = lai_ns_iterate(&iter)) != null) {
-    //    //determine depth
-    //    if(lai_ns_get_parent(node) == lai_ns_get_root()) {
-    //        _enumerate_namespace(&state, node, "");
-    //    }
-    //}
+    struct lai_ns_iterator iter;
+    lai_initialize_ns_iterator(&iter);
+    lai_nsnode_t* node;
+    while((node = lai_ns_iterate(&iter)) != null) {
+        //determine depth
+        if(lai_ns_get_parent(node) == lai_ns_get_root()) {
+            _enumerate_namespace(&state, node);
+        }
+    }
 
-    //lai_finalize_state(&state);
+    lai_finalize_state(&state);
+#endif
 }
 
 // return a virtual memory address pointer to the ACPI table matching signature 'sig'
