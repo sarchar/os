@@ -158,12 +158,6 @@ void kernel_main(struct multiboot_info* multiboot_info)
                 //ahci_dump_registers();
             }
 
-            for(u32 y = 0; y < 16; y++) {
-                for(u32 x = 0; x < 16; x++) {
-                    efifb_putpixel(16+x+count*32, 600+y, COLOR(255, 255, 255));
-                }
-            }
-
             blocking--;
             count++;
             __sti();

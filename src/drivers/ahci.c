@@ -486,7 +486,7 @@ void ahci_load()
         _identify_device(i);
 
         if(!ahci_device_ports[i]->is_atapi) {
-            _write_device(i);
+            //_write_device(i);
             _read_device(i);
         }
     }
@@ -1072,8 +1072,10 @@ static void _identify_device(u8 port_index)
     _set_h2d_fis(hdr, tbl, 1, aport->is_atapi ? ATA_COMMAND_IDENTIFY_PACKET_DEVICE : ATA_COMMAND_IDENTIFY_DEVICE, 0, 0, 0);
 
     // set up a destination PRDT
-    intp dest_phys = (intp)palloc_claim_one();
-    intp dest_virt = vmem_map_page(dest_phys, MAP_PAGE_FLAG_WRITABLE);
+//    intp dest_phys = (intp)palloc_claim_one();
+    intp dest_phys = (intp)kalloc(512);
+//    intp dest_virt = vmem_map_page(dest_phys, MAP_PAGE_FLAG_WRITABLE);
+    intp dest_virt = dest_phys;
     _set_prdt_entry(tbl, 0, dest_phys, 512, true);
 
     // TODO is this necessary?
@@ -1133,7 +1135,7 @@ static void _read_device(u8 port_index)
     struct hba_command_table* tbl = _create_command_table(hdr, 1);
 
     // set up the READ DMA EXT command
-    u64 start_lba = 0;           // read from offset 0
+    u64 start_lba = 2;           // read from offset 1024
     u16 num_sectors = 4096/512;  // read 8 sectors == 4096 bytes == 1 page
     _set_h2d_fis(hdr, tbl, 1, ATA_COMMAND_READ_DMA_EXT, (1 << 6), start_lba, num_sectors);
 
@@ -1163,21 +1165,24 @@ static void _read_device(u8 port_index)
         // TODO free memory and return error
     }
 
-    // print the first 16 bytes of the response
-    fprintf(stderr, "ahci: port %d received: ", port_index);
-    for(u32 i = 0; i < 16; i++) {
-        fprintf(stderr, "%02X ", ((u8 volatile*)dest_virt)[i]);
-    }
-    fprintf(stderr, "- ");
-    for(u32 i = 0; i < 16; i++) {
-        u8 c = ((u8 volatile*)dest_virt)[i];
-        if(c >= 0x20 && c <= 0x7f) {
-            fprintf(stderr, "%c", c);
-        } else {
-            fprintf(stderr, ".");
+    // print 512 bytes in 16 byte lines
+    fprintf(stderr, "ahci: port %d received:\n", port_index);
+    for(u32 offs = 0; offs < 512; offs += 16) {
+        fprintf(stderr, "    %04X: ", offs);
+        for(u32 i = 0; i < 16; i++) {
+            fprintf(stderr, "%02X ", ((u8 volatile*)dest_virt)[offs+i]);
         }
+        fprintf(stderr, "- ");
+        for(u32 i = 0; i < 16; i++) {
+            u8 c = ((u8 volatile*)dest_virt)[offs+i];
+            if(c >= 0x20 && c <= 0x7f) {
+                fprintf(stderr, "%c", c);
+            } else {
+                fprintf(stderr, ".");
+            }
+        }
+        fprintf(stderr, "\n");
     }
-    fprintf(stderr, "\n");
 
     // Free the read destination memory
     vmem_unmap_page(dest_virt);
