@@ -167,26 +167,22 @@ static void _check_capabilities(struct pci_device_info* dev)
 
     struct pci_capability_header volatile* caphdr = 
         (struct pci_capability_header volatile*)PCI_CONF_ADDRESS(dev->group, dev->bus, dev->device, dev->function, dev->config->h0.capability_pointer);
-    fprintf(stderr, "     capabilities_list=0x%lX caphdr=0x%lX:\n", dev->config->h0.capability_pointer, (intp)caphdr);
+    //fprintf(stderr, "     capabilities_list=0x%lX caphdr=0x%lX:\n", dev->config->h0.capability_pointer, (intp)caphdr);
 
     for(;;) {
-        fprintf(stderr, "        id=%d next_pointer=0x%02X\n", caphdr->capability_id, caphdr->next_pointer);
+        //fprintf(stderr, "        id=%d next_pointer=0x%02X\n", caphdr->capability_id, caphdr->next_pointer);
 
         switch(caphdr->capability_id) {
         case PCI_CAPABILITY_ID_MSI:
             dev->msi = (struct pci_msi volatile*)caphdr;
-            {
-                // go ahead an enable MSI
-//                dev->msi->enable = 1;
-//                dev->msi->message_data = (84 & 0xFF) | (1 << 14);               // GSI 20, rising edge trigger
-//                dev->msi->message_address = (intp)0xFEE00000 | ((intp)0 << 12); // LAPIC 0
-                fprintf(stderr, "            msi_enable=%d multiple_message_capable=%d multiple_message_enable=%d address_64bit=%d per_vector_masking_capable=%d\n",
-                        dev->msi->enable, dev->msi->multiple_message_capable, dev->msi->multiple_message_enable, dev->msi->address_64bit, dev->msi->per_vector_masking_capable);
-                fprintf(stderr, "            message_address=0x%lX\n", dev->msi->message_address);
-            }
+            //{
+            //    fprintf(stderr, "            msi_enable=%d multiple_message_capable=%d multiple_message_enable=%d address_64bit=%d per_vector_masking_capable=%d\n",
+            //            dev->msi->enable, dev->msi->multiple_message_capable, dev->msi->multiple_message_enable, dev->msi->address_64bit, dev->msi->per_vector_masking_capable);
+            //    fprintf(stderr, "            message_address=0x%lX\n", dev->msi->message_address);
+            //}
             break;
         default:
-            fprintf(stderr, "pci: unknown capability %d for device %d:%d.%d\n", caphdr->capability_id, dev->bus, dev->device, dev->function);
+            //fprintf(stderr, "pci: unknown capability %d for device %d:%d.%d\n", caphdr->capability_id, dev->bus, dev->device, dev->function);
             break;
         }
 

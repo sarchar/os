@@ -126,7 +126,7 @@ void* laihost_map(size_t address, size_t count)
     unused(count);
     // AHCI has already been mapped and any 'address' that has been allocated from kalloc() will have been
     // allocated from an identity-mapped memory pool. TODO one day I'll have a kernel space virtual memory manager!
-    fprintf(stderr, "laihost_map(address=0x%lX, count=%d)\n", address, count);
+//    fprintf(stderr, "laihost_map(address=0x%lX, count=%d)\n", address, count);
     return (void*)address;
 }
 

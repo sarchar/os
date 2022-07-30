@@ -172,7 +172,7 @@ static intp _unmap_page(intp virt)
     assert((virt >> 47) == 0 || (virt >> 47) == 0x1FFFF, "virtual address must be canonical");
     assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
 
-    fprintf(stderr, "paging: unmapping page at 0x%08lX\n", virt);
+    //fprintf(stderr, "paging: unmapping page at 0x%08lX\n", virt);
 
     // shift right 12 for pt1
     // shift right 21 for pt2
