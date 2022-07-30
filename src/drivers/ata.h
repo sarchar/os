@@ -2,6 +2,8 @@
 #define __ATA_H__
 
 enum ATA_COMMANDS {
+    ATA_COMMAND_READ_DMA_EXT           = 0x25,
+    ATA_COMMAND_WRITE_DMA_EXT          = 0x35,
     ATA_COMMAND_IDENTIFY_PACKET_DEVICE = 0xA1,
     ATA_COMMAND_IDENTIFY_DEVICE        = 0xEC
 };
@@ -35,7 +37,10 @@ struct ata_identify_device_response {
     u16 specific_configuration;   // optional
     u16 reserved2[7];
 
+    // word 10
     u16 serial_number[10];        // string with byte-swapped words
+
+    // word 20
     u16 reserved3[3];
 
     u16 firmware_revision[4];
@@ -90,7 +95,7 @@ struct ata_identify_device_response {
     } __packed;
 
     // word #60
-    u16 total_logical_sectors[2]; // total number of user addressable logical sectors
+    u16 total_logical_sectors[2]; // total number of user addressable logical sectors (not available for ATAPI)
     u16 reserved12;
 
     struct {

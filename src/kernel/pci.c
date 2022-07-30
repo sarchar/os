@@ -331,7 +331,7 @@ u32 pci_setup_msi(struct pci_device_info* dev, u8 num_irqs)
     u8 cpu_irq = 100 + dev->device * 8 + dev->function; 
 
     dev->msi->message_data = (cpu_irq & 0xFF) | (1 << 14);          // rising edge trigger
-    dev->msi->message_address = apic_get_lapic_base(0); //(intp)0xFEE00000 | ((intp)0 << 12); // LAPIC 0
+    dev->msi->message_address = apic_get_lapic_base(0);
 
     return cpu_irq;
 }
