@@ -171,7 +171,7 @@ void palloc_init()
     }
 }
 
-void* palloc_claim(u8 n) // allocate 2^n pages
+intp palloc_claim(u8 n) // allocate 2^n pages
 {
     assert(n < PALLOC_MAX_ORDER, "n must be a valid order size");
 
@@ -182,7 +182,7 @@ void* palloc_claim(u8 n) // allocate 2^n pages
     while(order < PALLOC_MAX_ORDER && free_page_head[order]->next == null) order++;
 
     // out of memory?
-    if(order == PALLOC_MAX_ORDER) return null;
+    if(order == PALLOC_MAX_ORDER) return 0;
 
     // remove the head from the current order
     struct free_page* left = free_page_head[order]->next;
@@ -224,7 +224,7 @@ void* palloc_claim(u8 n) // allocate 2^n pages
     palloc_togglebit(left, order, null);
 
     // return the page
-    return (void*)left;
+    return (intp)left;
 }
 
 void palloc_abandon(intp base, u8 n)

@@ -1166,6 +1166,7 @@ static void _read_device(u8 port_index)
     }
 
     // print 512 bytes in 16 byte lines
+#if 0
     fprintf(stderr, "ahci: port %d received:\n", port_index);
     for(u32 offs = 0; offs < 512; offs += 16) {
         fprintf(stderr, "    %04X: ", offs);
@@ -1183,6 +1184,7 @@ static void _read_device(u8 port_index)
         }
         fprintf(stderr, "\n");
     }
+#endif
 
     // Free the read destination memory
     vmem_unmap_page(dest_virt);

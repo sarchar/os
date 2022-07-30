@@ -21,11 +21,12 @@
 #include "terminal.h"
 
 #include "drivers/ahci.h"
-
-volatile u32 blocking = 0;
-u8 scancode;
+#include "drivers/ps2keyboard.h"
 
 extern void _gdt_fixup(intp vma_base);
+void kernel_main(struct multiboot_info*);
+
+static u8 volatile exit_kernel = 0;
 
 __noreturn void kernel_panic(u32 error)
 {
@@ -39,18 +40,6 @@ __noreturn void kernel_panic(u32 error)
 
     // loop forever
     while(1) { asm("hlt"); }
-}
-
-void kernel_main(struct multiboot_info*);
-
-static void _kb_interrupt(intp pc, void* userdata)
-{
-    unused(pc);
-    unused(userdata);
-
-    // read the keyboard character
-    scancode = __inb(0x60);
-    blocking++;
 }
 
 static void initialize_kernel(struct multiboot_info* multiboot_info)
@@ -79,7 +68,6 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // immediately setup and enable interrupts
     interrupts_init();
-    interrupts_install_handler(33, _kb_interrupt, null);
 
     // take over from the bootmem allocator
     palloc_init();
@@ -121,7 +109,62 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
 static void load_drivers()
 {
+    ps2keyboard_load();
     ahci_load();
+}
+
+static void run_command(char* cmdbuffer)
+{
+    if(strcmp(cmdbuffer, "pf") == 0) {
+        *(u64 *)0x00007ffc00000000 = 1;    // page fault
+    } else if(strcmp(cmdbuffer, "div0") == 0) {
+        __asm__ volatile("div %0" : : "c"(0));  // division by 0 error
+    } else if(strcmp(cmdbuffer, "gpf") == 0) {
+        *(u32 *)0xf0fffefe00000000 = 1;  // gpf because address isn't canonical
+    } else if(strcmp(cmdbuffer, "reboot") == 0) {
+        fprintf(stderr, "calling lai_acpi_reset()\n");
+        lai_api_error_t err = lai_acpi_reset();
+        // we shouldn't see this, but sometimes ACPI reset isn't supported
+        fprintf(stderr, "error = %s\n", lai_api_error_to_string(err));
+        acpi_reset();
+    } else if(strcmp(cmdbuffer, "sleep") == 0) {
+        fprintf(stderr, "calling lai_acpi_sleep(5)\n");
+        lai_enter_sleep(5);
+    } else if(strcmp(cmdbuffer, "pci") == 0) {
+        pci_dump_device_list();
+    } else if(strcmp(cmdbuffer, "ahci") == 0) {
+        ahci_dump_registers();
+    } else if(strcmp(cmdbuffer, "exit") == 0) {
+        exit_kernel = 1;
+    }
+}
+
+static void handle_keypress(char c, void* userdata)
+{
+    static char cmdbuffer[512];
+    static u32 cmdlen = 0;
+
+    unused(userdata);
+
+    if(c == '\t') return;
+    else if(c == '\n') {
+        terminal_putc((u16)c);
+
+        cmdbuffer[cmdlen] = 0;
+        run_command(cmdbuffer);
+        cmdlen = 0;
+
+        fprintf(stderr, "> ");
+    } else if(c == '\b') {
+        // TODO
+    } else {
+        // save the final byte for \0
+        if(cmdlen < 511) {
+            cmdbuffer[cmdlen++] = c;
+        }
+
+        terminal_putc((u16)c);
+    }
 }
 
 void kernel_main(struct multiboot_info* multiboot_info) 
@@ -129,39 +172,14 @@ void kernel_main(struct multiboot_info* multiboot_info)
     initialize_kernel(multiboot_info);
     load_drivers();
 
-    fprintf(stderr, "kernel ready...\n");
+    ps2keyboard_hook_ascii(&handle_keypress, null);
 
-    // testing loop
-    u32 count = 0;
-    while(1) {
-        while(blocking > 0) {
-            __cli();
-            fprintf(stderr, "kb: %d, global_ticks = %llu\n", scancode, global_ticks);
+    fprintf(stderr, "kernel ready...\n\n");
+    fprintf(stderr, "> ");
 
-            // F1 - page fault, F2 - gpf, F3 - division by 0
-            if(scancode == 59) {
-                *(u64 *)0x00007ffc00000000 = 1;    // page fault
-            } else if(scancode == 60) {
-                *(u32 *)0xf0fffefe00000000 = 1;  // gpf because address isn't canonical
-            } else if(scancode == 61) {
-                __asm__ volatile("div %0" : : "c"(0));  // division by 0 error
-            } else if(scancode == 62) {
-                fprintf(stderr, "calling lai_acpi_reset()\n");
-                lai_api_error_t err = lai_acpi_reset();
-                fprintf(stderr, "error = %s\n", lai_api_error_to_string(err));
-                acpi_reset();
-            } else if(scancode == 63) {
-                fprintf(stderr, "calling lai_acpi_sleep(5)\n");
-                lai_enter_sleep(5);
-            } else if(scancode == 25) { // 'p'
-                pci_dump_device_list();
-                //ahci_dump_registers();
-            }
-
-            blocking--;
-            count++;
-            __sti();
-        }
+    // update drivers forever (they should just use kernel tasks in the future)
+    while(!exit_kernel) {
+        ps2keyboard_update();
     }
 
     fprintf(stderr, "...exiting kernel code...\n");
