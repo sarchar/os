@@ -30,6 +30,7 @@ set(CMAKE_RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/bin)
 
 # Include the kernel code
 ADD_SUBDIRECTORY(src/drivers)
+ADD_SUBDIRECTORY(src/fs)
 ADD_SUBDIRECTORY(src/kernel)
 ADD_SUBDIRECTORY(src/lai_impl)
 ADD_SUBDIRECTORY(src/pdclib_impl)
