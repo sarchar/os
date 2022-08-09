@@ -116,9 +116,9 @@ static void load_drivers()
 
 static char current_directory[256] = "/";
 
-static s64 open_directory(char* path, struct ext2_inode** inode)
+static s64 open_directory(char* path, struct inode** inode)
 {
-    struct ext2_inode* parent = null;
+    struct inode* parent = null;
     if(path[0] != '/') {
         if(open_directory(current_directory, &parent) < 0) return -1;
     } else {
@@ -145,7 +145,7 @@ static s64 open_directory(char* path, struct ext2_inode** inode)
         // loop over the directory entries looking for a match
         struct ext2_dirent_iter iter = EXT2_DIRENT_ITER_INIT(parent);
         struct ext2_dirent* dirent;
-        struct ext2_inode* child = null;
+        struct inode* child = null;
 
         while((dirent = ext2_dirent_iter_next(&iter)) != null) {
             // check if the name matches in length first, then the name itself
@@ -153,7 +153,7 @@ static s64 open_directory(char* path, struct ext2_inode** inode)
             if(memcmp(dirent->name, pathpart, dirent->name_len) != 0) continue;
 
             // name matches, so we can break out and use this inode
-            if(ext2_read_inode(dirent->inode, &child) < 0) {
+            if(ext2_read_inode(dirent->inode_number, &child) < 0) {
                 ext2_dirent_iter_done(&iter);
                 return -1;
             }
@@ -175,11 +175,11 @@ static s64 open_directory(char* path, struct ext2_inode** inode)
 static void run_command(char* cmdbuffer)
 {
     char* end = cmdbuffer + strlen(cmdbuffer);
-    char* ptr = strchr(cmdbuffer, ' ');
-    if(ptr != null) {
-        *ptr++ = '\0';
+    char* cmdptr = strchr(cmdbuffer, ' ');
+    if(cmdptr != null) {
+        *cmdptr++ = '\0';
     } else {
-        ptr = end;
+        cmdptr = end;
     }
 
     if(strcmp(cmdbuffer, "pf") == 0) {
@@ -204,25 +204,25 @@ static void run_command(char* cmdbuffer)
     } else if(strcmp(cmdbuffer, "exit") == 0) {
         exit_kernel = 1;
     } else if(strcmp(cmdbuffer, "rd") == 0) {
-        while((ptr < end) && (*ptr == ' ' || *ptr == '\t')) ptr++;
-        if(*ptr == 0) return;
+        while((cmdptr < end) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
+        if(*cmdptr == 0) return;
 
-        char* start = ptr;
+        char* start = cmdptr;
 
-        ptr = strchr(ptr, ' ');
-        if(ptr != null) {
-            *ptr++ = '\0';
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
         } else {
-            ptr = end;
+            cmdptr = end;
         }
 
         u32 port_index = atoi(start);
 
-        if(ptr >= end) return;
-        while(*ptr == ' ' || *ptr == '\t') ptr++;
-        if(*ptr == 0) return;
+        if(cmdptr >= end) return;
+        while(*cmdptr == ' ' || *cmdptr == '\t') cmdptr++;
+        if(*cmdptr == 0) return;
 
-        u32 start_lba = atoi(ptr);
+        u32 start_lba = atoi(cmdptr);
 
         // allocate 512 bytes
         intp dest = (intp)kalloc(512); // TODO valloc?
@@ -251,24 +251,22 @@ static void run_command(char* cmdbuffer)
         // free data
         kfree((void*)dest);
     } else if(strcmp(cmdbuffer, "cd") == 0) {
-        struct ext2_inode* dir;
+        struct inode* dir;
 
         // skip whitespace or until end of string
-        while((*ptr != 0) && (*ptr == ' ' || *ptr == '\t')) ptr++;
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
 
         // if we found a path, open it instead
-        if(*ptr != 0) {
-            char* start = ptr;
-            ptr = strchr(ptr, ' ');
-            if(ptr != null) {
-                *ptr++ = '\0';
+        if(*cmdptr != 0) {
+            char* start = cmdptr;
+            cmdptr = strchr(cmdptr, ' ');
+            if(cmdptr != null) {
+                *cmdptr++ = '\0';
             } else {
-                ptr = end;
+                cmdptr = end;
             }
 
-            if(open_directory(start, &dir) < 0) {
-                return;
-            }
+            if(open_directory(start, &dir) < 0) return;
 
             if(*start == '/') {
                 strcpy(current_directory, start);
@@ -284,27 +282,25 @@ static void run_command(char* cmdbuffer)
         } else {
             // no path specified, reset current_directory to "/"
             strcpy(current_directory, "/");
-            if(open_directory(current_directory, &dir) < 0) {
-                return;
-            }
+            if(open_directory(current_directory, &dir) < 0) return;
         }
 
         if(dir != null) ext2_free_inode(dir);
 
     } else if(strcmp(cmdbuffer, "ls") == 0) {
-        struct ext2_inode* dir;
+        struct inode* dir;
 
         // skip whitespace or until end of string
-        while((*ptr != 0) && (*ptr == ' ' || *ptr == '\t')) ptr++;
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
 
         // if we found a path, open it instead
-        if(*ptr != 0) {
-            char* start = ptr;
-            ptr = strchr(ptr, ' ');
-            if(ptr != null) {
-                *ptr++ = '\0';
+        if(*cmdptr != 0) {
+            char* start = cmdptr;
+            cmdptr = strchr(cmdptr, ' ');
+            if(cmdptr != null) {
+                *cmdptr++ = '\0';
             } else {
-                ptr = end;
+                cmdptr = end;
             }
 
             if(open_directory(start, &dir) < 0) {
@@ -321,17 +317,17 @@ static void run_command(char* cmdbuffer)
             struct ext2_dirent* dirent;
 
             while((dirent = ext2_dirent_iter_next(&iter)) != null) {
-                struct ext2_inode* entry;
+                struct inode* entry;
 
-                if(ext2_read_inode(dirent->inode, &entry) < 0) {
-                    fprintf(stderr, "error reading inode %d\n", dirent->inode);
+                if(ext2_read_inode(dirent->inode_number, &entry) < 0) {
+                    fprintf(stderr, "error reading inode %d\n", dirent->inode_number);
                     continue;
                 }
 
                 char buf[256];
                 memcpy(buf, dirent->name, dirent->name_len);
                 buf[dirent->name_len] = 0;
-                fprintf(stderr, "%-32s mode=0x%04X size=%-12d\n", buf, entry->i_mode, entry->i_size);
+                fprintf(stderr, "%-32s mode=0x%04X size=%-12d inode=%-4d i_blocks=%-3d\n", buf, entry->ext2_inode->i_mode, entry->ext2_inode->i_size, entry->inode_number, entry->ext2_inode->i_blocks);
 
                 ext2_free_inode(entry);
             }
@@ -340,22 +336,22 @@ static void run_command(char* cmdbuffer)
             ext2_free_inode(dir);
         }
     } else if(strcmp(cmdbuffer, "cat") == 0) {
-        struct ext2_inode* dir;
+        struct inode* dir;
         if(open_directory(current_directory, &dir) < 0) {
             return;
         }
 
         // skip whitespace or until end of string
-        while((*ptr != 0) && (*ptr == ' ' || *ptr == '\t')) ptr++;
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
 
         // if we have a parameter, look for it
-        if(*ptr != 0) {
-            char* start = ptr;
-            ptr = strchr(ptr, ' ');
-            if(ptr != null) {
-                *ptr++ = '\0';
+        if(*cmdptr != 0) {
+            char* start = cmdptr;
+            cmdptr = strchr(cmdptr, ' ');
+            if(cmdptr != null) {
+                *cmdptr++ = '\0';
             } else {
-                ptr = end;
+                cmdptr = end;
             }
             u32 filename_len = strlen(start);
 
@@ -367,15 +363,15 @@ static void run_command(char* cmdbuffer)
                 if(memcmp(dirent->name, start, dirent->name_len) != 0) continue;
 
                 // file matches
-                struct ext2_inode* file_inode;
-                if(ext2_read_inode(dirent->inode, &file_inode) < 0) {
+                struct inode* file_inode;
+                if(ext2_read_inode(dirent->inode_number, &file_inode) < 0) {
                     ext2_free_inode(dir);
                     return;
                 }
 
                 u64 offs = 0;
                 u64 block_index = 0;
-                while(offs < file_inode->i_size) {
+                while(offs < file_inode->ext2_inode->i_size) {
                     intp data;
                     if(ext2_read_inode_block(file_inode, block_index, &data) < 0) {
                         // failed to read data
@@ -383,7 +379,7 @@ static void run_command(char* cmdbuffer)
                         break;
                     }
 
-                    u64 left = min(ext2_block_size(), file_inode->i_size - offs);
+                    u64 left = min(ext2_block_size(), file_inode->ext2_inode->i_size - offs);
                     for(u64 i = 0; i < left; i++) {
                         fprintf(stderr, "%c", *(u8*)(data + i));
                     }
@@ -396,8 +392,68 @@ static void run_command(char* cmdbuffer)
         } 
 
         ext2_free_inode(dir);
-    }
+    } else if(strcmp(cmdbuffer, "createfile") == 0) {
+        struct inode* dir;
+        if(open_directory(current_directory, &dir) < 0) {
+            fprintf(stderr, "no current directory: %s\n", current_directory);
+            return;
+        }
 
+        // skip whitespace or until end of string
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
+
+        // if we have a parameter, look for it
+        if(*cmdptr == 0) {
+            fprintf(stderr, "no filename specified\n");
+            return;
+        }
+
+        char* filename = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        // create file
+        struct inode* newfile;
+        ext2_create_file(dir, filename, &newfile);
+
+        // write data to it
+        ext2_write_inode_data(newfile, 0, (u8 const*)"hello, world!\n", 14);
+
+        // increment file size, TODO move to ext2 module
+        newfile->ext2_inode->i_size += 14;
+        ext2_write_inode(newfile);
+    } else if(strcmp(cmdbuffer, "mkdir") == 0) {
+        struct inode* dir;
+        if(open_directory(current_directory, &dir) < 0) {
+            fprintf(stderr, "no current directory: %s\n", current_directory);
+            return;
+        }
+
+        // skip whitespace or until end of string
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
+
+        // if we have a parameter, look for it
+        if(*cmdptr == 0) {
+            fprintf(stderr, "no name specified\n");
+            return;
+        }
+
+        char* newdirname = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        // create file
+        struct inode* newdir;
+        ext2_create_directory(dir, newdirname, &newdir);
+    }
 }
 
 static void handle_keypress(char c, void* userdata)
@@ -430,9 +486,9 @@ static void handle_keypress(char c, void* userdata)
     }
 }
 
-bool write_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_sector, u64 read_count, intp dest)
+bool write_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_sector, u64 write_count, intp src)
 {
-    return ahci_write_device_sectors((u8)((intp)fscbs->userdata & 0xFF), start_sector, read_count, dest);
+    return ahci_write_device_sectors((u8)((intp)fscbs->userdata & 0xFF), start_sector, write_count, src);
 }
 
 bool read_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_sector, u64 read_count, intp dest)

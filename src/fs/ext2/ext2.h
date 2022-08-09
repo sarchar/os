@@ -30,12 +30,12 @@ enum EXT2_INODE_FLAGS {
     EXT2_BTREE_FL        = 0x00001000,
     EXT2_INDEX_FL        = 0x00001000,
     EXT2_IMAGIC_FL       = 0x00002000,
-    EXT3_JOURNAL_DATA_FL = 0x00004000,
+    EXT2_JOURNAL_DATA_FL = 0x00004000,
     EXT2_RESERVED_FL     = 0x80000000
 };
 
 #define _EXT2_IS(inode,mode) (((inode)->i_mode & EXT2_S_IFMODE) == mode)
-#define EXT2_ISDIR(inode)    _EXT2_IS(inode,EXT2_S_IFDIR)
+#define EXT2_ISDIR(inode)    _EXT2_IS(inode->ext2_inode,EXT2_S_IFDIR)
 
 struct filesystem_callbacks {
     bool (*read_sectors)(struct filesystem_callbacks*, u64, u64, intp);
@@ -65,16 +65,24 @@ struct ext2_inode {
     u8  i_osd2[12];
 };
 
+// generic inode
+struct inode {
+    u64 inode_number;
+
+    // TODO generic fs struct
+    struct ext2_inode* ext2_inode;
+};
+
 struct ext2_dirent {
-    u32 inode;
+    u32 inode_number;
     u16 rec_len;
     u8  name_len;
     u8  file_type;
     u8  name[];
-};
+} __packed;
 
 struct ext2_dirent_iter {
-    struct ext2_inode* dir;
+    struct inode* dir;
     intp   offset;
     intp   current_data_block;
     u64    end_of_current_block_offset;
@@ -84,12 +92,20 @@ struct ext2_dirent_iter {
 
 s64 ext2_open(struct filesystem_callbacks*);
 u64 ext2_block_size();
-s64 ext2_read_inode(u64, struct ext2_inode**);
-void ext2_free_inode(struct ext2_inode*);
-s64 ext2_read_inode_block(struct ext2_inode*, u64, intp*);
+
+s64 ext2_read_inode(u64, struct inode**);
+s64 ext2_write_inode(struct inode*);
+void ext2_free_inode(struct inode*);
+
+s64 ext2_read_inode_block(struct inode*, u64, intp*);
+s64 ext2_write_inode_block(struct inode*, u64, intp);
+
+s64 ext2_write_inode_data(struct inode*, u64, u8 const*, u64);
 
 struct ext2_dirent* ext2_dirent_iter_next(struct ext2_dirent_iter*);
 void ext2_dirent_iter_done(struct ext2_dirent_iter*);
 
+s64 ext2_create_file(struct inode*, char*, struct inode**);
+s64 ext2_create_directory(struct inode*, char*, struct inode**);
 
 #endif

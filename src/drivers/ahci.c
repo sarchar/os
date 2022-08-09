@@ -863,7 +863,7 @@ static void _reset_and_probe_ports()
 
         // next device
         if(_reset_and_probe_port(i)) {
-            fprintf(stderr, "ahci: port %d is connected to a device and working\n", i);
+            //fprintf(stderr, "ahci: port %d is connected to a device and working\n", i);
             continue;
         }
 
@@ -1110,7 +1110,7 @@ static void _identify_device(u8 port_index)
     //} 
 
     // OK, signal to the HBA that there's a command on that port
-    fprintf(stderr, "ahci: issuing IDENTIFY DEVICE on port %d\n", port_index);
+    //fprintf(stderr, "ahci: issuing IDENTIFY DEVICE on port %d\n", port_index);
     _issue_command(hba_port, cmdslot);
 
     // Wait for the D2H response irq
@@ -1410,7 +1410,7 @@ bool ahci_write_device_sectors(u8 port_index, u64 start_lba, u64 num_sectors, in
     }
 
     // OK, signal to the HBA that there's a command on that port
-    fprintf(stderr, "ahci: issuing READ DMA EXT on port %d\n", port_index);
+    //fprintf(stderr, "ahci: issuing WRITE DMA EXT on port %d\n", port_index);
     _issue_command(hba_port, cmdslot);
 
     // Wait for D2H response which will be notified via an interrupt
