@@ -77,7 +77,7 @@ struct acpi_apic_record_header {
 struct acpi_apic_record_processor_local_apic {
     struct acpi_apic_record_header header;
     u8     acpi_processor_id;
-    u8     acpi_id;
+    u8     apic_id;
     u32    flags;
 } __packed;
 
@@ -412,28 +412,55 @@ static void _parse_apic_table(struct acpi_apic* apic)
     struct acpi_apic_record_local_apic_nmis*           local_apic_nmis;
     struct acpi_apic_record_interrupt_source_override* interrupt_source_override;
 
-    fprintf(stderr, "acpi: LAPIC at 0x%08lX", apic->lapic_base);
-    if(apic->flags & ACPI_APIC_FLAG_HAS_PIC) {
-        fprintf(stderr, " (with dual 8259 PICs)");
-    }
-    fprintf(stderr, "\n");
+    // configure the local apic base
+    apic_notify_acpi_local_apic_base(apic->lapic_base, apic->flags & ACPI_APIC_FLAG_HAS_PIC);
 
-    // configure the local apic
-    apic_notify_acpi_local_apic(apic->lapic_base, apic->flags & ACPI_APIC_FLAG_HAS_PIC);
-
-    // loop over all the records in the MADT table
-    // TODO loop twice to count the # of cpus and ioapics first, to allocate dynamic storage in apic.c
+    // pre-loop over the records to count the # of apics
+    u32 num_lapics = 0;
+    u32 num_ioapics = 0;
     u8* current_record = apic->records;
     u8* records_end = (u8*)((intp)apic + apic->header.length);
+    while(current_record < records_end) {
+        u8 type = current_record[0];
+        switch(type) {
+        case ACPI_APIC_RECORD_PROCESSOR_LOCAL_APIC:
+            num_lapics += 1;
+            break;
+
+        case ACPI_APIC_RECORD_TYPE_IOAPIC:
+            num_ioapics += 1;
+            break;
+
+        case ACPI_APIC_RECORD_TYPE_IOAPIC_INTERRUPT_SOURCE_OVERRIDE:
+        case ACPI_APIC_RECORD_TYPE_LOCAL_APIC_NMIS:
+        default:
+            break;
+        }
+
+        // next record
+        current_record = (u8*)((intp)current_record + current_record[1]);
+    }
+
+    if(num_ioapics > 1) {
+        fprintf(stderr, "acpi: warning: more than one I/O apic not supported right now, ignoring...\n");
+        num_ioapics = 1;
+    }
+
+    apic_notify_num_local_apics(num_lapics);
+
+    // loop over all the records again and notify modules
+    current_record = apic->records;
+    records_end = (u8*)((intp)apic + apic->header.length);
     while(current_record < records_end) {
         u8 type = current_record[0];
 
         switch(type) {
         case ACPI_APIC_RECORD_PROCESSOR_LOCAL_APIC:
             local_apic = (struct acpi_apic_record_processor_local_apic*)current_record;
-            fprintf(stderr, "acpi: Local APIC acpi_processor_id=%d acpi_id=%d flags=%08X\n", local_apic->acpi_processor_id, local_apic->acpi_id, local_apic->flags);
+            //fprintf(stderr, "acpi: Local APIC acpi_processor_id=%d apic_id=%d flags=%08X\n", local_apic->acpi_processor_id, local_apic->apic_id, local_apic->flags);
             if((local_apic->flags & 0x03) != 0) {
-                apic_register_processor_lapic(local_apic->acpi_processor_id, local_apic->acpi_id, (local_apic->flags & 0x01) != 0);
+                bool enabled = (local_apic->flags & 0x01) != 0;
+                apic_register_processor_lapic(local_apic->acpi_processor_id, local_apic->apic_id, enabled);
             }
             break;
 
@@ -441,7 +468,9 @@ static void _parse_apic_table(struct acpi_apic* apic)
             ioapic = (struct acpi_apic_record_ioapic*)current_record;
             //fprintf(stderr, "acpi: I/O APIC ioapic_id=%d ioapic_address=0x%lX global_system_interrupt_base=0x%lX\n",
             //        ioapic->ioapic_id, ioapic->ioapic_address, ioapic->global_system_interrupt_base);
-            apic_notify_acpi_io_apic(ioapic->ioapic_id, ioapic->ioapic_address, ioapic->global_system_interrupt_base);
+            if(num_ioapics-- == 1) {
+                apic_notify_acpi_io_apic(ioapic->ioapic_id, ioapic->ioapic_address, ioapic->global_system_interrupt_base);
+            }
             break;
 
         case ACPI_APIC_RECORD_TYPE_IOAPIC_INTERRUPT_SOURCE_OVERRIDE:

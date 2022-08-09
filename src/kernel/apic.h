@@ -33,8 +33,9 @@ void apic_init();
 void apic_map();
 void apic_notify_acpi_io_apic(u8 io_apic_id, intp io_apic_base, u8 global_system_interrupt_base);
 void apic_notify_acpi_io_apic_interrupt_source_override(u8 bus_source, u8 irq_source, u8 global_system_interrupt, u8 flags);
-void apic_notify_acpi_local_apic(intp lapic_base, bool system_has_pic);
-void apic_register_processor_lapic(u8 acpi_processor_id, u8 acpi_id, bool enabled);
+void apic_notify_acpi_local_apic_base(intp lapic_base, bool system_has_pic);
+void apic_notify_num_local_apics(u32 num_lapics);
+void apic_register_processor_lapic(u8 acpi_processor_id, u8 apic_id, bool enabled);
 void apic_notify_acpi_lapic_nmis(u8 acpi_processor_id, u8 lint_number, u8 flags);
 
 void apic_set_io_apic_redirection(u8 io_apic_irq, u8 cpu_irq, u8 delivery_mode, u8 destination_mode, u8 active_level, u8 trigger_mode, bool enabled, u8 destination);
@@ -43,4 +44,5 @@ void apic_io_apic_disable_interrupt(u8 io_apic_irq);
 
 intp apic_get_lapic_base(u8 lapic_index);
 
+void smp_init();
 #endif

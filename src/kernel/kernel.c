@@ -99,6 +99,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // finish ACPI initialization
     acpi_init_lai();
 
+    // startup smp
+    smp_init();
+
     // enumerate system devices
     // in the future, this could happen after all drivers are "loaded",
     // and then as devices are discovered they can be mapped into their respective drivers

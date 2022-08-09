@@ -51,6 +51,16 @@ SECTIONS
         *(.bss)
     }
 
+    /* Place the ap trampoline actual code at physical address in kernel vma space */
+    . = ALIGN(8);        /* align to 64 bit */
+    _ap_boot_start = .;  /* define global symbol where the ap boot page is at */
+    .ap_boot 0x8000 : AT(_ap_boot_start - _kernel_vma_base) { /* set vma=0x8000 and load address to be immediately after .bss */
+        *(.ap_boot.text) /* text must be first since PC starts at 0x8000 */
+        . = ALIGN(8);    /* alignment for generic data */
+        *(.ap_boot.data) /* .data after .text */
+    } 
+    _ap_boot_size = SIZEOF(.ap_boot); /* define the length of the ap_boot data */
+
     /* Define a symbol for the end of the kernel */
     . = ALIGN(4K);           /* align up to page size */
     _kernel_end_address = .;

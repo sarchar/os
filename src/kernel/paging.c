@@ -96,7 +96,7 @@ void paging_init()
 
     // and change cr3 to set the new page tables
     // setting cr3 forces a full tlb invalidate
-    __wrcr3((u64)paging_root->_cpu_table);
+    paging_set_kernel_page_table();
 
     // testing
     u8* physpage = (u8*)palloc_claim_one();
@@ -106,6 +106,11 @@ void paging_init()
     assert(((u8*)0x3F00000000)[1000] == 0x55, "55 is wrong");
     assert(((u8*)0x3F00000000)[1001] == 0xAA, "AA is wrong");
     return;
+}
+
+void paging_set_kernel_page_table()
+{
+    __wrcr3((u64)paging_root->_cpu_table);
 }
 
 // _map_page does the hard work of mapping a physical address for the specified virtual address

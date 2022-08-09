@@ -67,6 +67,7 @@ GRAN_4K       equ 1 << 7
 SZ_32         equ 1 << 6
 LONG_MODE     equ 1 << 5
 
+; Export the pointer to the GDT info so APs can use it
 GDT:
 .null: equ $ - GDT                              ; define the null segment
     dd (0x0000 << 16) | 0x0000                  ; Limit & Base
@@ -98,6 +99,7 @@ section .multiboot.bss align=8 nobits
 
 ; Reserve space for the page table
 align 4096
+global boot_page_table_level4:data
 boot_page_table_level4: resq 512   ; one entry in this table is a physical address to a level 3 table (512 entries * 512GiB = 256TiB)
 boot_page_table_level3: resq 512   ; one entry in this table is a physical address to a level 2 table (512 entries * 1GiB = 512GiB)
 ; another page table required for mapping 0xFFFFFFFE00000000-0xFFFFFFFEFFFFFFFF
@@ -140,7 +142,6 @@ extern _kernel_vma_base
 ; C entry point
 extern kernel_main
 
-; Define the default GDT
 section .data
 align 16
 
@@ -264,13 +265,6 @@ _start:
 
     ; ebx was preserved in _bootstrap_start, put it into rdi for the first parameter to kernel_main
     mov rdi, rbx
-
-    ; Unmap the identity mapping in directory entry 0
-    ;!mov dword [boot_page_directory + 0], 0
-
-    ; Reload cr3 to force a TLB flush so the changes take effect immediately
-    ;!mov ecx, cr3
-    ;!mov cr3, ecx
 
 	; Enter the high-level kernel. The ABI requires the stack be 16-byte
 	; aligned at the time of the call instruction (which afterwards pushes

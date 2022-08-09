@@ -15,6 +15,9 @@ enum MAP_PAGE_FLAGS {
 
 void paging_init();
 
+// called on the APs
+void paging_set_kernel_page_table();
+
 // map a single page into virtual memory
 // flags uses enum MAP_PAGE_FLAGS
 void paging_map_page(intp phys, intp virt, u32 flags);

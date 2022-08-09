@@ -1,10 +1,14 @@
 #include "common.h"
 
 #include "apic.h"
+#include "bootmem.h"
 #include "cpu.h"
+#include "hpet.h"
 #include "kernel.h"
 #include "paging.h"
+#include "palloc.h"
 #include "stdio.h"
+#include "string.h"
 
 #define IA32_APIC_BASE_MSR 0x1B
 #define IA32_APIC_BASE_MSR_ENABLE 0x800
@@ -14,20 +18,56 @@
 #define IO_APIC_ARBITRATION_REG    0x02
 #define IO_APIC_REDIERCTION_REG(n) (0x10 + (n << 1))
 
-#define LAPIC_EOI_REG              0xB0   // end of interrupt register
-#define LAPIC_SIV_REG              0xF0   // spurious interrupt vector register
+enum LAPIC_REGISTERS {
+    LAPIC_REG_LOCAL_APIC_ID                         = 0x20,
+    LAPIC_REG_LOCAL_APIC_ID_VERSION                 = 0x30,
+    LAPIC_REG_TASK_PRIORITY                         = 0x80,
+    LAPIC_REG_ARBITRATION_PRIORITY                  = 0x90,
+    LAPIC_REG_PROCESSOR_PRIORITY                    = 0xA0,
+    LAPIC_REG_END_OF_INTERRUPT                      = 0xB0,
+    LAPIC_REG_LOGICAL_DESTINATION                   = 0xD0,
+    LAPIC_REG_DESTINATION_FORMAT                    = 0xE0,
+    LAPIC_REG_SPURIOUS_INTERRUPT_VECOTR             = 0xF0,
+    LAPIC_REG_IN_SERVICE                            = 0x100,
+    LAPIC_REG_TRIGGER_MODE                          = 0x180,
+    LAPIC_REG_INTERRUPT_REQUEST                     = 0x200,
+    LAPIC_REG_ERROR_STATUS                          = 0x280,
+    LAPIC_REG_LVT_CORRECTED_MACHINE_CHECK_INTERRUPT = 0x2F0,
+    LAPIC_REG_INTERRUPT_COMMAND_L                   = 0x300,
+    LAPIC_REG_INTERRUPT_COMMAND_H                   = 0x310,
+    LAPIC_REG_LVT_TIMER                             = 0x320,
+    LAPIC_REG_LVT_THERMAL_SENSOR                    = 0x330,
+    LAPIC_REG_LVT_PERFORMANCE_MONITORING_COUNTERS   = 0x340,
+    LAPIC_REG_LVT_LINT0                             = 0x350,
+    LAPIC_REG_LVT_LINT1                             = 0x360,
+    LAPIC_REG_LVT_ERROR                             = 0x370,
+    LAPIC_REG_INITIAL_COUNT                         = 0x380,
+    LAPIC_REG_CURRENT_COUNT                         = 0x390,
+    LAPIC_REG_DIVIDE_CONFIGURATION                  = 0x3E0
+};
 
-static struct {
-    intp base;
+enum LAPIC_INTERRUPT_COMMAND_FIELDS {
+    LAPIC_INTERRUPT_COMMAND_STATUS = (1 << 12),
+    LAPIC_INTERRUPT_COMMAND_LEVEL  = (1 << 14)
+};
 
-    struct {
-        u8   acpi_processor_id;
-        u8   acpi_id;
-        u8   padding0;
-        bool enabled;
-        u32  padding1;
-    } cpu;
-} local_apic = { .base = (intp)-1 };
+enum LAPIC_DELIVERY_MODES {
+     LAPIC_DELIVERY_MODE_INIT    = 0x05,
+     LAPIC_DELIVERY_MODE_STARTUP = 0x06,
+     LAPIC_DELIVERY_MODE_SHIFT   = 8,
+};
+
+struct local_apic {
+    u8   acpi_processor_id;
+    u8   apic_id;
+    u8   padding0;
+    bool enabled;
+    u32  padding1;
+}; 
+
+static intp local_apic_base = (intp)-1;
+static struct local_apic** local_apics = null;
+static u32 num_local_apics = 0;
 
 static struct {
     u8   apic_id;
@@ -38,26 +78,32 @@ static struct {
     intp base;
 } io_apic = { .base = (intp)-1 };
 
-static bool _has_lapic()
+static inline bool _has_lapic()
 {
     //u64 a, b, c, d;
     //__cpuid(1, &a, &b, &c, &d);
     //return (d & CPUID_FEAT_EDX_APIC) != 0;
-    return local_apic.base != (intp)-1;
+    return local_apic_base != (intp)-1;
 }
 
-void _set_lapic_base(intp base) 
+static inline void _set_lapic_base(intp base) 
 {
-    local_apic.base = base;
+    local_apic_base = base;
     __wrmsr(IA32_APIC_BASE_MSR, (base & 0xFFFFFFFFFFFF000ULL) | IA32_APIC_BASE_MSR_ENABLE);
 }
 
-static void _write_lapic(u16 reg, u32 value)
+static inline void _write_lapic(u16 reg, u32 value)
 {
-    *(u32 volatile*)(local_apic.base + reg) = value;
+    *(u32 volatile*)(local_apic_base + reg) = value;
 }
 
-static void _write_io_apic(u8 reg, u32 value)
+static inline void _write_lapic_command(u64 value)
+{
+    _write_lapic(LAPIC_REG_INTERRUPT_COMMAND_H, value >> 32);
+    _write_lapic(LAPIC_REG_INTERRUPT_COMMAND_L, value & 0xFFFFFFFF);
+}
+
+static inline void _write_io_apic(u8 reg, u32 value)
 {
     // write register number to IOAPICBASE
     *(u32 volatile*)(io_apic.base + 0) = (u32)reg;
@@ -65,7 +111,7 @@ static void _write_io_apic(u8 reg, u32 value)
     *(u32 volatile*)(io_apic.base + 0x10) = value;
 }
 
-static u32 _read_io_apic(u8 reg)
+static inline u32 _read_io_apic(u8 reg)
 {
     // write register number to IOAPICBASE
     *(u32 volatile*)(io_apic.base + 0) = (u32)reg;
@@ -73,19 +119,19 @@ static u32 _read_io_apic(u8 reg)
     return *(u32 volatile*)(io_apic.base + 0x10);
 }
 
-static u32 _read_lapic(u16 reg)
+static inline u32 _read_lapic(u16 reg)
 {
-    return *((u32 volatile*)(local_apic.base + reg));
+    return *((u32 volatile*)(local_apic_base + reg));
 }
 
 static void _initialize_lapic()
 {
     assert(_has_lapic(), "only APIC-supported systems for now");
 
-    //_set_lapic_base(local_apic.base); // not sure if this is needed, but it's present on osdev wiki
-    _write_lapic(LAPIC_SIV_REG, 0x1FF); // enable LAPIC and set the spurious interrupt vector to 255
+    //_set_lapic_base(local_apic_base); // not sure if this is needed, but it's present on osdev wiki
+    _write_lapic(LAPIC_REG_SPURIOUS_INTERRUPT_VECOTR, 0x1FF); // enable LAPIC and set the spurious interrupt vector to 255
 
-    fprintf(stderr, "apic: LAPIC enabled (local_apic.base=0x%08lX)\n", local_apic.base);
+    fprintf(stderr, "apic: LAPIC enabled (local_apic_base=0x%08lX)\n", local_apic_base);
 }
 
 static void _initialize_ioapic()
@@ -106,7 +152,7 @@ void apic_init()
                              IO_APIC_REDIRECTION_ACTIVE_HIGH,
                              IO_APIC_REDIRECTION_EDGE_SENSITIVE,
                              true,
-                             local_apic.cpu.acpi_id);
+                             local_apics[0]->apic_id);
 
     // HPET currently configured to trigger global system interrupt 19
     // map it to 80 in the IDT
@@ -116,7 +162,7 @@ void apic_init()
                              IO_APIC_REDIRECTION_ACTIVE_HIGH,
                              IO_APIC_REDIRECTION_EDGE_SENSITIVE,
                              false, // don't enable interrupts yet
-                             local_apic.cpu.acpi_id);
+                             local_apics[0]->apic_id);
 
     apic_io_apic_enable_interrupt(19); // enable the interrupt in the redirection register
 }
@@ -124,7 +170,14 @@ void apic_init()
 void apic_map()
 {
     paging_map_page(io_apic.base   , io_apic.base   , MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
-    paging_map_page(local_apic.base, local_apic.base, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    paging_map_page(local_apic_base, local_apic_base, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+
+    // TODO move to a location more specific to initializing the BSP lapic
+    u32 v = _read_lapic(LAPIC_REG_LOCAL_APIC_ID_VERSION);
+    fprintf(stderr, "apic: local apic version=%d max_lvt=%d\n", v & 0xFF, (v >> 16) & 0xFF);
+
+    v = _read_lapic(LAPIC_REG_LOCAL_APIC_ID);
+    fprintf(stderr, "apic: local apic id=%d\n", (v >> 24) & 0x0F);
 }
 
 // See https://wiki.osdev.org/APIC#IO_APIC_Configuration
@@ -183,21 +236,40 @@ void apic_notify_acpi_io_apic_interrupt_source_override(u8 bus_source, u8 irq_so
     fprintf(stderr, "apic: registering interrupt source override bus=%d irq=%d gsi=%d flags=%d\n", bus_source, irq_source, global_system_interrupt, flags);
 }
 
-void apic_notify_acpi_local_apic(intp lapic_base, bool system_has_pic)
+void apic_notify_acpi_local_apic_base(intp lapic_base, bool system_has_pic)
 {
     unused(system_has_pic);
-    local_apic.base = lapic_base;
+    local_apic_base = lapic_base;
+
+    fprintf(stderr, "apic: local_apic_base at 0x%lX%s\n", lapic_base, system_has_pic ? " (with dual PICs)" : "");
 }
 
-void apic_register_processor_lapic(u8 acpi_processor_id, u8 acpi_id, bool enabled)
+void apic_notify_num_local_apics(u32 num_lapics)
 {
+    fprintf(stderr, "apic: found %d processors\n", num_lapics);
+
+    num_local_apics = num_lapics;
+    local_apics = (struct local_apic**)bootmem_alloc(sizeof(intp) * num_lapics, 8);
+
+    for(u32 i = 0; i < num_lapics; i++) {
+        local_apics[i] = (struct local_apic*)bootmem_alloc(sizeof(struct local_apic), 8);
+        local_apics[i]->acpi_processor_id = -1;
+    }
+}
+
+void apic_register_processor_lapic(u8 acpi_processor_id, u8 apic_id, bool enabled)
+{
+    static u32 current_lapic = 0;
+
     // TODO support more processors, for now just use processor id 0
-    if(acpi_processor_id != 0) return;
-    assert(enabled, "proc 0 not enabled?");
+    fprintf(stderr, "apic: Local APIC acpi_processor_id=%d apic_id=%d enabled=%d\n", acpi_processor_id, apic_id, enabled);
         
-    local_apic.cpu.acpi_processor_id = acpi_processor_id;
-    local_apic.cpu.acpi_id = acpi_id;
-    local_apic.cpu.enabled = enabled;
+    if(current_lapic < num_local_apics) {
+        local_apics[current_lapic]->acpi_processor_id = acpi_processor_id;
+        local_apics[current_lapic]->apic_id = apic_id;
+        local_apics[current_lapic]->enabled = enabled;
+        current_lapic++;
+    }
 }
 
 void apic_notify_acpi_lapic_nmis(u8 acpi_processor_id, u8 lint_number, u8 flags)
@@ -214,12 +286,143 @@ void apic_notify_acpi_lapic_nmis(u8 acpi_processor_id, u8 lint_number, u8 flags)
 
 void _send_lapic_eoi()
 {
-    _write_lapic(LAPIC_EOI_REG, 0);
+    _write_lapic(LAPIC_REG_END_OF_INTERRUPT, 0);
 }
 
 intp apic_get_lapic_base(u8 lapic_index)
 {
     assert(_has_lapic(), "must be initialized before this call");
     assert(lapic_index == 0, "TODO only supports lapic 0 for now");
-    return local_apic.base;
+    return local_apic_base;
 }
+
+static inline u64 _build_lapic_command(bool is_physical_address, u8 apic_id, u8 irq_vector, u8 delivery_mode)
+{
+    assert(is_physical_address, "only physical addresses supported currently");
+
+    // high byte only has the destination apic id
+    u32 high_byte = (apic_id << 24);
+
+    // level is always 1 except for INIT de-asserts
+    u32 low_byte = LAPIC_INTERRUPT_COMMAND_LEVEL | ((u32)delivery_mode << LAPIC_DELIVERY_MODE_SHIFT) | irq_vector;
+
+    return ((u64)high_byte << 32) | (u64)low_byte;
+}
+
+static inline u64 _build_init_ipi_command(u8 destination_apic_id)
+{
+    return _build_lapic_command(true, destination_apic_id, 0, LAPIC_DELIVERY_MODE_INIT);
+}
+
+static inline u64 _build_init_deassert_command(u8 destination_apic_id)
+{
+    u64 cmd = _build_lapic_command(true, destination_apic_id, 0, LAPIC_DELIVERY_MODE_INIT);
+    cmd &= ~LAPIC_INTERRUPT_COMMAND_LEVEL;
+    return cmd;
+}
+
+// startup_page is the page number to start executing at
+static inline u64 _build_startup_command(u8 destination_apic_id, u16 startup_page)
+{
+    return _build_lapic_command(true, destination_apic_id, startup_page, LAPIC_DELIVERY_MODE_STARTUP);
+}
+
+extern intp _ap_boot_start, _ap_boot_size;
+extern intp _ap_boot_stack_top;
+bool volatile _ap_boot_ack;
+bool volatile _ap_all_go;
+
+void _ap_gdt_fixup(intp kernel_vma_base);
+void _ap_reload_gdt(intp kernel_vma_base);
+
+// only called on the bootstrap processor
+void smp_init()
+{
+    u64 tmp;
+    u8 my_apic_id = (_read_lapic(LAPIC_REG_LOCAL_APIC_ID) >> 24) & 0x0F;
+
+    fprintf(stderr, "smp: init %d processors (my_apic_id=%d) _ap_boot_start=0x%lX _ap_boot_size=0x%lX\n", num_local_apics, my_apic_id, &_ap_boot_start, &_ap_boot_size);
+
+    // copy over the trampoline
+    memcpy((void*)0x8000, (void*)&_ap_boot_start, (u64)&_ap_boot_size);
+    _ap_all_go = false;
+
+    for(u32 i = 0; i < num_local_apics; i++) {
+        // don't do anything for the currently running processor
+        if(local_apics[i]->apic_id == my_apic_id) continue;
+
+        // clear error status
+        _write_lapic(LAPIC_REG_ERROR_STATUS, 0);
+
+        // send INIT IPI
+        u64 cmd = _build_init_ipi_command(local_apics[i]->apic_id);
+        _write_lapic_command(cmd);
+
+        // wait for delivery, don't care about timeout
+        wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {}
+
+        // send INIT de-assert IPI
+        cmd = _build_init_deassert_command(local_apics[i]->apic_id);
+        _write_lapic_command(cmd);
+
+        // wait for delivery, don't care about timeout
+        wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {}
+
+        // start boot ACK at 0
+        _ap_boot_ack = false;
+
+        // allocate stack, pointing to the end of memory
+        *(u64*)&_ap_boot_stack_top = palloc_claim(2) + (1 << 14); // 4096*2^2 = 16KiB
+
+        // send the STARTUP IPI twice
+        for(u8 j = 0; j < 2; j++) {
+            // clear error status
+            _write_lapic(LAPIC_REG_ERROR_STATUS, 0);
+
+            // send the command
+            cmd = _build_startup_command(local_apics[i]->apic_id, 8);
+            _write_lapic_command(cmd);
+
+            // wait 10ms before checking delivery status
+            usleep(10000);
+
+            // wait for delivery, don't care about timeout
+            wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {}
+        }
+
+        // idle spin waiting for AP to notify us that it's done
+        wait_until_true(_ap_boot_ack, 1000000, tmp) {
+            // timed out starting CPU
+            fprintf(stderr, "apic: error starting cpu %d apic_id %d\n", i, local_apics[i]->apic_id);
+            assert(false, "");
+        } else {
+            fprintf(stderr, "apic: cpu %d started\n", i);
+        }
+    }
+
+    // gdt has to be fixed up to use _kernel_vma_base before switching the AP page tables and interrupts over to highmem
+    _ap_gdt_fixup((intp)&_kernel_vma_base);
+    _ap_all_go = true;
+
+    fprintf(stderr, "smp: done\n");
+}
+
+void ap_start(u8 acpi_id)
+{
+    fprintf(stderr, "cpu %d started\n", acpi_id);
+
+    // tell BSP that we're ready
+    _ap_boot_ack = true;
+
+    // wait for all go signal
+    while(!_ap_all_go) asm volatile("pause");
+
+    // reload gdt
+    _ap_reload_gdt((intp)&_kernel_vma_base);
+
+    // set the kernel page table
+    paging_set_kernel_page_table();
+
+    while(1) asm volatile("pause");
+}
+
