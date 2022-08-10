@@ -91,7 +91,11 @@ void task_dequeue(struct task** task_queue, struct task* task)
 
     // replace the head if necessary
     if(*task_queue == task) {
-        *task_queue = task->next;
+        if(task == task->next) { // last link in the list when it points to itself
+            *task_queue = null;
+        } else {
+            *task_queue = task->next;
+        }
     }
 }
 
@@ -116,10 +120,12 @@ __noreturn void task_exit(s64 return_value)
     task_enqueue(&cpu->exited_task, task);
 
     // switch to the next task and never return
-    _task_switch_to(task, cpu->current_task); // switch from 'task' (currently running) to the new head
+    if(cpu->current_task != null) {
+        _task_switch_to(task, cpu->current_task); // switch from 'task' (currently running) to the new head
+    }
 
     // satisfy the compiler
-    while(1);
+    while(1) __pause();
 }
 
 void task_switch_to(struct task* to_task)

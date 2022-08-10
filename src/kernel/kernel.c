@@ -566,6 +566,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     // update drivers forever (they should just use kernel tasks in the future)
     while(!exit_kernel) {
         ps2keyboard_update();
+        task_yield();
     }
 
     fprintf(stderr, "...exiting kernel code...\n");

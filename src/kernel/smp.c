@@ -124,8 +124,11 @@ void ap_start(u8 cpu_index)
     apic_initialize_local_apic(); // enable the local APIC
     __sti(); // enable interrupts
 
+    // TODO make this task extremely low priority so that we only end up back here
+    // if the cpu literally has nothing left to do.
     while(1) {
         __pause();
+        task_yield();
     }
 }
 
