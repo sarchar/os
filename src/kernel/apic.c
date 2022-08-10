@@ -4,6 +4,7 @@
 #include "bootmem.h"
 #include "cpu.h"
 #include "hpet.h"
+#include "idt.h"
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
@@ -124,14 +125,11 @@ static inline u32 _read_lapic(u16 reg)
     return *((u32 volatile*)(local_apic_base + reg));
 }
 
-static void _initialize_lapic()
+void apic_initialize_local_apic()
 {
     assert(_has_lapic(), "only APIC-supported systems for now");
 
-    //_set_lapic_base(local_apic_base); // not sure if this is needed, but it's present on osdev wiki
     _write_lapic(LAPIC_REG_SPURIOUS_INTERRUPT_VECOTR, 0x1FF); // enable LAPIC and set the spurious interrupt vector to 255
-
-    fprintf(stderr, "apic: LAPIC enabled (local_apic_base=0x%08lX)\n", local_apic_base);
 }
 
 static void _initialize_ioapic()
@@ -142,7 +140,7 @@ static void _initialize_ioapic()
 // keyboard interrupt via the APIC
 void apic_init()
 {
-    _initialize_lapic();
+    apic_initialize_local_apic();
     _initialize_ioapic();
 
     // enable keyboard interrupt (IRQ1 == global system interrupt 1) map to cpu irq 33
@@ -152,7 +150,7 @@ void apic_init()
                              IO_APIC_REDIRECTION_ACTIVE_HIGH,
                              IO_APIC_REDIRECTION_EDGE_SENSITIVE,
                              true,
-                             local_apics[0]->apic_id);
+                             local_apics[1]->apic_id); // TEMP for now send to cpu 1
 
     // HPET currently configured to trigger global system interrupt 19
     // map it to 80 in the IDT
@@ -261,8 +259,7 @@ void apic_register_processor_lapic(u8 acpi_processor_id, u8 apic_id, bool enable
 {
     static u32 current_lapic = 0;
 
-    // TODO support more processors, for now just use processor id 0
-    fprintf(stderr, "apic: Local APIC acpi_processor_id=%d apic_id=%d enabled=%d\n", acpi_processor_id, apic_id, enabled);
+    fprintf(stderr, "apic: found Local APIC acpi_processor_id=%d apic_id=%d enabled=%d\n", acpi_processor_id, apic_id, enabled);
         
     if(current_lapic < num_local_apics) {
         local_apics[current_lapic]->acpi_processor_id = acpi_processor_id;
@@ -327,102 +324,71 @@ static inline u64 _build_startup_command(u8 destination_apic_id, u16 startup_pag
     return _build_lapic_command(true, destination_apic_id, startup_page, LAPIC_DELIVERY_MODE_STARTUP);
 }
 
-extern intp _ap_boot_start, _ap_boot_size;
-extern intp _ap_boot_stack_top;
-bool volatile _ap_boot_ack;
-bool volatile _ap_all_go;
-
-void _ap_gdt_fixup(intp kernel_vma_base);
-void _ap_reload_gdt(intp kernel_vma_base);
-
 // only called on the bootstrap processor
-void smp_init()
+s64 apic_boot_cpu(u32 cpu_index, u8 boot_page)
 {
+    assert(cpu_index < num_local_apics, "index out of range");
+    struct local_apic* lapic = local_apics[cpu_index];
     u64 tmp;
-    u8 my_apic_id = (_read_lapic(LAPIC_REG_LOCAL_APIC_ID) >> 24) & 0x0F;
 
-    fprintf(stderr, "smp: init %d processors (my_apic_id=%d) _ap_boot_start=0x%lX _ap_boot_size=0x%lX\n", num_local_apics, my_apic_id, &_ap_boot_start, &_ap_boot_size);
+    // clear our error status
+    _write_lapic(LAPIC_REG_ERROR_STATUS, 0);
 
-    // copy over the trampoline
-    memcpy((void*)0x8000, (void*)&_ap_boot_start, (u64)&_ap_boot_size);
-    _ap_all_go = false;
+    // send INIT IPI
+    u64 cmd = _build_init_ipi_command(lapic->apic_id);
+    _write_lapic_command(cmd);
 
-    for(u32 i = 0; i < num_local_apics; i++) {
-        // don't do anything for the currently running processor
-        if(local_apics[i]->apic_id == my_apic_id) continue;
+    // wait for delivery, don't care about timeout
+    wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {
+        fprintf(stderr, "apic: delivery of INIT IPI to cpu %d timed out\n", cpu_index);
+        return -1;
+    }
 
+    // send INIT de-assert IPI
+    cmd = _build_init_deassert_command(lapic->apic_id);
+    _write_lapic_command(cmd);
+
+    // wait for delivery, don't care about timeout
+    wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {
+        fprintf(stderr, "apic: delivery of INIT de-assert IPI to cpu %d timed out\n", cpu_index);
+        return -1;
+    }
+
+    // send the STARTUP IPI twice
+    for(u8 j = 0; j < 2; j++) {
         // clear error status
         _write_lapic(LAPIC_REG_ERROR_STATUS, 0);
 
-        // send INIT IPI
-        u64 cmd = _build_init_ipi_command(local_apics[i]->apic_id);
+        // send the command
+        cmd = _build_startup_command(lapic->apic_id, boot_page);
         _write_lapic_command(cmd);
 
-        // wait for delivery, don't care about timeout
-        wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {}
-
-        // send INIT de-assert IPI
-        cmd = _build_init_deassert_command(local_apics[i]->apic_id);
-        _write_lapic_command(cmd);
+        // wait 10ms before checking delivery status
+        usleep(10000);
 
         // wait for delivery, don't care about timeout
-        wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {}
-
-        // start boot ACK at 0
-        _ap_boot_ack = false;
-
-        // allocate stack, pointing to the end of memory
-        *(u64*)&_ap_boot_stack_top = palloc_claim(2) + (1 << 14); // 4096*2^2 = 16KiB
-
-        // send the STARTUP IPI twice
-        for(u8 j = 0; j < 2; j++) {
-            // clear error status
-            _write_lapic(LAPIC_REG_ERROR_STATUS, 0);
-
-            // send the command
-            cmd = _build_startup_command(local_apics[i]->apic_id, 8);
-            _write_lapic_command(cmd);
-
-            // wait 10ms before checking delivery status
-            usleep(10000);
-
-            // wait for delivery, don't care about timeout
-            wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {}
-        }
-
-        // idle spin waiting for AP to notify us that it's done
-        wait_until_true(_ap_boot_ack, 1000000, tmp) {
-            // timed out starting CPU
-            fprintf(stderr, "apic: error starting cpu %d apic_id %d\n", i, local_apics[i]->apic_id);
-            assert(false, "");
-        } else {
-            fprintf(stderr, "apic: cpu %d started\n", i);
+        wait_until_false(_read_lapic(LAPIC_REG_INTERRUPT_COMMAND_L) & LAPIC_INTERRUPT_COMMAND_STATUS, 200000, tmp) {
+            fprintf(stderr, "apic: delivery of STARTUP IPI to cpu %d timed out\n", cpu_index);
+            return -1;
         }
     }
 
-    // gdt has to be fixed up to use _kernel_vma_base before switching the AP page tables and interrupts over to highmem
-    _ap_gdt_fixup((intp)&_kernel_vma_base);
-    _ap_all_go = true;
-
-    fprintf(stderr, "smp: done\n");
+    return 0;
 }
 
-void ap_start(u8 acpi_id)
+u32 apic_current_cpu_index()
 {
-    fprintf(stderr, "cpu %d started\n", acpi_id);
+    u8 my_apic_id = (_read_lapic(LAPIC_REG_LOCAL_APIC_ID) >> 24) & 0x0F;
+    
+    for(u32 i = 0; i < num_local_apics; i++) {
+        if(local_apics[i]->apic_id == my_apic_id) return i;
+    }
 
-    // tell BSP that we're ready
-    _ap_boot_ack = true;
+    assert(false, "bad");
+}
 
-    // wait for all go signal
-    while(!_ap_all_go) asm volatile("pause");
-
-    // reload gdt
-    _ap_reload_gdt((intp)&_kernel_vma_base);
-
-    // set the kernel page table
-    paging_set_kernel_page_table();
-
-    while(1) asm volatile("pause");
+u32 apic_num_local_apics()
+{
+    return num_local_apics;
 }
 

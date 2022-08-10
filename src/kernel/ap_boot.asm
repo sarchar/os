@@ -33,14 +33,14 @@ align 16
     ; setup ds to make sure it's 0 before loading gdt
     xor ax, ax
     mov ds, ax
+    mov fs, ax  ; fs and gs get 0 for their descriptors
+    mov gs, ax
     lgdt [ap_boot_GDT.pointer]
 
     ; set all the data segments to the 2nd entry in the gdt
     mov ax, ap_boot_GDT.data
     mov ds, ax
     mov es, ax
-    mov fs, ax
-    mov gs, ax
     mov ss, ax
 
     ; set protected mode bit in cr0

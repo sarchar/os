@@ -29,7 +29,11 @@ enum {
     IO_APIC_REDIRECTION_LEVEL_SENSITIVE = 1
 };
 
+// apic_init() will call apic_initialize_local_apic().
+// use apic_initialize_local_apic() only on the APs
 void apic_init();
+void apic_initialize_local_apic();
+
 void apic_map();
 void apic_notify_acpi_io_apic(u8 io_apic_id, intp io_apic_base, u8 global_system_interrupt_base);
 void apic_notify_acpi_io_apic_interrupt_source_override(u8 bus_source, u8 irq_source, u8 global_system_interrupt, u8 flags);
@@ -42,7 +46,10 @@ void apic_set_io_apic_redirection(u8 io_apic_irq, u8 cpu_irq, u8 delivery_mode, 
 void apic_io_apic_enable_interrupt(u8 io_apic_irq);
 void apic_io_apic_disable_interrupt(u8 io_apic_irq);
 
+u32 apic_current_cpu_index();
+u32 apic_num_local_apics();
 intp apic_get_lapic_base(u8 lapic_index);
 
-void smp_init();
+s64 apic_boot_cpu(u32, u8);
+
 #endif

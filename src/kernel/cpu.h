@@ -6,6 +6,12 @@
 #define __cli() __asm__ volatile("cli")
 #define __sti() __asm__ volatile("sti")
 
+enum MSRS {
+    MSR_FS_BASE        = 0xC0000100,
+    MSR_GS_BASE        = 0xC0000101,
+    MSR_KERNEL_GS_BASE = 0xC0000102
+};
+
 // borrowed from https://wiki.osdev.org/Inline_Assembly/Examples#I.2FO_access
 static inline void __outb(u16 port, u8 val)
 {
@@ -95,5 +101,34 @@ static inline void __invlpg(intp addr)
 {
     asm volatile("invlpg (%0)" : : "r"(addr) : "memory");
 }
+
+struct cpu {
+    struct cpu* this;
+    u32 cpu_index;
+
+    // struct task* current_task;
+    // struct process* current_user_process;
+    // etc
+};
+
+static inline intp __get_cpu()
+{
+    intp v;
+    asm volatile("movq %%gs:0, %0" : "=c"(v));
+    return v;
+}
+
+static inline void __set_cpu(intp addr)
+{
+    __wrmsr(MSR_KERNEL_GS_BASE, (u64)addr);
+}
+
+static inline void __swapgs()
+{
+    asm volatile("swapgs");
+}
+
+#define get_cpu()    ((struct cpu*)__get_cpu())
+#define set_cpu(cpu) (__set_cpu((intp)(cpu)))
 
 #endif

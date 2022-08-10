@@ -17,6 +17,7 @@
 #include "palloc.h"
 #include "pci.h"
 #include "serial.h"
+#include "smp.h"
 #include "stdio.h"
 #include "terminal.h"
 

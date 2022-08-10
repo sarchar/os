@@ -49,11 +49,7 @@ void idt_set_entry(u8 vector_number, void* interrupt_handler, u8 flags)
 
 void idt_init() 
 {
-    __aligned(16) struct idtr _idtr = {
-        .base = (intp)&_idt[0],
-        .limit = (u16)(sizeof(_idt) - 1)
-    };
-    
+   
     // the first 32 interrupts are internal to the cpu
     idt_set_entry( 0, interrupt_div_by_zero, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // division by zero
     idt_set_entry( 1, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // debug
@@ -317,7 +313,16 @@ void idt_init()
 #undef SET_INSTALLABLE_ENTRY
 
     // Load the IDT
-    __asm__ volatile ("lidt %0\t" : : "m"(_idtr));
+    idt_install();
 }
 
+void idt_install()
+{
+    __aligned(16) struct idtr _idtr = {
+        .base = (intp)&_idt[0],
+        .limit = (u16)(sizeof(_idt) - 1)
+    };
+
+    __asm__ volatile ("lidt %0\t" : : "m"(_idtr));
+}
 
