@@ -31,7 +31,7 @@ _task_switch_to:
     ; load new stack pointer
     mov rsp, [rsi+TASK_RSP_OFFSET]
 
-    ;TODO set the proper stack in TSS for this cpu
+    ;TODO set the proper stack in TSS for this cpu. requires a separate GDT per cpu (right now it's a single shared gdt)
     ;TODO set pagetable?
 
     ; set the global ticks value for when the process started running again

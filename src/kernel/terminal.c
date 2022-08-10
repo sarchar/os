@@ -1,8 +1,10 @@
 // Display text to the framebuffer
 //
 #include "common.h"
+#include "cpu.h"
 #include "efifb.h"
 #include "serial.h"
+#include "smp.h"
 #include "string.h"
 #include "terminal.h"
 
@@ -201,16 +203,26 @@ void terminal_redraw()
     }
 }
 
+static declare_ticketlock(terminal_write_lock);
+
 int errno;
 int write(int fd, char* buf, u64 size)
 {
     if(fd != 2) return -1;
 
+    // disable interrupts and acquire spinlock
+    u64 cpu_flags = __cli_saveflags();
+    acquire_lock(terminal_write_lock);
+
     for(u64 i = 0; i < size; i++) {
-        terminal_putc((u16)buf[0]);
+        terminal_putc((u16)buf[i]);
     }
 
     serial_write_buffer(buf, size);
+
+    // release spinlock and restore irqs
+    release_lock(terminal_write_lock);
+    __restoreflags(cpu_flags);
 
     return size;
 }

@@ -79,6 +79,9 @@ void smp_init()
     _ap_gdt_fixup((intp)&_kernel_vma_base);
     _ap_all_go = true;
 
+    // enable the timer on the BSP too
+    apic_enable_local_apic_timer();
+
     fprintf(stderr, "smp: done\n");
 }
 

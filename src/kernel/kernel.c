@@ -27,7 +27,7 @@
 #include "fs/ext2/ext2.h"
 
 extern void _gdt_fixup(intp vma_base);
-__noreturn void kernel_main(struct multiboot_info*);
+void kernel_main(struct multiboot_info*);
 
 static u8 volatile exit_shell = 0;
 
@@ -519,34 +519,55 @@ static s64 shell(struct task* task)
     };
 
     if(ext2_open(&ext2_fs) < 0) {
+        __cli();
         fprintf(stderr, "root device ahci@%d is not an ext2 filesystem\n", root_device);
     } else {
+        __cli();
         fprintf(stderr, "root device ahci@%d found\n", root_device);
     }
 
     fprintf(stderr, "kernel shell ready...\n\n");
     fprintf(stderr, "%s:> ", current_directory);
+    __sti();
 
     // update drivers forever (they should just use kernel tasks in the future)
     while(!exit_shell) {
         ps2keyboard_update();
-        task_yield();
     }
 
     fprintf(stderr, "\n...exiting kernel shell...\n");
     return 0;
 }
 
-__noreturn void kernel_main(struct multiboot_info* multiboot_info) 
+static s64 print_spam(struct task* task)
+{
+    unused(task);
+
+    u64 n = 0;
+
+    while(true) {
+        __cli();
+        fprintf(stderr, "print spam %d\n", n++);
+        __sti();
+        usleep(500000);
+    }
+
+    return 0;
+}
+
+void kernel_main(struct multiboot_info* multiboot_info) 
 {
     initialize_kernel(multiboot_info);
     load_drivers();
 
-    apic_enable_local_apic_timer();
-
     // start the shell and exit
     struct task* shell_task = task_create(shell, (intp)null);
     task_enqueue(&get_cpu()->current_task, shell_task);
+
+    // start an annoying print spammer
+    struct task* print_spam_task = task_create(print_spam, (intp)null);
+    task_enqueue(&get_cpu()->current_task, print_spam_task);
+
     task_exit(0);
 }
 

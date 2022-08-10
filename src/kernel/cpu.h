@@ -9,6 +9,21 @@
 #define __pause()         asm volatile("pause");
 #define __pause_barrier() asm volatile("pause" : : : "memory");
 
+static inline u64 __cli_saveflags(void)
+{
+    u64 flags;
+    asm volatile("pushfq\n"
+                 "\tcli\n"
+                 "\tpop %0" : "=r"(flags) : : "memory");
+    return flags;
+}
+ 
+static inline void __restoreflags(u64 flags)
+{
+    asm volatile ("push %0\n"
+                  "\tpopfq" : : "rm"(flags) : "memory", "cc");
+}
+
 enum MSRS {
     MSR_FS_BASE        = 0xC0000100,
     MSR_GS_BASE        = 0xC0000101,
