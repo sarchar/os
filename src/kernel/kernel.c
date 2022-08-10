@@ -44,6 +44,8 @@ __noreturn void kernel_panic(u32 error)
     while(1) { asm("hlt"); }
 }
 
+extern struct spinlock ap_work;
+
 static void initialize_kernel(struct multiboot_info* multiboot_info)
 {
     // create a terminal before any print calls are made -- they won't
@@ -102,6 +104,14 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // startup smp
     smp_init();
+
+    while(1) {
+        if(spinlock_tryacquire(&ap_work)) {
+            fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
+            spinlock_release(&ap_work);
+        }
+        __pause();
+    }
 
     // enumerate system devices
     // in the future, this could happen after all drivers are "loaded",
@@ -339,6 +349,11 @@ static void run_command(char* cmdbuffer)
             ext2_dirent_iter_done(&iter);
             ext2_free_inode(dir);
         }
+
+        static u64 loc = 0;
+        u8 last = __atomic_btsq(&loc, 30);
+        fprintf(stderr, "last value was 0x%lX, loc=0x%lX\n", last, loc);
+        
     } else if(strcmp(cmdbuffer, "cat") == 0) {
         struct inode* dir;
         if(open_directory(current_directory, &dir) < 0) {

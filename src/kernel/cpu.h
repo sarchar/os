@@ -3,8 +3,11 @@
 
 #include "cpuid.h"
 
-#define __cli() __asm__ volatile("cli")
-#define __sti() __asm__ volatile("sti")
+#define __cli()           asm volatile("cli")
+#define __sti()           asm volatile("sti")
+#define __barrier()       asm volatile("" : : : "memory")
+#define __pause()         asm volatile("pause");
+#define __pause_barrier() asm volatile("pause" : : : "memory");
 
 enum MSRS {
     MSR_FS_BASE        = 0xC0000100,
@@ -102,6 +105,8 @@ static inline void __invlpg(intp addr)
     asm volatile("invlpg (%0)" : : "r"(addr) : "memory");
 }
 
+// GSBase
+//
 struct cpu {
     struct cpu* this;
     u32 cpu_index;
@@ -130,5 +135,53 @@ static inline void __swapgs()
 
 #define get_cpu()    ((struct cpu*)__get_cpu())
 #define set_cpu(cpu) (__set_cpu((intp)(cpu)))
+
+// synchronization primitives
+//
+// from http://locklessinc.com/articles/locks/
+#define __atomic_xadd(p, v) __sync_fetch_and_add((p), (v))
+#define __atomic_add(p, v) __sync_add_and_fetch((p), (v))
+
+#define __atomic_inc(p) __atomic_add((p), 1)
+#define __atomic_dec(p) __atomic_add((p), -1)
+#define __atomic_set_bit(p, v) __sync_or_and_fetch((p), 1<<(v))
+#define __atomic_clear_bit(p, v) __sync_and_and_fetch((p), ~(1<<(v)))
+
+#define __compare_and_exchange(p, o, n) __sync_val_compare_and_swap((p), (o), (n))
+
+// exchange value at ptr with x, returninng the old value
+static inline u64 __xchgq(u64* ptr, u64 x)
+{
+    asm volatile("xchgq %0, %1" : "=r"(x) : "m"(*(u64*)ptr), "0" ((u64)x) :"memory");
+    return x;
+}
+
+static inline u32 __xchgl(u32* ptr, u32 x)
+{
+    asm volatile("xchgl %0, %1" : "=r"(x) : "m"(*(u32*)ptr), "0" ((u32)x) :"memory");
+    return x;
+}
+
+static inline u16 __xchgw(u16* ptr, u16 x)
+{
+    asm volatile("xchgw %0, %1" : "=r"(x) : "m"(*(u16*)ptr), "0" ((u16)x) :"memory");
+    return x;
+}
+
+static inline u8 __xchgb(u8* ptr, u8 x)
+{
+    asm volatile("xchgb %0, %1" : "=r"(x) : "m"(*(u8*)ptr), "0" ((u8)x) :"memory");
+    return x;
+}
+
+// test and set bit
+static inline u64 __atomic_btsq(u64 volatile* ptr, u16 x)
+{
+    u64 out;
+    asm volatile("lock; bts %2, %1\n"
+                 "\tsbb %0, %0\n"
+                 : "=r"(out), "=m"(*ptr) : "Ir"(x) : "memory");
+    return out;
+}
 
 #endif

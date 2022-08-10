@@ -28,6 +28,8 @@ bool volatile _ap_all_go;
 void _ap_gdt_fixup(intp kernel_vma_base);
 void _ap_reload_gdt(intp kernel_vma_base);
 
+static void _create_cpu(u8 cpu_index);
+
 // only called once on the BSP
 void smp_init()
 {
@@ -43,8 +45,11 @@ void smp_init()
 
     // loop over each cpu and boot it, waiting for ack before booting the next
     for(u32 i = 0; i < ncpus; i++) {
-        // skip self
-        if(i == bspcpu) continue;
+        // the only thing we need to do for the BSP is create the cpu structure
+        if(i == bspcpu) {
+            _create_cpu(i);
+            continue;
+        }
 
         // start boot ACK at 0
         _ap_boot_ack = false;
@@ -88,6 +93,8 @@ static void _create_cpu(u8 cpu_index)
     __swapgs(); // put cpu struct into GSBase
 }
 
+declare_spinlock(ap_work);
+
 void ap_start(u8 cpu_index)
 {
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
@@ -112,6 +119,12 @@ void ap_start(u8 cpu_index)
     apic_initialize_local_apic(); // enable the local APIC
     __sti(); // enable interrupts
 
-    while(1) asm volatile("pause");
+    while(1) {
+        if(spinlock_tryacquire(&ap_work)) {
+            fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
+            spinlock_release(&ap_work);
+        }
+        __pause();
+    }
 }
 
