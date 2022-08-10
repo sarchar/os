@@ -1,4 +1,8 @@
-TASK_RSP_OFFSET equ 0
+TASK_RSP_OFFSET               equ 0
+TASK_LAST_GLOBAL_TICKS_OFFSET equ 8
+TASK_RUNTIME_OFFSET           equ 16
+
+extern global_ticks
 
 section .text
 align 8
@@ -18,10 +22,21 @@ _task_switch_to:
     ; save old stack pointer
     mov [edi+TASK_RSP_OFFSET], rsp
 
+    ; compute how much time has passed and add it to the runtime
+    mov rbp, global_ticks
+    mov rax, [rbp]
+    sub rax, [edi+TASK_LAST_GLOBAL_TICKS_OFFSET]
+    add [edi+TASK_RUNTIME_OFFSET], rax
+    
     ; load new stack pointer
     mov rsp, [rsi+TASK_RSP_OFFSET]
+
     ;TODO set the proper stack in TSS for this cpu
     ;TODO set pagetable?
+
+    ; set the global ticks value for when the process started running again
+    mov rax, [rbp]
+    mov [rsi+TASK_LAST_GLOBAL_TICKS_OFFSET], rax
 
 .done:
     pop rbx

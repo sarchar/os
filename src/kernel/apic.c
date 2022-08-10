@@ -5,6 +5,7 @@
 #include "cpu.h"
 #include "hpet.h"
 #include "idt.h"
+#include "interrupts.h"
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
@@ -19,6 +20,8 @@
 #define IO_APIC_VERSION_REG        0x01
 #define IO_APIC_ARBITRATION_REG    0x02
 #define IO_APIC_REDIERCTION_REG(n) (0x10 + (n << 1))
+
+#define LOCAL_APIC_TIMER_INTERRUPT 49
 
 enum LAPIC_REGISTERS {
     LAPIC_REG_LOCAL_APIC_ID                         = 0x20,
@@ -58,6 +61,9 @@ enum LAPIC_DELIVERY_MODES {
      LAPIC_DELIVERY_MODE_STARTUP = 0x06,
      LAPIC_DELIVERY_MODE_SHIFT   = 8,
 };
+
+#define LOCAL_APIC_LVT_TIMER_PERIODIC (1 << 17)
+#define LOCAL_APIC_LVT_MASK_BIT       (1 << 16)
 
 struct local_apic {
     u8     acpi_processor_id;
@@ -127,15 +133,119 @@ static inline u32 _read_lapic(u16 reg)
     return *((u32 volatile*)(local_apic_base + reg));
 }
 
+static void _local_apic_timer_interrupt(intp pc, void* userdata)
+{
+    unused(pc);
+    unused(userdata);
+
+    struct cpu* cpu = get_cpu();
+
+    if(cpu->current_task != null) {
+        u64 gt = global_ticks;
+        cpu->current_task->runtime += (gt - cpu->current_task->last_global_ticks);
+        cpu->current_task->last_global_ticks = gt;
+    }
+
+    cpu->ticks++;
+}
+
 void apic_initialize_local_apic()
 {
     assert(_has_lapic(), "only APIC-supported systems for now");
 
-    _write_lapic(LAPIC_REG_SPURIOUS_INTERRUPT_VECOTR, 0x1FF); // enable LAPIC and set the spurious interrupt vector to 255
+    // enable it (probably already enabled)
+    __wrmsr(IA32_APIC_BASE_MSR, __rdmsr(IA32_APIC_BASE_MSR) | IA32_APIC_BASE_MSR_ENABLE);
+
+    //_write_lapic(LAPIC_REG_DESTINATION_FORMAT, 0x0FFFFFFF);
+    _write_lapic(LAPIC_REG_DESTINATION_FORMAT, 0xFFFFFFFF); // flat mode
+    //_write_lapic(LAPIC_REG_LOGICAL_DESTINATION, (_read_lapic(LAPIC_REG_LOGICAL_DESTINATION) & 0x00FFFFFF) | 0x01);
+
+    // disable all interrupts for now
+    _write_lapic(LAPIC_REG_LVT_PERFORMANCE_MONITORING_COUNTERS, LOCAL_APIC_LVT_MASK_BIT);
+    _write_lapic(LAPIC_REG_LVT_THERMAL_SENSOR, LOCAL_APIC_LVT_MASK_BIT);
+    _write_lapic(LAPIC_REG_LVT_ERROR, LOCAL_APIC_LVT_MASK_BIT);
+//    _write_lapic(LAPIC_REG_LVT_LINT0, LOCAL_APIC_LVT_MASK_BIT);
+//    _write_lapic(LAPIC_REG_LVT_LINT1, LOCAL_APIC_LVT_MASK_BIT);
+    _write_lapic(LAPIC_REG_LVT_TIMER, LOCAL_APIC_LVT_MASK_BIT);
+    _write_lapic(LAPIC_REG_TASK_PRIORITY, 0);
+
+    // enable the lapic and set the spurious interrupt vector to 255
+    _write_lapic(LAPIC_REG_SPURIOUS_INTERRUPT_VECOTR, 0x1FF);
+}
+
+// must be called with interrupts enabled
+static u64 _determine_timer_frequency()
+{
+    u64 const timing_duration = 250; // in ms
+
+    // disable the timer
+    _write_lapic(LAPIC_REG_LVT_TIMER, LOCAL_APIC_LVT_MASK_BIT);
+
+    // set the divider
+    u8 divider = 7;
+    _write_lapic(LAPIC_REG_DIVIDE_CONFIGURATION, ((divider - 1) & 0x03) | (((divider - 1) & 0x04) << 1)); // weird register
+
+    // set the initial count to -1
+    _write_lapic(LAPIC_REG_INITIAL_COUNT, 0xFFFFFFFF);
+
+    // wait for some time, ~250ms
+    u64 start = global_ticks;
+    while((global_ticks - start) < timing_duration) __barrier();
+
+    // immediately read the current count register
+    s32 lapic_timer_count = 0xFFFFFFFF - _read_lapic(LAPIC_REG_CURRENT_COUNT);
+    lapic_timer_count = 100000 * ((lapic_timer_count + 99999) / 100000); // round up to the nearest 100k
+
+    return (((s64)lapic_timer_count * (1 << divider)) * 1000) / timing_duration;
+}
+
+// must be called with interrupts enabled
+void apic_enable_local_apic_timer()
+{
+    struct cpu* cpu = get_cpu();
+
+    // first measure the timer frequency
+    if(cpu->timer_frequency == 0) cpu->timer_frequency = _determine_timer_frequency();
+
+    // use a divider frequency that makes sense
+    u8 divider = 4; // divide by 16
+    _write_lapic(LAPIC_REG_DIVIDE_CONFIGURATION, ((divider - 1) & 0x03) | (((divider - 1) & 0x04) << 1)); // weird register
+
+    // determine the clock count to get 10ms (100Hz)
+    u32 count = (u32)(cpu->timer_frequency / 100);
+
+    // adjust for divider
+    count >>= divider;
+
+    // enable the timer
+    _write_lapic(LAPIC_REG_LVT_TIMER, LOCAL_APIC_LVT_TIMER_PERIODIC | LOCAL_APIC_TIMER_INTERRUPT);
+
+    // set the count
+    _write_lapic(LAPIC_REG_INITIAL_COUNT, count);
 }
 
 static void _initialize_ioapic()
 {
+    // enable keyboard interrupt (IRQ1 == global system interrupt 1) map to cpu irq 33
+    apic_set_io_apic_redirection(1, 33,
+                             IO_APIC_REDIRECTION_FLAG_DELIVERY_NORMAL,
+                             IO_APIC_REDIRECTION_DESTINATION_PHYSICAL,
+                             IO_APIC_REDIRECTION_ACTIVE_HIGH,
+                             IO_APIC_REDIRECTION_EDGE_SENSITIVE,
+                             true,
+                             local_apics[0]->apic_id); // TEMP for now send to cpu 1
+
+    // HPET currently configured to trigger global system interrupt 19
+    // map it to 48 in the IDT
+    apic_set_io_apic_redirection(19, 48,
+                             IO_APIC_REDIRECTION_FLAG_DELIVERY_NORMAL,
+                             IO_APIC_REDIRECTION_DESTINATION_PHYSICAL,
+                             IO_APIC_REDIRECTION_ACTIVE_HIGH,
+                             IO_APIC_REDIRECTION_EDGE_SENSITIVE,
+                             false, // don't enable interrupts yet
+                             local_apics[0]->apic_id);
+
+    apic_io_apic_enable_interrupt(19); // enable the interrupt in the redirection register
 }
 
 // https://blog.wesleyac.com/posts/ioapic-interrupts describes the process for getting that first
@@ -145,26 +255,6 @@ void apic_init()
     apic_initialize_local_apic();
     _initialize_ioapic();
 
-    // enable keyboard interrupt (IRQ1 == global system interrupt 1) map to cpu irq 33
-    apic_set_io_apic_redirection(1, 33,
-                             IO_APIC_REDIRECTION_FLAG_DELIVERY_NORMAL,
-                             IO_APIC_REDIRECTION_DESTINATION_PHYSICAL,
-                             IO_APIC_REDIRECTION_ACTIVE_HIGH,
-                             IO_APIC_REDIRECTION_EDGE_SENSITIVE,
-                             true,
-                             local_apics[1]->apic_id); // TEMP for now send to cpu 1
-
-    // HPET currently configured to trigger global system interrupt 19
-    // map it to 80 in the IDT
-    apic_set_io_apic_redirection(19, 80,
-                             IO_APIC_REDIRECTION_FLAG_DELIVERY_NORMAL,
-                             IO_APIC_REDIRECTION_DESTINATION_PHYSICAL,
-                             IO_APIC_REDIRECTION_ACTIVE_HIGH,
-                             IO_APIC_REDIRECTION_EDGE_SENSITIVE,
-                             false, // don't enable interrupts yet
-                             local_apics[0]->apic_id);
-
-    apic_io_apic_enable_interrupt(19); // enable the interrupt in the redirection register
 }
 
 void apic_set_cpu()
@@ -184,6 +274,10 @@ void apic_map()
 
     v = _read_lapic(LAPIC_REG_LOCAL_APIC_ID);
     fprintf(stderr, "apic: local apic id=%d\n", (v >> 24) & 0x0F);
+
+    // install interrupt handlers here, before smp, after interrupts_init().
+    // global to all the local apics is the same interrupt handler for the timer
+    interrupts_install_handler(LOCAL_APIC_TIMER_INTERRUPT, _local_apic_timer_interrupt, null);
 }
 
 // See https://wiki.osdev.org/APIC#IO_APIC_Configuration

@@ -237,7 +237,7 @@ void hpet_init()
     // TODO and convert global irq number to cpu irq number
     // TODO apic_is_irq_slot_available / apic_map_global_to_cpu
     // install interrupt handler with local function
-    interrupts_install_handler(80, _timer_interrupt, null);
+    interrupts_install_handler(48, _timer_interrupt, null);
     // then map the timer/comparator to the global irq number
 
     // finally, enable the timer on with I/O APIC irq number 19 (TODO dynamically allocate this #)

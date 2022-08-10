@@ -19,13 +19,44 @@ _interrupt_handler_common:
     swapgs
 .s1:
 
-    ; TODO save allll the registers.
+    ; these registers are saved by the ABI if they're to be modified,
+    ; but if we want to perform context switching we need access to them
+
+    ; save all the registers on the stack. this allows context switching
+    push rbx
+    push rcx
+    push rdi
+    push rsi
+    push rbp
+    push r8
+    push r9
+    push r10
+    push r11
+    push r12
+    push r13
+    push r14
+    push r15
+
+    ; TODO send the stack pointer as a parameter to the function call, for use in context switching
 
     cld                  ; C code following the SysV ABI requires DF to be clear on function entry
     call rax             ; Call the C function handler
     call _send_lapic_eoi ; end of interrupt
 
-    ; TODO Restore alllll the registers
+    ; restore all the saved registers
+    pop r15
+    pop r14
+    pop r13
+    pop r12
+    pop r11
+    pop r10
+    pop r9
+    pop r8
+    pop rbp
+    pop rsi
+    pop rdi
+    pop rcx
+    pop rbx
 
     ; these registers were saved before the call to _interrupt_handler_common
     pop rsi

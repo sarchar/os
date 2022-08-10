@@ -151,15 +151,6 @@ void terminal_setc(u16 c, u32 cx, u32 cy)
             }
         }
     }
-
-    //u32 xoffs = 0;
-    //for(u32 i = 0; i < terminal_font->charsize; i++) {
-    //    efifb_putpixel(xoffs + 10, 160, COLOR(255, 255, 255));
-    //    efifb_putpixel(xoffs + 10, 161, COLOR(255, 255, 255));
-    //    efifb_putpixel(xoffs + 11, 160, COLOR(255, 255, 255));
-    //    efifb_putpixel(xoffs + 11, 161, COLOR(255, 255, 255));
-    //    xoffs += 8;
-    //}
 }
 
 void terminal_putc(u16 c)

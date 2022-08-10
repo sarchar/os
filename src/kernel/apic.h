@@ -33,6 +33,7 @@ enum {
 // use apic_initialize_local_apic() only on the APs
 void apic_init();
 void apic_initialize_local_apic();
+void apic_enable_local_apic_timer();
 
 void apic_set_cpu();
 

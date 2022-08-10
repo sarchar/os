@@ -120,6 +120,12 @@ struct cpu {
     struct task* current_task;
     struct task* exited_task; // list of tasks that have exited and need freeing
 
+    // local APIC (or other) timer frequency
+    u64 timer_frequency;
+
+    // forever running ticks
+    u64 volatile ticks;
+
     // struct process* current_user_process;
     // etc
 };

@@ -27,9 +27,9 @@
 #include "fs/ext2/ext2.h"
 
 extern void _gdt_fixup(intp vma_base);
-void kernel_main(struct multiboot_info*);
+__noreturn void kernel_main(struct multiboot_info*);
 
-static u8 volatile exit_kernel = 0;
+static u8 volatile exit_shell = 0;
 
 __noreturn void kernel_panic(u32 error)
 {
@@ -43,22 +43,6 @@ __noreturn void kernel_panic(u32 error)
 
     // loop forever
     while(1) { asm("hlt"); }
-}
-
-static s64 inc_loop()
-{
-    struct task* task = get_cpu()->current_task;
-    u64* count = (u64*)task->userdata;
-
-    fprintf(stderr, "entry point\n");
-
-    while(true) {
-        __atomic_inc(count);
-        if(*count == 50) return -1;
-        task_yield();
-    }
-
-    return 0;
 }
 
 static void initialize_kernel(struct multiboot_info* multiboot_info)
@@ -119,23 +103,6 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // startup smp
     smp_init();
-
-    u64 count = 0;
-    struct task* count_task = task_create(&inc_loop, (intp)&count);
-    struct cpu* cpu = get_cpu();
-    task_enqueue(&cpu->current_task, count_task);
-    while(true) {
-        fprintf(stderr, "count = %d\n", count);
-
-        if(cpu->exited_task == count_task) {
-            fprintf(stderr, "done (return value = %d)\n", count_task->return_value);
-            task_dequeue(&cpu->exited_task, count_task);
-            task_free(count_task);
-            break;
-        }
-
-        task_yield();
-    }
 
     // enumerate system devices
     // in the future, this could happen after all drivers are "loaded",
@@ -240,7 +207,7 @@ static void run_command(char* cmdbuffer)
     } else if(strcmp(cmdbuffer, "ahci") == 0) {
         ahci_dump_registers();
     } else if(strcmp(cmdbuffer, "exit") == 0) {
-        exit_kernel = 1;
+        exit_shell = 1;
     } else if(strcmp(cmdbuffer, "rd") == 0) {
         while((cmdptr < end) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
         if(*cmdptr == 0) return;
@@ -374,9 +341,7 @@ static void run_command(char* cmdbuffer)
             ext2_free_inode(dir);
         }
 
-        static u64 loc = 0;
-        u8 last = __atomic_btsq(&loc, 30);
-        fprintf(stderr, "last value was 0x%lX, loc=0x%lX\n", last, loc);
+        fprintf(stderr, "global_ticks = %d, cpu ticks = %d, runtime = %d\n", global_ticks, get_cpu()->ticks, get_cpu()->current_task->runtime);
         
     } else if(strcmp(cmdbuffer, "cat") == 0) {
         struct inode* dir;
@@ -539,10 +504,9 @@ bool read_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_secto
     return ahci_read_device_sectors((u8)((intp)fscbs->userdata & 0xFF), start_sector, read_count, dest);
 }
 
-void kernel_main(struct multiboot_info* multiboot_info) 
+static s64 shell(struct task* task)
 {
-    initialize_kernel(multiboot_info);
-    load_drivers();
+    unused(task);
 
     ps2keyboard_hook_ascii(&handle_keypress, null);
 
@@ -560,15 +524,29 @@ void kernel_main(struct multiboot_info* multiboot_info)
         fprintf(stderr, "root device ahci@%d found\n", root_device);
     }
 
-    fprintf(stderr, "kernel ready...\n\n");
+    fprintf(stderr, "kernel shell ready...\n\n");
     fprintf(stderr, "%s:> ", current_directory);
 
     // update drivers forever (they should just use kernel tasks in the future)
-    while(!exit_kernel) {
+    while(!exit_shell) {
         ps2keyboard_update();
         task_yield();
     }
 
-    fprintf(stderr, "...exiting kernel code...\n");
+    fprintf(stderr, "\n...exiting kernel shell...\n");
+    return 0;
+}
+
+__noreturn void kernel_main(struct multiboot_info* multiboot_info) 
+{
+    initialize_kernel(multiboot_info);
+    load_drivers();
+
+    apic_enable_local_apic_timer();
+
+    // start the shell and exit
+    struct task* shell_task = task_create(shell, (intp)null);
+    task_enqueue(&get_cpu()->current_task, shell_task);
+    task_exit(0);
 }
 
