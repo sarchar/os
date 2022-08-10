@@ -19,6 +19,7 @@
 #include "serial.h"
 #include "smp.h"
 #include "stdio.h"
+#include "task.h"
 #include "terminal.h"
 
 #include "drivers/ahci.h"
@@ -44,8 +45,21 @@ __noreturn void kernel_panic(u32 error)
     while(1) { asm("hlt"); }
 }
 
-//extern struct spinlock ap_work;
-extern struct ticketlock ap_work;
+static s64 inc_loop()
+{
+    struct task* task = get_cpu()->current_task;
+    u64* count = (u64*)task->userdata;
+
+    fprintf(stderr, "entry point\n");
+
+    while(true) {
+        __atomic_inc(count);
+        if(*count == 50) return -1;
+        task_yield();
+    }
+
+    return 0;
+}
 
 static void initialize_kernel(struct multiboot_info* multiboot_info)
 {
@@ -106,12 +120,21 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // startup smp
     smp_init();
 
-    while(1) {
-        if(try_lock(ap_work)) {
-            fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
-            release_lock(ap_work);
+    u64 count = 0;
+    struct task* count_task = task_create(&inc_loop, (intp)&count);
+    struct cpu* cpu = get_cpu();
+    task_enqueue(&cpu->current_task, count_task);
+    while(true) {
+        fprintf(stderr, "count = %d\n", count);
+
+        if(cpu->exited_task == count_task) {
+            fprintf(stderr, "done (return value = %d)\n", count_task->return_value);
+            task_dequeue(&cpu->exited_task, count_task);
+            task_free(count_task);
+            break;
         }
-        __pause();
+
+        task_yield();
     }
 
     // enumerate system devices

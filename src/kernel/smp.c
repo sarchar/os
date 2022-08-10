@@ -11,6 +11,7 @@
 #include "smp.h"
 #include "stdio.h"
 #include "string.h"
+#include "task.h"
 
 #define AP_BOOT_PAGE 8
 
@@ -91,10 +92,13 @@ static void _create_cpu(u8 cpu_index)
     // set the cpu struct in KernelGSBase
     set_cpu(cpu);
     __swapgs(); // put cpu struct into GSBase
-}
 
-//declare_spinlock(ap_work);
-declare_ticketlock(ap_work);
+    // tell apic so that this cpu structure is available to other cpus
+    apic_set_cpu();
+
+    // "become" the currently running task
+    cpu->current_task = task_become();
+}
 
 void ap_start(u8 cpu_index)
 {
@@ -121,9 +125,6 @@ void ap_start(u8 cpu_index)
     __sti(); // enable interrupts
 
     while(1) {
-        acquire_lock(ap_work);
-        fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
-        release_lock(ap_work);
         __pause();
     }
 }

@@ -10,6 +10,7 @@
 #include "palloc.h"
 #include "stdio.h"
 #include "string.h"
+#include "task.h"
 
 #define IA32_APIC_BASE_MSR 0x1B
 #define IA32_APIC_BASE_MSR_ENABLE 0x800
@@ -59,11 +60,12 @@ enum LAPIC_DELIVERY_MODES {
 };
 
 struct local_apic {
-    u8   acpi_processor_id;
-    u8   apic_id;
-    u8   padding0;
-    bool enabled;
-    u32  padding1;
+    u8     acpi_processor_id;
+    u8     apic_id;
+    u8     padding0;
+    bool   enabled;
+    u32    padding1;
+    struct cpu* cpu;
 }; 
 
 static intp local_apic_base = (intp)-1;
@@ -163,6 +165,12 @@ void apic_init()
                              local_apics[0]->apic_id);
 
     apic_io_apic_enable_interrupt(19); // enable the interrupt in the redirection register
+}
+
+void apic_set_cpu()
+{
+    struct cpu* cpu = get_cpu();
+    local_apics[cpu->cpu_index]->cpu = cpu;
 }
 
 void apic_map()

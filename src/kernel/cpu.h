@@ -107,11 +107,19 @@ static inline void __invlpg(intp addr)
 
 // GSBase
 //
+struct task;
+
 struct cpu {
     struct cpu* this;
-    u32 cpu_index;
 
-    // struct task* current_task;
+    u32 cpu_index;
+    u32 padding;
+
+    // current_task serves as the task queue, with the head
+    // of the list being the currently running task
+    struct task* current_task;
+    struct task* exited_task; // list of tasks that have exited and need freeing
+
     // struct process* current_user_process;
     // etc
 };
