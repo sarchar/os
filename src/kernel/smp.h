@@ -3,32 +3,47 @@
 
 void smp_init();
 
+// generic locking functions
+#define acquire_lock(lock) lock._f->acquire((intp)&lock)
+#define release_lock(lock) lock._f->release((intp)&lock)
+#define try_lock(lock)     lock._f->trylock((intp)&lock)
+#define canlock_lock(lock) lock._f->canlock((intp)&lock)
+
+// TODO rwlocks. generic locking functions can assert if the lock doesn't support rwlocking
+// the rwticket lock from http://locklessinc.com/articles/locks/ looks good for my purposes
+
+struct lock_functions {
+    void (*acquire)(intp);
+    void (*release)(intp);
+    bool (*trylock)(intp);
+    bool (*canlock)(intp);
+};
+
 // spinlocks
 struct spinlock {
     u8 _v;
+    struct lock_functions* _f;
 } __packed;
 
-#define declare_spinlock(t) struct spinlock t = { 0 }
+extern struct lock_functions spinlock_functions;
 
-static inline void spinlock_acquire(struct spinlock* lock)
-{
-    while(true) {
-        // try to acquire the lock by swapping 1 in. The return value will be 1 if its already locked, 0 otherwise
-        if(__xchgb(&lock->_v, 1) == 0) return;
-        // if the lock was 1, wait until it's not
-        while(lock->_v) __pause_barrier();
-    }
-}
+#define declare_spinlock(n) struct spinlock n = { ._v = 0, ._f = &spinlock_functions }
 
-static inline void spinlock_release(struct spinlock* lock)
-{
-    __barrier();
-    lock->_v = 0;
-}
+// ticketlocks
+struct ticketlock {
+    union {
+        u64 _v;
+        struct {
+            u32 ticket;
+            u32 users;
+        };
+    };
 
-static inline bool spinlock_tryacquire(struct spinlock* lock)
-{
-    return __xchgb(&lock->_v, 1) == 0;
-}
+    struct lock_functions* _f;
+} __packed;
+
+extern struct lock_functions ticketlock_functions;
+
+#define declare_ticketlock(n) struct ticketlock n = { ._v = 0, ._f = &ticketlock_functions }
 
 #endif

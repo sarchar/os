@@ -44,7 +44,8 @@ __noreturn void kernel_panic(u32 error)
     while(1) { asm("hlt"); }
 }
 
-extern struct spinlock ap_work;
+//extern struct spinlock ap_work;
+extern struct ticketlock ap_work;
 
 static void initialize_kernel(struct multiboot_info* multiboot_info)
 {
@@ -106,9 +107,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     smp_init();
 
     while(1) {
-        if(spinlock_tryacquire(&ap_work)) {
+        if(try_lock(ap_work)) {
             fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
-            spinlock_release(&ap_work);
+            release_lock(ap_work);
         }
         __pause();
     }

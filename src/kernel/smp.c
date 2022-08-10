@@ -93,7 +93,8 @@ static void _create_cpu(u8 cpu_index)
     __swapgs(); // put cpu struct into GSBase
 }
 
-declare_spinlock(ap_work);
+//declare_spinlock(ap_work);
+declare_ticketlock(ap_work);
 
 void ap_start(u8 cpu_index)
 {
@@ -120,11 +121,87 @@ void ap_start(u8 cpu_index)
     __sti(); // enable interrupts
 
     while(1) {
-        if(spinlock_tryacquire(&ap_work)) {
-            fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
-            spinlock_release(&ap_work);
-        }
+        acquire_lock(ap_work);
+        fprintf(stderr, "cpu %d got lock\n", get_cpu()->cpu_index);
+        release_lock(ap_work);
         __pause();
     }
 }
+
+static void spinlock_acquire(struct spinlock* lock)
+{
+    while(true) {
+        // try to acquire the lock by swapping 1 in. The return value will be 1 if its already locked, 0 otherwise
+        if(__xchgb(&lock->_v, 1) == 0) return;
+
+        // if the lock value was 1, wait until it's not
+        while(lock->_v) __pause_barrier();
+    }
+}
+
+static void spinlock_release(struct spinlock* lock)
+{
+    __barrier();
+    lock->_v = 0;
+}
+
+static bool spinlock_trylock(struct spinlock* lock)
+{
+    return __xchgb(&lock->_v, 1) == 0;
+}
+
+static bool spinlock_canlock(struct spinlock* lock)
+{
+    struct spinlock copy = *lock;
+    __barrier();
+    return copy._v == 0;
+}
+
+struct lock_functions spinlock_functions = {
+    .acquire = (void(*)(intp))&spinlock_acquire,
+    .release = (void(*)(intp))&spinlock_release,
+    .trylock = (bool(*)(intp))&spinlock_trylock,
+    .canlock = (bool(*)(intp))&spinlock_canlock,
+};
+
+static void ticketlock_acquire(struct ticketlock volatile* tkt)
+{
+    u16 me = __atomic_xadd(&tkt->users, 1);
+    while(tkt->ticket != me) __pause_barrier();
+}
+
+static void ticketlock_release(struct ticketlock volatile* tkt)
+{
+    __barrier();
+    tkt->ticket++;
+}
+
+static bool ticketlock_trylock(struct ticketlock volatile* tkt)
+{
+    u32 me = tkt->users;
+    u32 next = me + 1;
+
+    // TODO this may not work on big endian
+    u64 cmp = ((u64)me << 32) | me;
+    u64 cmpnew = ((u64)next << 32) | me;
+
+    // essentially check if there are no open locks, and if so, add 1 to both the ticket and users
+    if(__compare_and_exchange(&tkt->_v, cmp, cmpnew) == cmp) return true;
+
+    return false;
+}
+
+static bool ticketlock_canlock(struct ticketlock volatile* tkt)
+{
+    struct ticketlock copy = *tkt;
+    __barrier();
+    return (copy.users == copy.ticket);
+}
+
+struct lock_functions ticketlock_functions = {
+    .acquire = (void(*)(intp))&ticketlock_acquire,
+    .release = (void(*)(intp))&ticketlock_release,
+    .trylock = (bool(*)(intp))&ticketlock_trylock,
+    .canlock = (bool(*)(intp))&ticketlock_canlock,
+};
 
