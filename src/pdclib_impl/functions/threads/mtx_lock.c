@@ -21,6 +21,7 @@ extern int pthread_mutex_lock( mtx_t * );
 
 int mtx_lock( mtx_t * mtx )
 {
+    (void)mtx;
     return thrd_success;
 //!    if ( pthread_mutex_lock( mtx ) == 0 )
 //!    {

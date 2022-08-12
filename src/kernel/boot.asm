@@ -117,7 +117,7 @@ boot_page_table_4000: resq 512
 boot_page_table_8000: resq 512
 boot_page_table_c000: resq 512
 
-section .bss align=8
+section .bss align=8 nobits
 ; The multiboot standard does not define the value of the stack pointer register
 ; (esp) and it is up to the kernel to provide a stack. This allocates room for a
 ; small stack by creating a symbol at the bottom of it, then allocating 16384
@@ -261,7 +261,7 @@ _start:
 	; To set up a stack, we set the esp register to point to the top of our
 	; stack (as it grows downwards on x86 systems). This is necessarily done
 	; in assembly as languages such as C cannot function without a stack.
-	mov rsp, _stack_top - 4    ; subtract 4 for the multiboot info pointer that's on the stack now
+	mov rsp, _stack_top
 
     ; ebx was preserved in _bootstrap_start, put it into rdi for the first parameter to kernel_main
     mov rdi, rbx

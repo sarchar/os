@@ -151,11 +151,14 @@ static void _local_apic_timer_interrupt(intp pc, void* userdata)
         cpu->current_task->runtime += (gt - cpu->current_task->last_global_ticks);
         cpu->current_task->last_global_ticks = gt;
 
+        // TODO maybe this should be in task_yield()?
+        if(cpu->current_task->next == cpu->current_task) return;
+
         // send eoi first
         _send_lapic_eoi();
 
         // then yield
-        task_yield();
+        task_yield(TASK_YIELD_PREEMPT);
     }
 }
 

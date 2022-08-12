@@ -34,7 +34,7 @@ _task_switch_to:
     ;TODO set the proper stack in TSS for this cpu. requires a separate GDT per cpu (right now it's a single shared gdt)
     ;TODO set pagetable?
 
-    ; set the global ticks value for when the process started running again
+    ; set the global ticks value now that the process is running again
     mov rax, [rbp]
     mov [rsi+TASK_LAST_GLOBAL_TICKS_OFFSET], rax
 

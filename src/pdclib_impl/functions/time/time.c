@@ -16,6 +16,7 @@
 
 time_t time( time_t * timer )
 {
+    (void)timer;
 //!    struct timeval tv;
 //!
 //!    if ( gettimeofday( &tv, NULL ) == 0 )

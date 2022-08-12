@@ -29,7 +29,7 @@
 extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
 
-static u8 volatile exit_shell = 0;
+static bool volatile exit_shell = false;
 
 __noreturn void kernel_panic(u32 error)
 {
@@ -83,6 +83,7 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // page table and interrupts over to highmem
     _gdt_fixup((intp)&_kernel_vma_base);
 
+    // initialize paging
     paging_init();     // unmaps a large portion of lowmem
 
     // a few modules have to map new memory
@@ -207,7 +208,7 @@ static void run_command(char* cmdbuffer)
     } else if(strcmp(cmdbuffer, "ahci") == 0) {
         ahci_dump_registers();
     } else if(strcmp(cmdbuffer, "exit") == 0) {
-        exit_shell = 1;
+        exit_shell = true;
     } else if(strcmp(cmdbuffer, "rd") == 0) {
         while((cmdptr < end) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
         if(*cmdptr == 0) return;
@@ -506,7 +507,8 @@ bool read_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_secto
 
 static s64 shell(struct task* task)
 {
-    unused(task);
+    //unused(task);
+    fprintf(stderr, "shell started with task id = %d\n", task->task_id);
 
     ps2keyboard_hook_ascii(&handle_keypress, null);
 
@@ -531,27 +533,13 @@ static s64 shell(struct task* task)
     __sti();
 
     // update drivers forever (they should just use kernel tasks in the future)
+    exit_shell = false;
+
     while(!exit_shell) {
         ps2keyboard_update();
     }
 
     fprintf(stderr, "\n...exiting kernel shell...\n");
-    return 0;
-}
-
-static s64 print_spam(struct task* task)
-{
-    unused(task);
-
-    u64 n = 0;
-
-    while(true) {
-        __cli();
-        fprintf(stderr, "print spam %d\n", n++);
-        __sti();
-        usleep(500000);
-    }
-
     return 0;
 }
 
@@ -562,12 +550,26 @@ void kernel_main(struct multiboot_info* multiboot_info)
 
     // start the shell and exit
     struct task* shell_task = task_create(shell, (intp)null);
-    task_enqueue(&get_cpu()->current_task, shell_task);
+    struct cpu* cpu = get_cpu();
+    task_enqueue(&cpu->current_task, shell_task);
 
-    // start an annoying print spammer
-    struct task* print_spam_task = task_create(print_spam, (intp)null);
-    task_enqueue(&get_cpu()->current_task, print_spam_task);
+    // this bootstrap processor uses a stack that's in .bss and shouldn't be freed by task_exit
+    // so that means *this* task should never exit.
+    // TODO set a task priority so low that we never get here unless there's literally nothing else to do
+    while(true) {
+        while(cpu->exited_task != null) {
+            struct task* task = cpu->exited_task;
+            task_dequeue(&cpu->exited_task, task);
 
-    task_exit(0);
+            // restart the shell
+            if(task == shell_task) {
+                task_free(shell_task);
+                shell_task = task_create(shell, (intp)null);
+                task_enqueue(&cpu->current_task, shell_task);
+            }
+        }
+
+        __pause();
+    }
 }
 

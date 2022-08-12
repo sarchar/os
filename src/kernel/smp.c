@@ -100,13 +100,13 @@ static void _create_cpu(u8 cpu_index)
     apic_set_cpu();
 
     // "become" the currently running task
-    cpu->current_task = task_become();
+    task_become();
 }
 
 void ap_start(u8 cpu_index)
 {
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
-    fprintf(stderr, "ap%d: started\n", cpu_index);
+    //fprintf(stderr, "ap%d: started\n", cpu_index);
 
     // initialize our cpu struct
     _create_cpu(cpu_index);
@@ -127,14 +127,17 @@ void ap_start(u8 cpu_index)
     apic_initialize_local_apic(); // enable the local APIC
     __sti(); // enable interrupts
 
-    // enable the local apic timer
+    // enable the local apic timer (and thus preemptive multitasking)
     apic_enable_local_apic_timer();
+
+    // TODO I think this could probably just run task_exit(), and then
+    // the scheduler will sit idle until there's stuff to run
 
     // TODO make this task extremely low priority so that we only end up back here
     // if the cpu literally has nothing left to do.
     while(1) {
         __pause();
-        task_yield();
+        task_yield(TASK_YIELD_VOLUNTARY);
     }
 }
 

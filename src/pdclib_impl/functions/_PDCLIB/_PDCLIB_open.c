@@ -26,6 +26,8 @@
 
 _PDCLIB_fd_t _PDCLIB_open( const char * const filename, unsigned int mode )
 {
+    (void)filename;
+    (void)mode;
     return _PDCLIB_NOHANDLE;
 //!    /* This is an example implementation of _PDCLIB_open() fit for use with
 //!       POSIX kernels.

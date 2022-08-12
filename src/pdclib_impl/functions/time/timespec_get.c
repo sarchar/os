@@ -14,6 +14,8 @@
 
 int timespec_get( struct timespec * ts, int base )
 {
+    (void)ts;
+    (void)base;
 //!    if ( base == TIME_UTC )
 //!    {
 //!        /* We can make do with a really thin wrapper here. */

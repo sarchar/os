@@ -65,7 +65,7 @@ static void _map_kernel()
     fprintf(stderr, "paging: stack at 0x%lX, top=0x%lX\n", (intp)&_stack_bottom, (intp)&_stack_top);
 
     // map only the pages the kernel occupies into virtual memory
-    for(intp offs = 0; offs < kernel_size; offs += 0x1000) {
+    for(intp offs = 0; offs < kernel_size; offs += PAGE_SIZE) {
         intp phys = (intp)&_kernel_load_address + offs;
         intp virt = phys | (intp)&_kernel_vma_base;
         _map_page(phys, virt, MAP_PAGE_FLAG_WRITABLE);
