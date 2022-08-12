@@ -27,6 +27,8 @@ struct task {
     // the structure from this point forward doesn't need to match task.asm
     ////////////////////////////////////////////////////////////////////////////
 
+    u64  stack_bottom;
+
     // current running state
     enum TASK_STATE state;
 
@@ -36,7 +38,7 @@ struct task {
 
     u64  return_value;
     bool save_context;
-    u8   padding1;
+    s8   priority;
     u16  padding2;
     u32  padding3;
 
@@ -47,6 +49,7 @@ struct task {
 
 void task_become();
 struct task* task_create(task_entry_point_function*, intp); 
+intp task_allocate_stack(u64*);
 void task_free(struct task*);
 
 // yield from the current task and switch to the next one
@@ -55,6 +58,8 @@ enum TASK_YIELD_REASON {
     TASK_YIELD_EXITED,
     TASK_YIELD_VOLUNTARY
 };
+
+void task_set_priority(s8);
 
 void task_yield(enum TASK_YIELD_REASON);
 

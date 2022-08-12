@@ -5,6 +5,7 @@
 
 #define __cli()           asm volatile("cli")
 #define __sti()           asm volatile("sti")
+#define __hlt()           asm volatile("hlt")
 #define __barrier()       asm volatile("" : : : "memory")
 #define __pause()         asm volatile("pause");
 #define __pause_barrier() asm volatile("pause" : : : "memory");

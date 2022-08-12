@@ -36,6 +36,7 @@ void apic_initialize_local_apic();
 void apic_enable_local_apic_timer();
 
 void apic_set_cpu();
+struct cpu* apic_get_cpu(u8);
 
 void apic_map();
 void apic_notify_acpi_io_apic(u8 io_apic_id, intp io_apic_base, u8 global_system_interrupt_base);

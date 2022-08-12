@@ -20,6 +20,7 @@ extern intp _ap_boot_start, _ap_boot_size;
 
 // defined in ap_boot.asm, where we store the top of stack for the cpu
 extern intp _ap_boot_stack_top;
+static intp _ap_boot_stack_bottom;
 
 // synchronization for bootup
 bool volatile _ap_boot_ack;
@@ -56,7 +57,9 @@ void smp_init()
         _ap_boot_ack = false;
 
         // allocate stack, pointing to the end of memory
-        *(u64*)&_ap_boot_stack_top = palloc_claim(2) + (1 << 14); // 4096*2^2 = 16KiB
+        u64 stack_size;
+        _ap_boot_stack_bottom = task_allocate_stack(&stack_size);
+        *(u64*)&_ap_boot_stack_top = _ap_boot_stack_bottom + stack_size; // 4096*2^2 = 16KiB
 
         // try to boot the cpu
         if(apic_boot_cpu(i, AP_BOOT_PAGE) < 0) {
@@ -110,7 +113,12 @@ void ap_start(u8 cpu_index)
 
     // initialize our cpu struct
     _create_cpu(cpu_index);
-    assert(get_cpu()->cpu_index == cpu_index, "GSBase not working");
+
+    struct cpu* cpu = get_cpu();
+    assert(cpu->cpu_index == cpu_index, "GSBase not working");
+
+    // save stack bottom
+    cpu->current_task->stack_bottom = _ap_boot_stack_bottom;
 
     // tell the BSP that we're ready and wait for the all-go signal
     _ap_boot_ack = true;
@@ -130,15 +138,10 @@ void ap_start(u8 cpu_index)
     // enable the local apic timer (and thus preemptive multitasking)
     apic_enable_local_apic_timer();
 
-    // TODO I think this could probably just run task_exit(), and then
+    // I think this could probably just run task_exit(), and then
     // the scheduler will sit idle until there's stuff to run
-
-    // TODO make this task extremely low priority so that we only end up back here
-    // if the cpu literally has nothing left to do.
-    while(1) {
-        __pause();
-        task_yield(TASK_YIELD_VOLUNTARY);
-    }
+    usleep(3000000); //TODO gotta wait until nothing is printing to the screen, as little is threadsafe right now
+    task_exit(0, false);
 }
 
 static void spinlock_acquire(struct spinlock* lock)

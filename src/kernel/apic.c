@@ -270,6 +270,12 @@ void apic_init()
 
 }
 
+struct cpu* apic_get_cpu(u8 cpu_index)
+{
+    assert(cpu_index < num_local_apics, "index out of range");
+    return local_apics[cpu_index]->cpu;
+}
+
 void apic_set_cpu()
 {
     struct cpu* cpu = get_cpu();

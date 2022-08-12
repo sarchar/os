@@ -7,6 +7,7 @@
 #include "paging.h"
 #include "palloc.h"
 #include "task.h"
+#include "smp.h"
 #include "stdio.h"
 
 // log2 size of the stack (order for palloc) that is allocated to each task
@@ -70,7 +71,9 @@ struct task* task_create(task_entry_point_function* entry, intp userdata)
     task->prev = task->next = task;
 
     // allocate stack, and set RSP to the base of where we initialize registers
-    task->rsp = (u64)palloc_claim(TASK_STACK_SIZE) + (1 << TASK_STACK_SIZE) * PAGE_SIZE;
+    u64 stack_size;
+    task->stack_bottom = task_allocate_stack(&stack_size);
+    task->rsp = (u64)task->stack_bottom + stack_size;
 
     // initialize parameters on the stack
     TASK_PUSH_STACK(task, (intp)_task_entry); // rip
@@ -84,10 +87,26 @@ struct task* task_create(task_entry_point_function* entry, intp userdata)
     return task;
 }
 
+intp task_allocate_stack(u64* stack_size)
+{
+    *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
+    return palloc_claim(TASK_STACK_SIZE);
+}
+
+declare_ticketlock(task_free_lock);
+
 void task_free(struct task* task)
 {
-    palloc_abandon(task->rsp & ~((1 << TASK_STACK_SIZE)*PAGE_SIZE - 1), 1);
+    acquire_lock(task_free_lock);
+    fprintf(stderr, "freeking task %d stack_bottom=0x%lX\n", task->task_id, task->stack_bottom);
+    if(task->stack_bottom != 0) palloc_abandon(task->stack_bottom, TASK_STACK_SIZE);
     kfree(task);
+    release_lock(task_free_lock);
+}
+
+void task_set_priority(s8 priority)
+{
+    get_cpu()->current_task->priority = priority;
 }
 
 // to enqueue, we put new_task at the end of the list
@@ -140,15 +159,18 @@ void task_dequeue(struct task** task_queue, struct task* task)
 
 extern void _task_switch_to(struct task*, struct task*);
 
-static struct task* _select_next_task(struct cpu* cpu)
+static struct task* _select_next_task(struct task* start)
 {
+    if(start == null) return null;
+
     // current task will never be null if we get there from a task switch
     // so start looking through the list for a next valid task
 
-    // simple round robin algorithm finds the next task that is able to be ran
-    struct task* next_task = cpu->current_task->next;
-    while(next_task != cpu->current_task) {
-        if(next_task->state == TASK_STATE_NEW || next_task->state == TASK_STATE_READY) {
+    // simple round robin algorithm finds the next task that is runnable
+    struct task* next_task = start;
+    while(next_task != start->prev) {
+        // skip low priority tasks, and tasks that aren't runnable
+        if(next_task->priority >= 0 && (next_task->state == TASK_STATE_NEW || next_task->state == TASK_STATE_READY)) {
             return next_task;
         }
 
@@ -158,6 +180,13 @@ static struct task* _select_next_task(struct cpu* cpu)
     // if we get here then no task other than the current task was valid, so we have to check 
     // if the current task is still runnable
     if(next_task->state == TASK_STATE_NEW || next_task->state == TASK_STATE_READY) {
+        // if the current task has a low priority, but so does the next one, move onto the next one
+        // this simple move-forward move will allow all low priority tasks to get a chance when no
+        // other normal priority tasks exist. It also doesn't matter if next_task->next == next_task,
+        // since it'll just be the same result either way
+        if(next_task->priority < 0 && next_task->next->priority < 0) return next_task->next;
+
+        // otherwise, current task will do
         return next_task;
     }
 
@@ -171,6 +200,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
 
     struct cpu* cpu = get_cpu();
     struct task* from_task = cpu->current_task;
+    struct task* to_task;
 
     // set up the next state for the current task
     assert(from_task->state == TASK_STATE_RUNNING, "running task should have correct state");
@@ -184,13 +214,10 @@ void task_yield(enum TASK_YIELD_REASON reason)
         break;
     }
 
-    // select the next task
-    struct task* to_task = _select_next_task(cpu);
-
     // if the current task has exited, remove it from the running list (_select_next_task will never give us an EXITED task)
     if(from_task->state == TASK_STATE_EXITED) {
         task_dequeue(&cpu->current_task, from_task);
-        //fprintf(stderr, "task: putting task %d into exited queue\n", from_task->task_id);
+//        fprintf(stderr, "task: putting task %d into exited queue\n", from_task->task_id);
 
         // when a task exits, sometimes the return value is useful and we save that context for some other processing
         if(from_task->save_context) {
@@ -199,6 +226,12 @@ void task_yield(enum TASK_YIELD_REASON reason)
             // otherwise, we can free the memory now
             task_free(from_task);
         }
+
+        // select the next task starting with the current task
+        to_task = _select_next_task(cpu->current_task);
+    } else {
+        // select the next task starting with the next
+        to_task = _select_next_task(cpu->current_task->next);
     }
 
     // if there's no more tasks to run, halt forever
@@ -208,14 +241,15 @@ void task_yield(enum TASK_YIELD_REASON reason)
         while(cpu->exited_task != null) {
             struct task* exited = cpu->exited_task;
 
-            fprintf(stderr, "task: unhandled task %d exited with return value = %d\n", exited->task_id, exited->return_value);
+//            fprintf(stderr, "task: unhandled task %d exited with return value = %d\n", exited->task_id, exited->return_value);
 
             task_dequeue(&cpu->exited_task, exited);
             task_free(exited);
         }
 
         // wait until a new task arrives
-        while(1) __pause();
+//        fprintf(stderr, "task: warning: cpu %d entering permanent idle state\n", cpu->cpu_index);
+        while(1) __hlt();
     }
 
     // we have a task, switch to it

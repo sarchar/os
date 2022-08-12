@@ -553,9 +553,15 @@ void kernel_main(struct multiboot_info* multiboot_info)
     struct cpu* cpu = get_cpu();
     task_enqueue(&cpu->current_task, shell_task);
 
+    // task_exit now works for the main thread (task_free won't free the stack pointer)
+    //task_exit(0, false);
+
+    // but for now, just run a low priority task that restarts the shell if it crashes/exits
+    // set a task priority so low that we never get time unless there's literally nothing else to do
+    task_set_priority(-20);
+
     // this bootstrap processor uses a stack that's in .bss and shouldn't be freed by task_exit
     // so that means *this* task should never exit.
-    // TODO set a task priority so low that we never get here unless there's literally nothing else to do
     while(true) {
         while(cpu->exited_task != null) {
             struct task* task = cpu->exited_task;
@@ -563,13 +569,15 @@ void kernel_main(struct multiboot_info* multiboot_info)
 
             // restart the shell
             if(task == shell_task) {
+                fprintf(stderr, "shell exited (ret = %d)\n", shell_task->return_value);
                 task_free(shell_task);
                 shell_task = task_create(shell, (intp)null);
                 task_enqueue(&cpu->current_task, shell_task);
             }
         }
 
-        __pause();
+        // wait for something interesting to happen
+        __hlt();
     }
 }
 

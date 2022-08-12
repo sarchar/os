@@ -8,6 +8,7 @@
 #include "bootmem.h"
 #include "kernel.h"
 #include "palloc.h"
+#include "smp.h"
 #include "stdio.h"
 #include "string.h"
 
@@ -171,6 +172,8 @@ void palloc_init()
     }
 }
 
+declare_ticketlock(palloc_lock);
+
 intp palloc_claim(u8 n) // allocate 2^n pages
 {
     assert(n < PALLOC_MAX_ORDER, "n must be a valid order size");
@@ -178,11 +181,17 @@ intp palloc_claim(u8 n) // allocate 2^n pages
     // working order
     u8 order = n;
 
+    // we need a lock to be threadsafe
+    acquire_lock(palloc_lock);
+
     // find first order >= requested size with free blocks
     while(order < PALLOC_MAX_ORDER && free_page_head[order]->next == null) order++;
 
     // out of memory?
-    if(order == PALLOC_MAX_ORDER) return 0;
+    if(order == PALLOC_MAX_ORDER) {
+        release_lock(palloc_lock);
+        return 0;
+    }
 
     // remove the head from the current order
     struct free_page* left = free_page_head[order]->next;
@@ -223,6 +232,9 @@ intp palloc_claim(u8 n) // allocate 2^n pages
     // toggle the left bit
     palloc_togglebit(left, order, null);
 
+    // release lock
+    release_lock(palloc_lock);
+
     // return the page
     return (intp)left;
 }
@@ -233,6 +245,9 @@ void palloc_abandon(intp base, u8 n)
 
     // working order
     u8 order = n;
+
+    // claim palloc lock
+    acquire_lock(palloc_lock);
 
     while(true) {
         // start by determining if the buddy is available or not
@@ -289,5 +304,7 @@ void palloc_abandon(intp base, u8 n)
             break;
         }
     }
+
+    release_lock(palloc_lock);
 }
 
