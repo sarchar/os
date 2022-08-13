@@ -15,6 +15,7 @@
 // support for sizeof() types
 // you must be absolutely consistent about the type being used for the key, so that sizeof() is always correct
 #define HT_ADD(head,field,add)    HASH_ADD(hh, head, field, sizeof((head)->field), add)
+#define HT_DELETE(head,itm)       HASH_DELETE(hh, head, itm)
 #define HT_FIND(head,findval,out) HASH_FIND(hh, head, &findval, sizeof(findval), out)
 
 // loop over all the elements in the table

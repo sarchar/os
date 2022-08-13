@@ -2,6 +2,7 @@
 
 #include "apic.h"
 #include "cpu.h"
+#include "hashtable.h"
 #include "hpet.h"
 #include "idt.h"
 #include "kalloc.h"
@@ -102,9 +103,18 @@ static void _create_cpu(u8 cpu_index)
     // tell apic so that this cpu structure is available to other cpus
     apic_set_cpu();
 
+    // initialize the lock
+    declare_ticketlock(lock_init);
+    cpu->ipcall_lock = lock_init;
+    cpu->ipcall = null;
+
     // "become" the currently running task
     task_become();
 }
+
+extern struct mutex test_mutex;
+
+static s64 idle(struct task* task) { unused(task); while(true) __hlt(); return 0; }
 
 void ap_start(u8 cpu_index)
 {
@@ -140,7 +150,13 @@ void ap_start(u8 cpu_index)
 
     // I think this could probably just run task_exit(), and then
     // the scheduler will sit idle until there's stuff to run
-    //usleep(3000000); //TODO gotta wait until nothing is printing to the screen, as little is threadsafe right now
+
+    // need to have another task running so that this core doesn't go idle
+    task_enqueue(&cpu->current_task, task_create(&idle, (intp)null));
+
+    // damnit task_exit is crashing again and I don't know why
+    task_set_priority(-20); while(1) __hlt(); // temp
+
     task_exit(0, false);
 }
 
@@ -221,58 +237,41 @@ struct lock_functions ticketlock_functions = {
     .canlock = (bool(*)(intp))&ticketlock_canlock,
 };
 
+struct mutex_blocked_task {
+    MAKE_HASH_TABLE;
+    u16 user_id;
+    u16 unused0;
+    u32 unused1;
+    struct task* task;
+};
+
 static void mutex_acquire(struct mutex* m)
 {
-    struct task** ptr;
+    if(try_lock(m->lock)) return;
 
-try_again:
-    if(spinlock_trylock(&m->lock)) return;
-
+    // couldn't acquire lock, so get a ticket
     acquire_lock(m->internal_lock);
+
+    // create a new blocked task
+    struct mutex_blocked_task* bt = (struct mutex_blocked_task*)__builtin_alloca(sizeof(struct mutex_blocked_task));
+    bt->user_id = __atomic_xadd(&m->lock.users, 1);
+    bt->task = get_cpu()->current_task;
 
     // can't get the lock, so this task now must be blocked
     // place it in an empty slot
-    for(u8 i = 0; i < countof(m->blocked_tasks); i++) {
-        if(m->blocked_tasks[i] == null) {
-            ptr = &m->blocked_tasks[i];
-            goto found;
-        }
-    }
+    HT_ADD(m->blocked_tasks, user_id, bt);
 
-    // if we get here, the blocked_tasks array was full
-    while(true) {
-        // loop over the dynamic array looking for a free spot. if all spots are full, increase the size of the array by 2
-        for(u32 i = 0; i < m->blocked_tasks_dyn_count; i++) { // dyn_count will be 0 first pass through
-            if(m->blocked_tasks_dyn[i] == null) {
-                ptr = &m->blocked_tasks_dyn[i];
-                goto found;
-            }
-        }
-
-        // if we get here, the dynamic array was full (or not created yet), so allocate more space
-        if(m->blocked_tasks_dyn_count == 0) m->blocked_tasks_dyn_count = 16; // start with 16 slots
-        else                                m->blocked_tasks_dyn_count *= 2;
-
-        struct task** new_array = (struct task**)kalloc(sizeof(struct task*) * m->blocked_tasks_dyn_count);
-        if(m->blocked_tasks_dyn != null) { // copy previous array to new storage and free the old one
-            memcpy(new_array, m->blocked_tasks_dyn, sizeof(struct task*) * (m->blocked_tasks_dyn_count / 2));
-            memset(new_array + (m->blocked_tasks_dyn_count / 2), 0, sizeof(struct task*) * (m->blocked_tasks_dyn_count / 2)); // zero out the new elements
-            kfree(m->blocked_tasks_dyn);
-        } else {
-            zero(m->blocked_tasks_dyn); // zero out the whole array
-        }
-
-        m->blocked_tasks_dyn = new_array;
-    }
-
-found:
     m->num_blocked_tasks++;
-    *ptr = get_cpu()->current_task;
     release_lock(m->internal_lock);
+
+    // if the task wakes up, it means mutex_release believes we're the proper owner of the next ticket
     task_yield(TASK_YIELD_MUTEX_BLOCK);
 
-    // when the task wakes up, we need to try again
-    goto try_again;
+    // remove us from the hash table
+    acquire_lock(m->internal_lock);
+    assert(m->lock.ticket == bt->user_id, "why did we wake up??");
+    HT_DELETE(m->blocked_tasks, bt);
+    release_lock(m->internal_lock);
 }
 
 static void mutex_release(struct mutex* m)
@@ -280,51 +279,33 @@ static void mutex_release(struct mutex* m)
     struct task* unblock_task;
 
     acquire_lock(m->internal_lock); // lock the internal lock first, so that we can unblock some tasks before any other acquire happens
-    spinlock_release(&m->lock);
+    release_lock(m->lock);
 
-    if(m->num_blocked_tasks) { // notify that one task can be woken up
-        for(u8 i = 0; i < countof(m->blocked_tasks); i++) {
-            if(m->blocked_tasks[i] == null) continue;
+    __barrier();
+    u16 next_ticket = m->lock.ticket;
 
-            unblock_task = m->blocked_tasks[i];
-            m->blocked_tasks[i] = null;
-            goto found;
-        }
-
-        for(u32 i = 0; i < m->blocked_tasks_dyn_count; i++) {
-            if(m->blocked_tasks_dyn[i] == null) continue;
-
-            unblock_task = m->blocked_tasks[i];
-            m->blocked_tasks[i] = null;
-            goto found;
-        }
-    }
-
-    // no task found
+    struct mutex_blocked_task* bt;
+    HT_FIND(m->blocked_tasks, next_ticket, bt);
     release_lock(m->internal_lock);
-    return;
 
-found:
-    if(--m->num_blocked_tasks == 0) { // free dynamic memory only when all tasks have been unblocked, so some memory may hang around for a while
-        if(m->blocked_tasks_dyn_count) {
-            kfree(m->blocked_tasks_dyn);
-            m->blocked_tasks_dyn = null;
-            m->blocked_tasks_dyn_count = 0;
-        }
+    if(bt != null) {
+        unblock_task = bt->task;
+        release_lock(m->internal_lock);
+        task_unblock(unblock_task);
+    } else {
+        // no task found
+        release_lock(m->internal_lock);
     }
-
-    release_lock(m->internal_lock);
-    task_unblock(unblock_task);
 }
 
 static bool mutex_trylock(struct mutex* m)
 {
-    return spinlock_trylock(&m->lock);
+    return try_lock(m->lock);
 }
 
 static bool mutex_canlock(struct mutex* m)
 {
-    return spinlock_canlock(&m->lock);
+    return can_lock(m->lock);
 }
 
 struct lock_functions mutexlock_functions = {

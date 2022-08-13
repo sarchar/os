@@ -56,4 +56,12 @@ intp apic_get_lapic_base(u8 lapic_index);
 
 s64 apic_boot_cpu(u32, u8);
 
+struct ipcall;
+enum IPCALL_FUNCTION {
+    IPCALL_FUNC_TASK_ENQUEUE,
+    IPCALL_FUNC_TASK_UNBLOCK,
+};
+struct ipcall* apic_ipcall_build(enum IPCALL_FUNCTION, void*);
+s64 apic_ipcall_send(u32, struct ipcall*);
+
 #endif

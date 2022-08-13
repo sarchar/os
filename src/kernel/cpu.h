@@ -2,6 +2,7 @@
 #define __CPU_H__
 
 #include "cpuid.h"
+#include "smp.h"
 
 #define __cli()           asm volatile("cli")
 #define __sti()           asm volatile("sti")
@@ -18,7 +19,16 @@ static inline u64 __cli_saveflags(void)
                  "\tpop %0" : "=r"(flags) : : "memory");
     return flags;
 }
- 
+
+static inline u64 __sti_saveflags(void)
+{
+    u64 flags;
+    asm volatile("pushfq\n"
+                 "\tsti\n"
+                 "\tpop %0" : "=r"(flags) : : "memory");
+    return flags;
+}
+  
 static inline void __restoreflags(u64 flags)
 {
     asm volatile ("push %0\n"
@@ -142,6 +152,10 @@ struct cpu {
 
     // forever running ticks
     u64 volatile ticks;
+
+    // ipcall support
+    struct ticketlock ipcall_lock;
+    struct ipcall*    ipcall;
 
     // struct process* current_user_process;
     // etc

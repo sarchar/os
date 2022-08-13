@@ -7,7 +7,7 @@ void smp_init();
 #define acquire_lock(lock) lock._f->acquire((intp)&lock)
 #define release_lock(lock) lock._f->release((intp)&lock)
 #define try_lock(lock)     lock._f->trylock((intp)&lock)
-#define canlock_lock(lock) lock._f->canlock((intp)&lock)
+#define can_lock(lock)     lock._f->canlock((intp)&lock)
 
 // TODO rwlocks. generic locking functions can assert if the lock doesn't support rwlocking
 // the rwticket lock from http://locklessinc.com/articles/locks/ looks good for my purposes
@@ -50,28 +50,26 @@ extern struct lock_functions ticketlock_functions;
 
 // mutexes (only applicable in tasks TODO and user space)
 struct task;
+struct mutex_blocked_task;
+
 struct mutex {
-    struct spinlock lock;
-    struct spinlock internal_lock;
+    struct ticketlock      lock;
+    struct spinlock        internal_lock;
     struct lock_functions* _f;
 
-    // this lock always has 16 slots for waiting tasks, but can dynamically grow (TODO some limit) if necessary
-    struct task*  blocked_tasks[16];
-    struct task** blocked_tasks_dyn;
-    u32           blocked_tasks_dyn_count;
-    u32           num_blocked_tasks;
+    // hash table maps a user id into a task, so we know which task to unblock
+    struct mutex_blocked_task* blocked_tasks;
+    u32 num_blocked_tasks;
 } __packed;
 
 extern struct lock_functions mutexlock_functions;
 
 #define MUTEX_INITIALIZER {                    \
-        .lock = SPINLOCK_INITIALIZER,          \
+        .lock = TICKETLOCK_INITIALIZER,        \
         .internal_lock = SPINLOCK_INITIALIZER, \
-        .blocked_tasks = { null, },            \
-        .blocked_tasks_dyn = null,             \
-        .blocked_tasks_dyn_count = 0,          \
-        ._f = &mutexlock_functions,            \
+        .blocked_tasks = null,                 \
         .num_blocked_tasks = 0,                \
+        ._f = &mutexlock_functions,            \
     }
 
 #define declare_mutex(n) struct mutex n = MUTEX_INITIALIZER

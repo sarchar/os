@@ -106,6 +106,13 @@ void task_set_priority(s8 priority)
     get_cpu()->current_task->priority = priority;
 }
 
+void task_enqueue_for(u32 target_cpu_index, struct task* new_task)
+{
+    // wake up the other cpu and tell it to add the task to its running queue
+    struct ipcall* ipcall = apic_ipcall_build(IPCALL_FUNC_TASK_ENQUEUE, (void*)new_task);
+    apic_ipcall_send(target_cpu_index, ipcall);
+}
+
 // to enqueue, we put new_task at the end of the list
 void task_enqueue(struct task** task_queue, struct task* new_task)
 {
@@ -272,22 +279,20 @@ void task_unblock(struct task* task)
 {
     assert(task->state == TASK_STATE_BLOCKED, "can't unblock an unblocked task");
 
-    u64 cpu_flags = __cli_saveflags();
-    fprintf(stderr, "unblocking task %d\n", task->task_id);
-
     struct cpu* cpu = get_cpu();
 
     if(task->cpu == cpu) { // easy case here, just requeue it in READY state
+        u64 cpu_flags = __cli_saveflags();
+        fprintf(stderr, "unblocking task %d\n", task->task_id);
         task_dequeue(&cpu->blocked_task, task);
         task->state = TASK_STATE_READY;
         task_enqueue(&cpu->current_task, task);
-        goto done;
+        __restoreflags(cpu_flags);
     } else {
-        assert(false, "TODO, wake up task on another cpu. might require IPI");
+        // wake up the other cpu and tell it to add the task back to its queue
+        struct ipcall* ipcall = apic_ipcall_build(IPCALL_FUNC_TASK_UNBLOCK, (void*)task);
+        apic_ipcall_send(task->cpu->cpu_index, ipcall);
     } 
-
-done:
-    __restoreflags(cpu_flags);
 }
 
 void __noreturn task_exit(s64 return_value, bool save_context)

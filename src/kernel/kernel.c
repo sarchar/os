@@ -465,12 +465,14 @@ static void run_command(char* cmdbuffer)
         ext2_create_directory(dir, newdirname, &newdir);
     } else if(strcmp(cmdbuffer, "mutex") == 0) {
         // try to claim the mutex and print something
-        acquire_lock(test_mutex);
-        //fprintf(stderr, "got the mutex!\n");
-        u64 t = global_ticks + 5000;
-        while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
-        release_lock(test_mutex);
+        while(true) {
+            acquire_lock(test_mutex);
+            //fprintf(stderr, "got the mutex!\n");
+            u64 t = global_ticks + 5000;
+            while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
+            release_lock(test_mutex);
         //fprintf(stderr, "left the mutex!\n");
+        }
     }
 }
 
@@ -552,6 +554,18 @@ static s64 shell(struct task* task)
     return 0;
 }
 
+static s64 mutex_grab_thread(struct task* task)
+{
+    unused(task);
+    while(true) {
+        acquire_lock(test_mutex);
+        u64 t = global_ticks + 5000;
+        while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
+        release_lock(test_mutex);
+    }
+    return 0;
+}
+
 void kernel_main(struct multiboot_info* multiboot_info) 
 {
     initialize_kernel(multiboot_info);
@@ -562,16 +576,21 @@ void kernel_main(struct multiboot_info* multiboot_info)
     struct cpu* cpu = get_cpu();
     task_enqueue(&cpu->current_task, shell_task);
 
+    // put the mutex_grab_thread on all the cpus
+    for(u32 i = 0; i < apic_num_local_apics(); i++) {
+        if(i == cpu->cpu_index) continue;
+        task_enqueue_for(i, task_create(mutex_grab_thread, (intp)null));
+    }
+
     // task_exit now works for the main thread (task_free won't free the stack pointer)
     //task_exit(0, false);
 
     // but for now, just run a low priority task that restarts the shell if it crashes/exits
     // set a task priority so low that we never get time unless there's literally nothing else to do
-//    task_set_priority(-20);
+    task_set_priority(-20);
 
     // this bootstrap processor uses a stack that's in .bss and shouldn't be freed by task_exit
     // so that means *this* task should never exit.
-    usleep(2000000);
     while(true) {
         while(cpu->exited_task != null) {
             struct task* task = cpu->exited_task;
@@ -587,15 +606,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
         }
 
         // wait for something interesting to happen
-//        __hlt();
-
-        // claim the mutex for 5 seconds at a time
-        acquire_lock(test_mutex);
-        //fprintf(stderr, "got the mutex!\n");
-        u64 t = global_ticks + 5000;
-        while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
-        release_lock(test_mutex);
-        //fprintf(stderr, "left the mutex\n");
+        __hlt();
     }
 }
 

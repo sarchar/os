@@ -73,6 +73,7 @@ __noreturn void task_exit(s64, bool);
 void task_unblock(struct task*);
 
 void task_enqueue(struct task**, struct task*);
+void task_enqueue_for(u32, struct task*);
 void task_dequeue(struct task**, struct task*);
 
 #endif

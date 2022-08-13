@@ -6,6 +6,7 @@
 #include "hpet.h"
 #include "idt.h"
 #include "interrupts.h"
+#include "kalloc.h"
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
@@ -21,7 +22,8 @@
 #define IO_APIC_ARBITRATION_REG    0x02
 #define IO_APIC_REDIERCTION_REG(n) (0x10 + (n << 1))
 
-#define LOCAL_APIC_TIMER_INTERRUPT 49
+#define LOCAL_APIC_TIMER_INTERRUPT  49
+#define LOCAL_APIC_IPCALL_INTERRUPT 129
 
 enum LAPIC_REGISTERS {
     LAPIC_REG_LOCAL_APIC_ID                         = 0x20,
@@ -57,6 +59,7 @@ enum LAPIC_INTERRUPT_COMMAND_FIELDS {
 };
 
 enum LAPIC_DELIVERY_MODES {
+     LAPIC_DELIVERY_MODE_NORMAL  = 0x00,
      LAPIC_DELIVERY_MODE_INIT    = 0x05,
      LAPIC_DELIVERY_MODE_STARTUP = 0x06,
      LAPIC_DELIVERY_MODE_SHIFT   = 8,
@@ -88,6 +91,7 @@ static struct {
 } io_apic = { .base = (intp)-1 };
 
 void _send_lapic_eoi();
+static void _local_apic_ipcall_interrupt(intp, void*);
 
 static inline bool _has_lapic()
 {
@@ -297,6 +301,9 @@ void apic_map()
     // install interrupt handlers here, before smp, after interrupts_init().
     // global to all the local apics is the same interrupt handler for the timer
     interrupts_install_handler(LOCAL_APIC_TIMER_INTERRUPT, _local_apic_timer_interrupt, null);
+
+    // install the ipcall interrupt handler
+    interrupts_install_handler(LOCAL_APIC_IPCALL_INTERRUPT, _local_apic_ipcall_interrupt, null);
 }
 
 // See https://wiki.osdev.org/APIC#IO_APIC_Configuration
@@ -511,5 +518,77 @@ u32 apic_current_cpu_index()
 u32 apic_num_local_apics()
 {
     return num_local_apics;
+}
+
+struct ipcall {
+    u32   function;
+    u32   source_cpu_index;
+    void* payload;
+};
+
+struct ipcall* apic_ipcall_build(enum IPCALL_FUNCTION func, void* payload)
+{
+    struct ipcall* ipc = kalloc(sizeof(struct ipcall));
+    ipc->function = (u32)func;
+    ipc->payload = payload;
+    ipc->source_cpu_index = get_cpu()->cpu_index;
+    return ipc;
+}
+
+s64 apic_ipcall_send(u32 dest, struct ipcall* sendipc)
+{
+    struct cpu* dest_cpu = apic_get_cpu(dest);
+    u64 tmp;
+
+    while(true) {
+        wait_until_true(dest_cpu->ipcall == null, 100000, tmp) {
+            // major problem
+            fprintf(stderr, "apic: target CPU %d never cleared previous IPCALL\n", dest);
+            return -1;
+        }
+
+        acquire_lock(dest_cpu->ipcall_lock);
+        if(dest_cpu->ipcall != null) {
+            // another cpu beat us to the punch, try again
+            release_lock(dest_cpu->ipcall_lock);
+            continue;
+        }
+
+        break;
+    }
+
+    // now we have a lock and ipcall is null
+    dest_cpu->ipcall = sendipc;
+    release_lock(dest_cpu->ipcall_lock);
+    
+    u64 cmd = _build_lapic_command(true, local_apics[dest]->apic_id, LOCAL_APIC_IPCALL_INTERRUPT, LAPIC_DELIVERY_MODE_NORMAL);
+    _write_lapic_command(cmd);
+
+    return 0;
+}
+
+static void _local_apic_ipcall_interrupt(intp pc, void* userdata)
+{
+    unused(pc);
+    unused(userdata);
+
+    struct cpu* cpu = get_cpu();
+    struct ipcall* ipc = (struct ipcall*)__xchgq((u64*)&cpu->ipcall, (u64)null);
+
+    // spurious? weird.
+    if(ipc == null) return;
+
+    // valid, so do whatever we're told
+    switch((enum IPCALL_FUNCTION)ipc->function) {
+    case IPCALL_FUNC_TASK_ENQUEUE:
+        //fprintf(stderr, "apic: cpu %d received TASK_ENQUEUE IPCALL from cpu %d\n", cpu->cpu_index, ipc->source_cpu_index);
+        task_enqueue(&cpu->current_task, (struct task*)ipc->payload);
+        break;
+
+    case IPCALL_FUNC_TASK_UNBLOCK:
+        //fprintf(stderr, "apic: cpu %d received TASK_UNBLOCK IPCALL from cpu %d\n", cpu->cpu_index, ipc->source_cpu_index);
+        task_unblock((struct task*)ipc->payload);
+        break;
+    }
 }
 
