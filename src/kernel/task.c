@@ -31,6 +31,7 @@ void task_become()
     // setup state
     task->task_id = __atomic_inc(&next_task_id);
     task->state = TASK_STATE_RUNNING;
+    task->cpu = cpu;
 
     // and timing
     task->last_global_ticks = global_ticks;
@@ -62,6 +63,7 @@ struct task* task_create(task_entry_point_function* entry, intp userdata)
     // assign the task id
     task->task_id = __atomic_inc(&next_task_id);
     task->state = TASK_STATE_NEW;
+    task->cpu = get_cpu();
 
     // set up the task entry point
     task->entry = entry;
@@ -93,15 +95,10 @@ intp task_allocate_stack(u64* stack_size)
     return palloc_claim(TASK_STACK_SIZE);
 }
 
-declare_ticketlock(task_free_lock);
-
 void task_free(struct task* task)
 {
-    acquire_lock(task_free_lock);
-    fprintf(stderr, "freeking task %d stack_bottom=0x%lX\n", task->task_id, task->stack_bottom);
     if(task->stack_bottom != 0) palloc_abandon(task->stack_bottom, TASK_STACK_SIZE);
     kfree(task);
-    release_lock(task_free_lock);
 }
 
 void task_set_priority(s8 priority)
@@ -212,6 +209,9 @@ void task_yield(enum TASK_YIELD_REASON reason)
     case TASK_YIELD_EXITED:
         from_task->state = TASK_STATE_EXITED;
         break;
+    case TASK_YIELD_MUTEX_BLOCK:
+        from_task->state = TASK_STATE_BLOCKED;
+        break;
     }
 
     // if the current task has exited, remove it from the running list (_select_next_task will never give us an EXITED task)
@@ -228,6 +228,12 @@ void task_yield(enum TASK_YIELD_REASON reason)
         }
 
         // select the next task starting with the current task
+        to_task = _select_next_task(cpu->current_task);
+    } else if(from_task->state == TASK_STATE_BLOCKED) { // no need to keep iterating over this task if its blocked, so move it to a different queue
+        task_dequeue(&cpu->current_task, from_task);
+//        fprintf(stderr, "task: putting task %d into blocked queue\n", from_task->task_id);
+        task_enqueue(&cpu->blocked_task, from_task);
+        // select next task as normal
         to_task = _select_next_task(cpu->current_task);
     } else {
         // select the next task starting with the next
@@ -248,7 +254,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
         }
 
         // wait until a new task arrives
-//        fprintf(stderr, "task: warning: cpu %d entering permanent idle state\n", cpu->cpu_index);
+//            fprintf(stderr, "task: warning: cpu %d entering permanent idle state\n", cpu->cpu_index);
         while(1) __hlt();
     }
 
@@ -259,6 +265,28 @@ void task_yield(enum TASK_YIELD_REASON reason)
     
 //resume_task:
     // at this point our task has just been resumed, restore interrupt flag and return
+    __restoreflags(cpu_flags);
+}
+
+void task_unblock(struct task* task)
+{
+    assert(task->state == TASK_STATE_BLOCKED, "can't unblock an unblocked task");
+
+    u64 cpu_flags = __cli_saveflags();
+    fprintf(stderr, "unblocking task %d\n", task->task_id);
+
+    struct cpu* cpu = get_cpu();
+
+    if(task->cpu == cpu) { // easy case here, just requeue it in READY state
+        task_dequeue(&cpu->blocked_task, task);
+        task->state = TASK_STATE_READY;
+        task_enqueue(&cpu->current_task, task);
+        goto done;
+    } else {
+        assert(false, "TODO, wake up task on another cpu. might require IPI");
+    } 
+
+done:
     __restoreflags(cpu_flags);
 }
 

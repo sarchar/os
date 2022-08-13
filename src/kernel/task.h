@@ -8,7 +8,7 @@ enum TASK_STATE {
     TASK_STATE_EXITED,    // task has exited but structure is still valid
     TASK_STATE_RUNNING,   // task is currently running
     TASK_STATE_READY,     // task is ready to run (but not currently running)
-    TASK_STATE_WAITING,   // task is waiting on some event to occur
+    TASK_STATE_BLOCKED,   // task is waiting on some event to occur
 };
 
 struct task {
@@ -29,6 +29,9 @@ struct task {
 
     u64  stack_bottom;
 
+    // cpu this task is on
+    struct cpu*  cpu;
+
     // current running state
     enum TASK_STATE state;
 
@@ -42,7 +45,6 @@ struct task {
     u16  padding2;
     u32  padding3;
 
-    //struct x86_registers registers;
     struct task* prev;
     struct task* next;
 };
@@ -56,7 +58,8 @@ void task_free(struct task*);
 enum TASK_YIELD_REASON {
     TASK_YIELD_PREEMPT,
     TASK_YIELD_EXITED,
-    TASK_YIELD_VOLUNTARY
+    TASK_YIELD_VOLUNTARY,
+    TASK_YIELD_MUTEX_BLOCK
 };
 
 void task_set_priority(s8);
@@ -65,6 +68,9 @@ void task_yield(enum TASK_YIELD_REASON);
 
 // exit the current task
 __noreturn void task_exit(s64, bool);
+
+// notify that a task can be unblocked, this will often happen on a different cpu
+void task_unblock(struct task*);
 
 void task_enqueue(struct task**, struct task*);
 void task_dequeue(struct task**, struct task*);

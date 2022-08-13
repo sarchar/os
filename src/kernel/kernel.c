@@ -30,6 +30,7 @@ extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
 
 static bool volatile exit_shell = false;
+declare_mutex(test_mutex);
 
 __noreturn void kernel_panic(u32 error)
 {
@@ -462,6 +463,14 @@ static void run_command(char* cmdbuffer)
         // create file
         struct inode* newdir;
         ext2_create_directory(dir, newdirname, &newdir);
+    } else if(strcmp(cmdbuffer, "mutex") == 0) {
+        // try to claim the mutex and print something
+        acquire_lock(test_mutex);
+        //fprintf(stderr, "got the mutex!\n");
+        u64 t = global_ticks + 5000;
+        while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
+        release_lock(test_mutex);
+        //fprintf(stderr, "left the mutex!\n");
     }
 }
 
@@ -558,10 +567,11 @@ void kernel_main(struct multiboot_info* multiboot_info)
 
     // but for now, just run a low priority task that restarts the shell if it crashes/exits
     // set a task priority so low that we never get time unless there's literally nothing else to do
-    task_set_priority(-20);
+//    task_set_priority(-20);
 
     // this bootstrap processor uses a stack that's in .bss and shouldn't be freed by task_exit
     // so that means *this* task should never exit.
+    usleep(2000000);
     while(true) {
         while(cpu->exited_task != null) {
             struct task* task = cpu->exited_task;
@@ -577,7 +587,15 @@ void kernel_main(struct multiboot_info* multiboot_info)
         }
 
         // wait for something interesting to happen
-        __hlt();
+//        __hlt();
+
+        // claim the mutex for 5 seconds at a time
+        acquire_lock(test_mutex);
+        //fprintf(stderr, "got the mutex!\n");
+        u64 t = global_ticks + 5000;
+        while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
+        release_lock(test_mutex);
+        //fprintf(stderr, "left the mutex\n");
     }
 }
 

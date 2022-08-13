@@ -4,6 +4,7 @@
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
+#include "smp.h"
 #include "stdio.h"
 
 // If a slot in a chunk contains the value KALLOC_MAGIC, then
@@ -33,6 +34,7 @@ struct kalloc_pool {
     struct kalloc_chunk* chunks_notfull;
     u32    num_full;
     u32    num_notfull;
+    struct ticketlock lock;
 };
 
 static struct {
@@ -127,8 +129,11 @@ static struct kalloc_chunk* _new_chunk_ptr()
 
     // make sure there's free chunks available
     struct kalloc_pool* pool = &kalloc_data.chunk_pool;
+    acquire_lock(pool->lock);
     if(pool->chunks_notfull == null) _increase_chunk_ptr_pool(1);
-    return (struct kalloc_chunk*)_next_from_pool(pool, sizeof(struct kalloc_chunk));
+    struct kalloc_chunk* ret = (struct kalloc_chunk*)_next_from_pool(pool, sizeof(struct kalloc_chunk));
+    release_lock(pool->lock);
+    return ret;
 }
 
 // Allocate and initialize a new chunk of 2^page_order pages into pool n
@@ -167,13 +172,19 @@ static void _increase_pool(u8 n, u8 page_order)
 
 void kalloc_init()
 {
+    declare_ticketlock(lock_init);
+
 #if KALLOC_VERBOSE > 1
     fprintf(stderr, "kalloc: kalloc_init()\n");
 #endif
     zero(&kalloc_data);
 
+    // also initialize the chunk pointer lock
+    kalloc_data.chunk_pool.lock = lock_init;
+
     // preinit all the pools
     for(u8 n = 0; n < countof(kalloc_data.pools); n++) {
+        kalloc_data.pools[n].lock = lock_init;
         _increase_pool(n, 3);
     }
 }
@@ -191,9 +202,11 @@ void* kalloc(u32 size)
     unused(wasted); // TODO
 
     struct kalloc_pool* pool = &kalloc_data.pools[n - KALLOC_MIN_N];
+    acquire_lock(pool->lock); // lock only the pool involved
     if(pool->chunks_notfull == null) _increase_pool(n - KALLOC_MIN_N, 3);
 
     void* ret = (void*)_next_from_pool(pool, (1 << n));
+    release_lock(pool->lock);
     return ret;
 }
 
@@ -213,6 +226,8 @@ void kfree(void* mem)
     for(u8 i = 0; i < countof(kalloc_data.pools); i++) {
         pool = &kalloc_data.pools[i];
 
+        acquire_lock(pool->lock);
+
         // search both notfull and full chunk lists
         c = pool->chunks_notfull;
         while(c != null) {
@@ -229,6 +244,8 @@ void kfree(void* mem)
         }
 
         if(c != null) break;
+
+        release_lock(pool->lock);
     }
 
     assert(c != null, "couldn't find where `mem` belongs");
@@ -250,5 +267,7 @@ void kfree(void* mem)
         pool->num_notfull++;
         pool->num_full--;
     }
+
+    release_lock(pool->lock);
 }
 

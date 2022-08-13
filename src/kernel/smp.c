@@ -140,7 +140,7 @@ void ap_start(u8 cpu_index)
 
     // I think this could probably just run task_exit(), and then
     // the scheduler will sit idle until there's stuff to run
-    usleep(3000000); //TODO gotta wait until nothing is printing to the screen, as little is threadsafe right now
+    //usleep(3000000); //TODO gotta wait until nothing is printing to the screen, as little is threadsafe right now
     task_exit(0, false);
 }
 
@@ -180,19 +180,19 @@ struct lock_functions spinlock_functions = {
     .canlock = (bool(*)(intp))&spinlock_canlock,
 };
 
-static void ticketlock_acquire(struct ticketlock volatile* tkt)
+static void ticketlock_acquire(struct ticketlock* tkt)
 {
     u16 me = __atomic_xadd(&tkt->users, 1);
     while(tkt->ticket != me) __pause_barrier();
 }
 
-static void ticketlock_release(struct ticketlock volatile* tkt)
+static void ticketlock_release(struct ticketlock* tkt)
 {
     __barrier();
     tkt->ticket++;
 }
 
-static bool ticketlock_trylock(struct ticketlock volatile* tkt)
+static bool ticketlock_trylock(struct ticketlock* tkt)
 {
     u32 me = tkt->users;
     u32 next = me + 1;
@@ -207,7 +207,7 @@ static bool ticketlock_trylock(struct ticketlock volatile* tkt)
     return false;
 }
 
-static bool ticketlock_canlock(struct ticketlock volatile* tkt)
+static bool ticketlock_canlock(struct ticketlock* tkt)
 {
     struct ticketlock copy = *tkt;
     __barrier();
@@ -219,5 +219,118 @@ struct lock_functions ticketlock_functions = {
     .release = (void(*)(intp))&ticketlock_release,
     .trylock = (bool(*)(intp))&ticketlock_trylock,
     .canlock = (bool(*)(intp))&ticketlock_canlock,
+};
+
+static void mutex_acquire(struct mutex* m)
+{
+    struct task** ptr;
+
+try_again:
+    if(spinlock_trylock(&m->lock)) return;
+
+    acquire_lock(m->internal_lock);
+
+    // can't get the lock, so this task now must be blocked
+    // place it in an empty slot
+    for(u8 i = 0; i < countof(m->blocked_tasks); i++) {
+        if(m->blocked_tasks[i] == null) {
+            ptr = &m->blocked_tasks[i];
+            goto found;
+        }
+    }
+
+    // if we get here, the blocked_tasks array was full
+    while(true) {
+        // loop over the dynamic array looking for a free spot. if all spots are full, increase the size of the array by 2
+        for(u32 i = 0; i < m->blocked_tasks_dyn_count; i++) { // dyn_count will be 0 first pass through
+            if(m->blocked_tasks_dyn[i] == null) {
+                ptr = &m->blocked_tasks_dyn[i];
+                goto found;
+            }
+        }
+
+        // if we get here, the dynamic array was full (or not created yet), so allocate more space
+        if(m->blocked_tasks_dyn_count == 0) m->blocked_tasks_dyn_count = 16; // start with 16 slots
+        else                                m->blocked_tasks_dyn_count *= 2;
+
+        struct task** new_array = (struct task**)kalloc(sizeof(struct task*) * m->blocked_tasks_dyn_count);
+        if(m->blocked_tasks_dyn != null) { // copy previous array to new storage and free the old one
+            memcpy(new_array, m->blocked_tasks_dyn, sizeof(struct task*) * (m->blocked_tasks_dyn_count / 2));
+            memset(new_array + (m->blocked_tasks_dyn_count / 2), 0, sizeof(struct task*) * (m->blocked_tasks_dyn_count / 2)); // zero out the new elements
+            kfree(m->blocked_tasks_dyn);
+        } else {
+            zero(m->blocked_tasks_dyn); // zero out the whole array
+        }
+
+        m->blocked_tasks_dyn = new_array;
+    }
+
+found:
+    m->num_blocked_tasks++;
+    *ptr = get_cpu()->current_task;
+    release_lock(m->internal_lock);
+    task_yield(TASK_YIELD_MUTEX_BLOCK);
+
+    // when the task wakes up, we need to try again
+    goto try_again;
+}
+
+static void mutex_release(struct mutex* m)
+{
+    struct task* unblock_task;
+
+    acquire_lock(m->internal_lock); // lock the internal lock first, so that we can unblock some tasks before any other acquire happens
+    spinlock_release(&m->lock);
+
+    if(m->num_blocked_tasks) { // notify that one task can be woken up
+        for(u8 i = 0; i < countof(m->blocked_tasks); i++) {
+            if(m->blocked_tasks[i] == null) continue;
+
+            unblock_task = m->blocked_tasks[i];
+            m->blocked_tasks[i] = null;
+            goto found;
+        }
+
+        for(u32 i = 0; i < m->blocked_tasks_dyn_count; i++) {
+            if(m->blocked_tasks_dyn[i] == null) continue;
+
+            unblock_task = m->blocked_tasks[i];
+            m->blocked_tasks[i] = null;
+            goto found;
+        }
+    }
+
+    // no task found
+    release_lock(m->internal_lock);
+    return;
+
+found:
+    if(--m->num_blocked_tasks == 0) { // free dynamic memory only when all tasks have been unblocked, so some memory may hang around for a while
+        if(m->blocked_tasks_dyn_count) {
+            kfree(m->blocked_tasks_dyn);
+            m->blocked_tasks_dyn = null;
+            m->blocked_tasks_dyn_count = 0;
+        }
+    }
+
+    release_lock(m->internal_lock);
+    task_unblock(unblock_task);
+}
+
+static bool mutex_trylock(struct mutex* m)
+{
+    return spinlock_trylock(&m->lock);
+}
+
+static bool mutex_canlock(struct mutex* m)
+{
+    return spinlock_canlock(&m->lock);
+}
+
+struct lock_functions mutexlock_functions = {
+    .acquire = (void(*)(intp))&mutex_acquire,
+    .release = (void(*)(intp))&mutex_release,
+    .trylock = (bool(*)(intp))&mutex_trylock,
+    .canlock = (bool(*)(intp))&mutex_canlock,
 };
 
