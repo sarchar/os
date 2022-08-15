@@ -269,6 +269,7 @@ DEFINE_INTERRUPT_HANDLER_ERR(14, interrupt_page_fault)
 {
     unused(irq_vector);
     extern bool _ap_all_go;
+
     if(_ap_all_go) {
         fprintf(stderr, "page fault: on cpu %d error = $%lX at address $%lX ", get_cpu()->cpu_index, error_code, fault_addr);
     } else {

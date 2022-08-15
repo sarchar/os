@@ -92,7 +92,9 @@ struct task* task_create(task_entry_point_function* entry, intp userdata)
 intp task_allocate_stack(u64* stack_size)
 {
     *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
-    return palloc_claim(TASK_STACK_SIZE);
+    intp ret = palloc_claim(TASK_STACK_SIZE);
+    memset64((void *)ret, 0, *stack_size / sizeof(u64));
+    return ret;
 }
 
 void task_free(struct task* task)
@@ -153,13 +155,12 @@ void task_dequeue(struct task** task_queue, struct task* task)
         }
     }
 
-    if(task->prev != null) {
-        task->prev->next = task->next;
-    }
+    // prev/next pointers are never null in a circularly linked list
+    task->prev->next = task->next;
+    task->next->prev = task->prev;
 
-    if(task->next != null) {
-        task->next->prev = task->prev;
-    }
+    // make it point to itself
+    task->prev = task->next = task;
 
     __restoreflags(cpu_flags);
 }
@@ -207,7 +208,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
 
     struct cpu* cpu = get_cpu();
     struct task* from_task = cpu->current_task;
-    struct task* to_task;
+    assert(from_task != null, "can't happen");
 
     // set up the next state for the current task
     assert(from_task->state == TASK_STATE_RUNNING, "running task should have correct state");
@@ -225,17 +226,15 @@ void task_yield(enum TASK_YIELD_REASON reason)
     }
 
     // if the current task has exited, remove it from the running list (_select_next_task will never give us an EXITED task)
+    struct task* to_task;
     if(from_task->state == TASK_STATE_EXITED) {
         task_dequeue(&cpu->current_task, from_task);
-//        fprintf(stderr, "task: putting task %d into exited queue\n", from_task->task_id);
+        //fprintf(stderr, "task: putting task %d into exited queue\n", from_task->task_id);
 
-        // when a task exits, sometimes the return value is useful and we save that context for some other processing
-        if(from_task->save_context) {
-            task_enqueue(&cpu->exited_task, from_task);
-        } else {
-            // otherwise, we can free the memory now
-            task_free(from_task);
-        }
+        // when a task exits, we must have it to be freed later. if it is freed now, the stack *that we're currently using*
+        // will be released to palloc, and very likely get destroyed. thus, all processors must have a cleanup task that occassionally runs
+        // see task_idle_forever()
+        task_enqueue(&cpu->exited_task, from_task);
 
         // select the next task starting with the current task
         to_task = _select_next_task(cpu->current_task);
@@ -250,23 +249,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
         to_task = _select_next_task(cpu->current_task->next);
     }
 
-    // if there's no more tasks to run, halt forever
-    // TODO: loop forever, checking if any task is ever added to the queue
-    if(to_task == null) {
-        // free memory for all exited processes
-        while(cpu->exited_task != null) {
-            struct task* exited = cpu->exited_task;
-
-//            fprintf(stderr, "task: unhandled task %d exited with return value = %d\n", exited->task_id, exited->return_value);
-
-            task_dequeue(&cpu->exited_task, exited);
-            task_free(exited);
-        }
-
-        // wait until a new task arrives
-        fprintf(stderr, "task: warning: cpu %d entering permanent idle state\n", cpu->cpu_index);
-        while(1) __hlt();
-    }
+    assert(to_task != null, "no processor should ever have nothing to do");
 
     // we have a task, switch to it
     cpu->current_task = to_task;
@@ -320,5 +303,32 @@ void __noreturn task_exit(s64 return_value, bool save_context)
 
     // will never get here, but this makes the compiler happy
     while(1) ;
+}
+
+// loop forever at low priority, freeing any tasks added to the exited queue
+// TODO use events to know when things have been added?
+void __noreturn task_idle_forever()
+{
+    struct cpu* cpu = get_cpu();
+
+    // set a task priority so low that we never get time unless there's literally nothing else to do
+    //task_set_priority(-20);
+
+    while(true) {
+        while(cpu->exited_task != null) {
+            u64 cpu_regs = __cli_saveflags();
+            struct task* task = cpu->exited_task;
+            task_dequeue(&cpu->exited_task, task);
+            __restoreflags(cpu_regs);
+
+            // print exit code
+            fprintf(stderr, "cpu%d: task %d exited (ret = %d)\n", cpu->cpu_index, task->task_id, task->return_value);
+            task_free(task); // safe now, because task != current_task
+        }
+
+        // wait for something interesting to happen
+        // TODO wait on an event
+        __hlt();
+    }
 }
 

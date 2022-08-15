@@ -64,6 +64,7 @@ enum TASK_YIELD_REASON {
 
 void task_set_priority(s8);
 
+void task_idle_forever();
 void task_yield(enum TASK_YIELD_REASON);
 
 // exit the current task

@@ -124,7 +124,7 @@ extern struct mutex test_mutex;
 
 static s64 idle(struct task* task) { unused(task); while(true) __hlt(); return 0; }
 
-void ap_start(u8 cpu_index)
+void ap_main(u8 cpu_index)
 {
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
     //fprintf(stderr, "ap%d: started\n", cpu_index);
@@ -156,16 +156,8 @@ void ap_start(u8 cpu_index)
     // enable the local apic timer (and thus preemptive multitasking)
     apic_enable_local_apic_timer();
 
-    // I think this could probably just run task_exit(), and then
-    // the scheduler will sit idle until there's stuff to run
-
-    // need to have another task running so that this core doesn't go idle
-    task_enqueue(&cpu->current_task, task_create(&idle, (intp)null));
-
-    // TODO damnit task_exit is crashing again and I don't know why
-    task_set_priority(-20); while(1) __hlt(); // temp
-
-    task_exit(0, false);
+    // never return
+    task_idle_forever();
 }
 
 static void spinlock_acquire(struct spinlock* lock)

@@ -154,21 +154,22 @@ static void _local_apic_timer_interrupt(intp pc, void* userdata)
     struct cpu* cpu = get_cpu();
     cpu->ticks++;
 
-    // switch tasks if we have some
-    if(cpu->current_task != null) {
-        u64 gt = global_ticks;
-        cpu->current_task->runtime += (gt - cpu->current_task->last_global_ticks);
-        cpu->current_task->last_global_ticks = gt;
+    // if no tasks are running, can't do any task switching
+    if(cpu->current_task == null) return;
 
-        // TODO maybe this should be in task_yield()?
-        if(cpu->current_task->next == cpu->current_task) return;
+    // first add up runtime on current task
+    u64 gt = global_ticks;
+    cpu->current_task->runtime += (gt - cpu->current_task->last_global_ticks);
+    cpu->current_task->last_global_ticks = gt;
 
-        // send eoi first
-        _send_lapic_eoi();
+    // if there's no other task other than the current one, keep running
+    if(cpu->current_task->next == cpu->current_task) return;
 
-        // then yield
-        task_yield(TASK_YIELD_PREEMPT);
-    }
+    // before switching tasks, send EOI first
+    _send_lapic_eoi();
+
+    // then yield. when we return, rflags is popped from the iretq instruction and interrupts are re-enabled
+    task_yield(TASK_YIELD_PREEMPT);
 }
 
 void apic_initialize_local_apic()

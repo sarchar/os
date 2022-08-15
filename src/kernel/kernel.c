@@ -182,6 +182,12 @@ static s64 open_directory(char* path, struct inode** inode)
     return 0;
 }
 
+static s64 hello_world(struct task* task)
+{
+    fprintf(stderr, "\nhello world from cpu %d (task %d)!\n", get_cpu()->cpu_index, task->task_id);
+    return 0;
+}
+
 static void run_command(char* cmdbuffer)
 {
     char* end = cmdbuffer + strlen(cmdbuffer);
@@ -466,6 +472,26 @@ static void run_command(char* cmdbuffer)
         // create file
         struct inode* newdir;
         ext2_create_directory(dir, newdirname, &newdir);
+    } else if(strcmp(cmdbuffer, "newtask") == 0) {
+        // skip whitespace or until end of string
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
+
+        // if we have a parameter, look for it
+        if(*cmdptr == 0) {
+            fprintf(stderr, "no name specified\n");
+            return;
+        }
+
+        char* targetcpu = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        struct task* newtask = task_create(hello_world, (intp)null);
+        task_enqueue_for(atoi(targetcpu), newtask);
     }
 }
 
@@ -547,17 +573,6 @@ static s64 shell(struct task* task)
     return 0;
 }
 
-static s64 print_spam_task(struct task* task)
-{
-    unused(task);
-
-    while(true) {
-        fprintf(stderr, "cpu %d printing hello world!\n", get_cpu()->cpu_index);
-    }
-
-    return 0;
-}
-
 void kernel_main(struct multiboot_info* multiboot_info) 
 {
     initialize_kernel(multiboot_info);
@@ -568,38 +583,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     struct cpu* cpu = get_cpu();
     task_enqueue(&cpu->current_task, shell_task);
 
-    // put the print_spam_task on all the cpus
-    for(u32 i = 0; i < apic_num_local_apics(); i++) {
-        if(i == cpu->cpu_index) continue;
-        struct task* t = task_create(print_spam_task, (intp)null);
-        task_enqueue_for(i, t);
-    }
-
-    // task_exit now works for the main thread (task_free won't free the stack pointer)
-    //task_exit(0, false);
-
-    // but for now, just run a low priority task that restarts the shell if it crashes/exits
-    // set a task priority so low that we never get time unless there's literally nothing else to do
-    task_set_priority(-20);
-
-    // this bootstrap processor uses a stack that's in .bss and shouldn't be freed by task_exit
-    // so that means *this* task should never exit.
-    while(true) {
-        while(cpu->exited_task != null) {
-            struct task* task = cpu->exited_task;
-            task_dequeue(&cpu->exited_task, task);
-
-            // restart the shell
-            if(task == shell_task) {
-                fprintf(stderr, "shell exited (ret = %d)\n", shell_task->return_value);
-                task_free(shell_task);
-                shell_task = task_create(shell, (intp)null);
-                task_enqueue(&cpu->current_task, shell_task);
-            }
-        }
-
-        // wait for something interesting to happen
-        __hlt();
-    }
+    // never exit
+    task_idle_forever();
 }
 

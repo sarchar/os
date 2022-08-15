@@ -14,13 +14,15 @@ add_custom_target(os_iso ALL
 add_custom_target(run
                   DEPENDS os_iso 
                   COMMAND qemu-system-x86_64 -machine q35
-                                             -m 4G
                                              -bios /usr/share/ovmf/OVMF.fd
-                                             -boot d
-                                             -vga cirrus
-                                             -monitor stdio
+                                             #-enable-kvm
+                                             #-cpu host
                                              -smp 4
-                                             -serial file:${CMAKE_BINARY_DIR}/output.log
+                                             -m 4G
+                                             -boot d
+                                             #use -vga line or -nographic one, not both
+                                             -vga cirrus -monitor stdio -serial file:${CMAKE_BINARY_DIR}/output.log
+                                             #-nographic
                                              -drive file=${CMAKE_BINARY_DIR}/os.iso,if=none,media=cdrom,format=raw,id=boot
                                              #-drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=none,media=disk,format=qcow2,id=extra
                                              -drive file=${CMAKE_BINARY_DIR}/ext2.img,if=none,media=disk,format=raw,id=extra
@@ -38,15 +40,19 @@ add_custom_target(run
 add_custom_target(gdb
                   DEPENDS os_iso 
                   COMMAND qemu-system-x86_64 -machine q35
-                                             -m 4G
                                              -bios /usr/share/ovmf/OVMF.fd
-                                             -boot d
-                                             -vga cirrus
-                                             -monitor stdio
+                                             #-enable-kvm
+                                             #-cpu host
                                              -smp 4
+                                             -m 4G
+                                             -boot d
+                                             #use -vga line or -nographic one, not both
+                                             -vga cirrus -monitor stdio -serial file:${CMAKE_BINARY_DIR}/output.log
+                                             #-nographic 
                                              -serial file:${CMAKE_BINARY_DIR}/output.log
                                              -drive file=${CMAKE_BINARY_DIR}/os.iso,if=none,media=cdrom,format=raw,id=boot
-                                             -drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=none,media=disk,format=qcow2,id=extra
+                                             #-drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=none,media=disk,format=qcow2,id=extra
+                                             -drive file=${CMAKE_BINARY_DIR}/ext2.img,if=none,media=disk,format=raw,id=extra
                                              -device ahci,id=ahci
                                              -device ide-cd,drive=boot,bus=ahci.0
                                              -device ide-hd,drive=extra,bus=ahci.1

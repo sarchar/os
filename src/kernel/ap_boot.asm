@@ -1,5 +1,5 @@
 extern boot_page_table_level4
-extern ap_start
+extern ap_main
 
 ; Access bits
 PRESENT        equ 1 << 7
@@ -92,10 +92,10 @@ bits 64
     mov eax, 1
     cpuid
     shr ebx, 24
-    mov rdi, rbx   ; first parameter to ap_start is of type u8, so this is fine
+    mov rdi, rbx   ; first parameter to ap_main is of type u8, so this is fine
     
     ; jump into C code
-    mov rsi, ap_start
+    mov rsi, ap_main
     jmp rsi
 
 .forever:

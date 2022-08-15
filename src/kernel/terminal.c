@@ -217,7 +217,7 @@ int errno;
 int write(int fd, char* buf, u64 size)
 {
     // right now, only print out stderr messages
-    if(fd != stderr->handle) return -1;
+    if(fd != stderr->handle) return 0;
 
     // get the terminal lock
     acquire_lock(terminal_write_lock); // wait for lock to become available on other cpus

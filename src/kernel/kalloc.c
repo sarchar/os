@@ -16,7 +16,7 @@
 //#define KALLOC_MAX_N 9  // 512 bytes is the largest allocation unit
 #define KALLOC_MAX_N 16  // 64k is the largest allocation unit
 
-#define KALLOC_VERBOSE 0
+#define KALLOC_VERBOSE 1
 
 // kalloc chunks are just contiguous pages 
 struct kalloc_chunk {
