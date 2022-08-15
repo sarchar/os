@@ -1,0 +1,35 @@
+
+# load symbols
+file bin/os.bin
+# set the i386 architecture
+set arch i386:x86-64:intel
+# connect to qemu
+target remote localhost:1234 
+# break on kernel_main
+hbreak kernel_main
+# run until breakpoint is hit, where we should receive an error
+
+# define a function for ignoring errors
+python
+def my_ignore_errors(arg):
+    try:
+        gdb.execute("print \"" + "Executing command: " + arg + "\"")
+        gdb.execute (arg)
+    except:
+        gdb.execute("print \"" + "ERROR: " + arg + "\"")
+
+my_ignore_errors("cont")
+
+# reconnect using a new architecture
+gdb.execute("disconnect")
+gdb.execute("set arch i386:x86-64")
+gdb.execute("target remote localhost:1234")
+# one continue here puts us in kernel_main
+gdb.execute("cont")
+
+# set some useful breakpoints
+gdb.execute("hbreak _interrupt_gpf")
+gdb.execute("hbreak _interrupt_page_fault")
+gdb.execute("hbreak kernel_panic")
+
+
