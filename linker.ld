@@ -62,6 +62,7 @@ SECTIONS
     _ap_boot_size = SIZEOF(.ap_boot); /* define the length of the ap_boot data */
 
     /* Define a symbol for the end of the kernel */
+    . = _ap_boot_start + _ap_boot_size;
     . = ALIGN(4K);           /* align up to page size */
     _kernel_end_address = .;
 

@@ -268,12 +268,17 @@ DEFINE_INTERRUPT_HANDLER_ERR(13, interrupt_gpf)
 DEFINE_INTERRUPT_HANDLER_ERR(14, interrupt_page_fault)
 {
     unused(irq_vector);
-    fprintf(stderr, "page fault: error = $%lX at address $%lX ", error_code, fault_addr);
+    extern bool _ap_all_go;
+    if(_ap_all_go) {
+        fprintf(stderr, "page fault: on cpu %d error = $%lX at address $%lX ", get_cpu()->cpu_index, error_code, fault_addr);
+    } else {
+        fprintf(stderr, "page fault: error = $%lX at address $%lX ", error_code, fault_addr);
+    }
 
     u8 rw = (error_code & 0x02);
 
     u64 access_address = __rdcr2();
-    fprintf(stderr, " %s $%lX\n", rw ? "writing" : "reading", (intp)access_address);
+    fprintf(stderr, " %s $%lX\n", rw ? "writing to" : "reading from", (intp)access_address);
 
     // put a page at the access_address 
 #if 0

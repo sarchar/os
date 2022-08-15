@@ -5,8 +5,10 @@
 #include "efifb.h"
 #include "serial.h"
 #include "smp.h"
+#include "stdio.h"
 #include "string.h"
 #include "terminal.h"
+#include "threads.h"
 
 // PSF font structure
 // From https://wiki.osdev.org/PC_Screen_Font
@@ -130,6 +132,12 @@ static void _draw_char_to_framebuffer(u16 c, u32 x, u32 y, color text_color, col
 
 void terminal_init()
 {
+    // the stdio streams have mutexes that are statically initialized in .data, but we need to do 
+    // more initialization, so we call mtx_init on each of them to make sure they're properly initialized.
+    mtx_init(&stdin->mtx, mtx_plain|mtx_recursive);
+    mtx_init(&stdout->mtx, mtx_plain|mtx_recursive);
+    mtx_init(&stderr->mtx, mtx_plain|mtx_recursive);
+
     _load_font();
 
     current_terminal.width = TERMINAL_WIDTH; // TODO determine dynamically
@@ -208,11 +216,11 @@ static declare_ticketlock(terminal_write_lock);
 int errno;
 int write(int fd, char* buf, u64 size)
 {
-    if(fd != 2) return -1;
+    // right now, only print out stderr messages
+    if(fd != stderr->handle) return -1;
 
-    // disable interrupts and acquire spinlock
-    u64 cpu_flags = __cli_saveflags();
-    acquire_lock(terminal_write_lock);
+    // get the terminal lock
+    acquire_lock(terminal_write_lock); // wait for lock to become available on other cpus
 
     for(u64 i = 0; i < size; i++) {
         terminal_putc((u16)buf[i]);
@@ -222,7 +230,6 @@ int write(int fd, char* buf, u64 size)
 
     // release spinlock and restore irqs
     release_lock(terminal_write_lock);
-    __restoreflags(cpu_flags);
 
     return size;
 }

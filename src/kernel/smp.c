@@ -16,6 +16,8 @@
 
 #define AP_BOOT_PAGE 8
 
+static_assert(sizeof(struct mutex) <= 64, "if struct mutex is larger than 64 bytes, struct _PDCLIB_mtx_t in _PDCLIB_config.h needs to be updated to match");
+
 // defined in linker.ld
 extern intp _ap_boot_start, _ap_boot_size;
 
@@ -26,6 +28,7 @@ static intp _ap_boot_stack_bottom;
 // synchronization for bootup
 bool volatile _ap_boot_ack;
 bool volatile _ap_all_go;
+bool volatile _ap_all_stop;
 
 // for GDT fixup
 void _ap_gdt_fixup(intp kernel_vma_base);
@@ -87,6 +90,11 @@ void smp_init()
     apic_enable_local_apic_timer();
 
     fprintf(stderr, "smp: done\n");
+}
+
+void smp_all_stop()
+{
+    _ap_all_stop = true;
 }
 
 static void _create_cpu(u8 cpu_index)
@@ -154,7 +162,7 @@ void ap_start(u8 cpu_index)
     // need to have another task running so that this core doesn't go idle
     task_enqueue(&cpu->current_task, task_create(&idle, (intp)null));
 
-    // damnit task_exit is crashing again and I don't know why
+    // TODO damnit task_exit is crashing again and I don't know why
     task_set_priority(-20); while(1) __hlt(); // temp
 
     task_exit(0, false);
@@ -198,7 +206,7 @@ struct lock_functions spinlock_functions = {
 
 static void ticketlock_acquire(struct ticketlock* tkt)
 {
-    u16 me = __atomic_xadd(&tkt->users, 1);
+    u32 me = __atomic_xadd(&tkt->users, (u32)1);
     while(tkt->ticket != me) __pause_barrier();
 }
 
@@ -214,10 +222,11 @@ static bool ticketlock_trylock(struct ticketlock* tkt)
     u32 next = me + 1;
 
     // TODO this may not work on big endian
-    u64 cmp = ((u64)me << 32) | me;
+    u64 cmp    = ((u64)me << 32) | me;
     u64 cmpnew = ((u64)next << 32) | me;
 
     // essentially check if there are no open locks, and if so, add 1 to both the ticket and users
+    __barrier();
     if(__compare_and_exchange(&tkt->_v, cmp, cmpnew) == cmp) return true;
 
     return false;
@@ -239,59 +248,75 @@ struct lock_functions ticketlock_functions = {
 
 struct mutex_blocked_task {
     MAKE_HASH_TABLE;
-    u16 user_id;
-    u16 unused0;
+    u32 user;
     u32 unused1;
     struct task* task;
 };
 
 static void mutex_acquire(struct mutex* m)
 {
-    if(try_lock(m->lock)) return;
-
-    // couldn't acquire lock, so get a ticket
+    // try locking the ticketlock
     acquire_lock(m->internal_lock);
+    if(try_lock(m->lock)) { // if we get the ticketlock, then we're golden and can continue
+        release_lock(m->internal_lock);
+        return;
+    }
 
-    // create a new blocked task
+    // otherwise, we need to block this thread. create a new blocked task structure on the stack,
+    // and since this stack stays valid for the duration of the blocked task, we can reference the structure safely
+    // in mutex_release
     struct mutex_blocked_task* bt = (struct mutex_blocked_task*)__builtin_alloca(sizeof(struct mutex_blocked_task));
-    bt->user_id = __atomic_xadd(&m->lock.users, 1);
-    bt->task = get_cpu()->current_task;
+    zero(bt);
+    bt->user = __atomic_xadd(&m->lock.users, 1); // increment user count (we're waiting on a ticket)
+    bt->task = get_cpu()->current_task;          // need this to unblock the task later
 
-    // can't get the lock, so this task now must be blocked
-    // place it in an empty slot
-    HT_ADD(m->blocked_tasks, user_id, bt);
-
+    // add this task to the blocked tasks hash table
+    HT_ADD(m->blocked_tasks, user, bt);
     m->num_blocked_tasks++;
-    release_lock(m->internal_lock);
 
-    // if the task wakes up, it means mutex_release believes we're the proper owner of the next ticket
-    task_yield(TASK_YIELD_MUTEX_BLOCK);
+    // place the task into a BLOCKED state so that the scheduler doesn't try to run the task until mutex_release wakes it up
+    release_lock(m->internal_lock);
+    task_yield(TASK_YIELD_MUTEX_BLOCK); // when the task wakes up, it means mutex_release believes we're the proper owner of the next ticket
 
     // remove us from the hash table
     acquire_lock(m->internal_lock);
-    assert(m->lock.ticket == bt->user_id, "why did we wake up??");
+    assert(m->lock.ticket == bt->user, "why did we wake up if the ticket doesn't match??");
     HT_DELETE(m->blocked_tasks, bt);
+    m->num_blocked_tasks--;
     release_lock(m->internal_lock);
 }
 
+//void mutex_dump(struct mutex* m)
+//{
+//    acquire_lock(m->internal_lock);
+//    fprintf(stderr, "mutex at 0x%lX\n", m);
+//    fprintf(stderr, "num_blocked_tasks = %d\n", m->num_blocked_tasks);
+//    fprintf(stderr, "now serving ticket = %d\n", m->lock.ticket);
+//    fprintf(stderr, "next unclaimed user = %d\n", m->lock.users);
+//    fprintf(stderr, "blocked_tasks = 0x%lX\n", m->blocked_tasks);
+//    for(u32 i = 0; i <= m->lock.users; i++) {
+//        struct mutex_blocked_task* bt = null;
+//        HT_FIND(m->blocked_tasks, i, bt);
+//        if(bt != null) fprintf(stderr, "blocked task found with user=%d task=0x%lX task_id=%d on cpu=%d\n", i, bt->task, bt->task->task_id, bt->task->cpu->cpu_index);
+//    }
+//    release_lock(m->internal_lock);
+//}
+
 static void mutex_release(struct mutex* m)
 {
-    struct task* unblock_task;
-
     acquire_lock(m->internal_lock); // lock the internal lock first, so that we can unblock some tasks before any other acquire happens
-    release_lock(m->lock);
+    release_lock(m->lock); // increments lock.ticket
 
     __barrier();
-    u16 next_ticket = m->lock.ticket;
+    u32 next_ticket = m->lock.ticket;
 
-    struct mutex_blocked_task* bt;
+    // if lock.ticket exists in the blocked queue
+    struct mutex_blocked_task* bt = null;
     HT_FIND(m->blocked_tasks, next_ticket, bt);
-    release_lock(m->internal_lock);
 
     if(bt != null) {
-        unblock_task = bt->task;
         release_lock(m->internal_lock);
-        task_unblock(unblock_task);
+        task_unblock(bt->task);
     } else {
         // no task found
         release_lock(m->internal_lock);
@@ -300,12 +325,18 @@ static void mutex_release(struct mutex* m)
 
 static bool mutex_trylock(struct mutex* m)
 {
-    return try_lock(m->lock);
+    acquire_lock(m->internal_lock);
+    bool res = try_lock(m->lock);
+    release_lock(m->internal_lock);
+    return res;
 }
 
 static bool mutex_canlock(struct mutex* m)
 {
-    return can_lock(m->lock);
+    acquire_lock(m->internal_lock);
+    bool res = can_lock(m->lock);
+    release_lock(m->internal_lock);
+    return res;
 }
 
 struct lock_functions mutexlock_functions = {

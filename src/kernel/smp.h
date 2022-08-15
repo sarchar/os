@@ -2,6 +2,7 @@
 #define __SMP_H__
 
 void smp_init();
+void smp_all_stop();
 
 // generic locking functions
 #define acquire_lock(lock) lock._f->acquire((intp)&lock)
@@ -23,7 +24,7 @@ struct lock_functions {
 struct spinlock {
     u8 _v;
     struct lock_functions* _f;
-} __packed;
+};
 
 extern struct lock_functions spinlock_functions;
 
@@ -41,7 +42,7 @@ struct ticketlock {
     };
 
     struct lock_functions* _f;
-} __packed;
+};
 
 extern struct lock_functions ticketlock_functions;
 
@@ -60,7 +61,7 @@ struct mutex {
     // hash table maps a user id into a task, so we know which task to unblock
     struct mutex_blocked_task* blocked_tasks;
     u32 num_blocked_tasks;
-} __packed;
+};
 
 extern struct lock_functions mutexlock_functions;
 

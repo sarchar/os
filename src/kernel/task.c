@@ -109,7 +109,7 @@ void task_set_priority(s8 priority)
 void task_enqueue_for(u32 target_cpu_index, struct task* new_task)
 {
     // wake up the other cpu and tell it to add the task to its running queue
-    struct ipcall* ipcall = apic_ipcall_build(IPCALL_FUNC_TASK_ENQUEUE, (void*)new_task);
+    struct ipcall* ipcall = apic_ipcall_build(IPCALL_TASK_ENQUEUE, (void*)new_task);
     apic_ipcall_send(target_cpu_index, ipcall);
 }
 
@@ -117,6 +117,9 @@ void task_enqueue_for(u32 target_cpu_index, struct task* new_task)
 void task_enqueue(struct task** task_queue, struct task* new_task)
 {
     u64 cpu_flags = __cli_saveflags();
+
+    // the task now should run on the specified cpu
+    new_task->cpu = get_cpu();
 
     if(*task_queue != null) {
         // previous task points to a new task
@@ -261,7 +264,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
         }
 
         // wait until a new task arrives
-//            fprintf(stderr, "task: warning: cpu %d entering permanent idle state\n", cpu->cpu_index);
+        fprintf(stderr, "task: warning: cpu %d entering permanent idle state\n", cpu->cpu_index);
         while(1) __hlt();
     }
 
@@ -275,6 +278,8 @@ void task_yield(enum TASK_YIELD_REASON reason)
     __restoreflags(cpu_flags);
 }
 
+// task_unblock is sometimes called from within an interrupt, and so shouldn't ever
+// call fprintf() (as interrupts are disabled and could cause a deadlock in the stream mutex)
 void task_unblock(struct task* task)
 {
     assert(task->state == TASK_STATE_BLOCKED, "can't unblock an unblocked task");
@@ -283,14 +288,13 @@ void task_unblock(struct task* task)
 
     if(task->cpu == cpu) { // easy case here, just requeue it in READY state
         u64 cpu_flags = __cli_saveflags();
-        fprintf(stderr, "unblocking task %d\n", task->task_id);
         task_dequeue(&cpu->blocked_task, task);
         task->state = TASK_STATE_READY;
         task_enqueue(&cpu->current_task, task);
         __restoreflags(cpu_flags);
     } else {
         // wake up the other cpu and tell it to add the task back to its queue
-        struct ipcall* ipcall = apic_ipcall_build(IPCALL_FUNC_TASK_UNBLOCK, (void*)task);
+        struct ipcall* ipcall = apic_ipcall_build(IPCALL_TASK_UNBLOCK, (void*)task);
         apic_ipcall_send(task->cpu->cpu_index, ipcall);
     } 
 }

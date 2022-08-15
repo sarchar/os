@@ -30,10 +30,13 @@ extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
 
 static bool volatile exit_shell = false;
-declare_mutex(test_mutex);
 
 __noreturn void kernel_panic(u32 error)
 {
+    // disable all context switches
+    __cli();
+    smp_all_stop();
+
     // attempt to set the screen to all red
     //efifb_clear(COLOR(255,0,0));
     for(u32 y = 540; y < 620; y++) {
@@ -463,16 +466,6 @@ static void run_command(char* cmdbuffer)
         // create file
         struct inode* newdir;
         ext2_create_directory(dir, newdirname, &newdir);
-    } else if(strcmp(cmdbuffer, "mutex") == 0) {
-        // try to claim the mutex and print something
-        while(true) {
-            acquire_lock(test_mutex);
-            //fprintf(stderr, "got the mutex!\n");
-            u64 t = global_ticks + 5000;
-            while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
-            release_lock(test_mutex);
-        //fprintf(stderr, "left the mutex!\n");
-        }
     }
 }
 
@@ -554,15 +547,14 @@ static s64 shell(struct task* task)
     return 0;
 }
 
-static s64 mutex_grab_thread(struct task* task)
+static s64 print_spam_task(struct task* task)
 {
     unused(task);
+
     while(true) {
-        acquire_lock(test_mutex);
-        u64 t = global_ticks + 5000;
-        while(global_ticks < t) task_yield(TASK_YIELD_VOLUNTARY);
-        release_lock(test_mutex);
+        fprintf(stderr, "cpu %d printing hello world!\n", get_cpu()->cpu_index);
     }
+
     return 0;
 }
 
@@ -576,10 +568,11 @@ void kernel_main(struct multiboot_info* multiboot_info)
     struct cpu* cpu = get_cpu();
     task_enqueue(&cpu->current_task, shell_task);
 
-    // put the mutex_grab_thread on all the cpus
+    // put the print_spam_task on all the cpus
     for(u32 i = 0; i < apic_num_local_apics(); i++) {
         if(i == cpu->cpu_index) continue;
-        task_enqueue_for(i, task_create(mutex_grab_thread, (intp)null));
+        struct task* t = task_create(print_spam_task, (intp)null);
+        task_enqueue_for(i, t);
     }
 
     // task_exit now works for the main thread (task_free won't free the stack pointer)

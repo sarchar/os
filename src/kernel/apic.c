@@ -144,7 +144,12 @@ static void _local_apic_timer_interrupt(intp pc, void* userdata)
     unused(pc);
     unused(userdata);
 
-    __cli();
+    //__cli();
+    extern bool volatile _ap_all_stop;
+    if(_ap_all_stop) {
+        __cli(); // with interrupts disabled, __hlt will never return (except by NMI, etc)
+        while(true) __hlt();
+    }
 
     struct cpu* cpu = get_cpu();
     cpu->ticks++;
@@ -526,7 +531,7 @@ struct ipcall {
     void* payload;
 };
 
-struct ipcall* apic_ipcall_build(enum IPCALL_FUNCTION func, void* payload)
+struct ipcall* apic_ipcall_build(enum IPCALL_FUNCTIONS func, void* payload)
 {
     struct ipcall* ipc = kalloc(sizeof(struct ipcall));
     ipc->function = (u32)func;
@@ -579,15 +584,19 @@ static void _local_apic_ipcall_interrupt(intp pc, void* userdata)
     if(ipc == null) return;
 
     // valid, so do whatever we're told
-    switch((enum IPCALL_FUNCTION)ipc->function) {
-    case IPCALL_FUNC_TASK_ENQUEUE:
-        //fprintf(stderr, "apic: cpu %d received TASK_ENQUEUE IPCALL from cpu %d\n", cpu->cpu_index, ipc->source_cpu_index);
-        task_enqueue(&cpu->current_task, (struct task*)ipc->payload);
+    switch((enum IPCALL_FUNCTIONS)ipc->function) {
+    case IPCALL_TASK_ENQUEUE:
+        {
+            struct task* target = (struct task*)ipc->payload;
+            task_enqueue(&cpu->current_task, target);
+        }
         break;
 
-    case IPCALL_FUNC_TASK_UNBLOCK:
-        //fprintf(stderr, "apic: cpu %d received TASK_UNBLOCK IPCALL from cpu %d\n", cpu->cpu_index, ipc->source_cpu_index);
-        task_unblock((struct task*)ipc->payload);
+    case IPCALL_TASK_UNBLOCK:
+        {
+            struct task* target = (struct task*)ipc->payload;
+            task_unblock(target);
+        }
         break;
     }
 }

@@ -8,6 +8,9 @@
 
 #include <threads.h>
 
+#include "kernel/common.h"
+#include "kernel/smp.h"
+
 int mtx_init( mtx_t * mtx, int type )
 {
     /* As far as I could figure out from Pthread documentation, there is
@@ -24,6 +27,15 @@ int mtx_init( mtx_t * mtx, int type )
     {
         _PDCLIB_mtx_t plain_mutex = _PDCLIB_MTX_PLAIN_INIT;
         *mtx = plain_mutex;
+    }
+
+    // initialize the kernel task mutex
+    {
+        declare_mutex(mutex_init);
+        struct _internal_mtx_t* imtx = (struct _internal_mtx_t*)mtx;
+        *(struct mutex*)(imtx->mutex_lock) = mutex_init;
+        imtx->owner_task_id = (unsigned long long)-1;
+        imtx->lock_count = 0;
     }
 
     return thrd_success;

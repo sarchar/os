@@ -6,7 +6,13 @@
 
 #ifndef REGTEST
 
+#include <stdio.h>
 #include <threads.h>
+
+#include "kernel/common.h"
+#include "kernel/cpu.h"
+#include "kernel/smp.h"
+#include "kernel/task.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,18 +25,21 @@ extern int pthread_mutex_unlock( mtx_t * );
 }
 #endif
 
+bool volatile _ap_all_go;
+//extern struct _PDCLIB_file_t* stderr;
+
 int mtx_unlock( mtx_t * mtx )
 {
-    (void)mtx;
+    struct _internal_mtx_t* imtx = (struct _internal_mtx_t*)mtx;
+
+    if(_ap_all_go && __atomic_dec(&imtx->lock_count) == 0) {
+        assert(imtx->owner_task_id == get_cpu()->current_task->task_id, "what");
+        struct mutex* kmutex = (struct mutex*)imtx->mutex_lock;
+        imtx->owner_task_id = (unsigned long long)-1;
+        release_lock((*kmutex));
+    }
+
     return thrd_success;
-//!    if ( pthread_mutex_unlock( mtx ) == 0 )
-//!    {
-//!        return thrd_success;
-//!    }
-//!    else
-//!    {
-//!        return thrd_error;
-//!    }
 }
 
 #endif

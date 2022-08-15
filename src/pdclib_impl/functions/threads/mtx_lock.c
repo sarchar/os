@@ -6,7 +6,13 @@
 
 #ifndef REGTEST
 
+#include <stdio.h>
 #include <threads.h>
+
+#include "kernel/common.h"
+#include "kernel/cpu.h"
+#include "kernel/smp.h"
+#include "kernel/task.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -19,18 +25,43 @@ extern int pthread_mutex_lock( mtx_t * );
 }
 #endif
 
+bool volatile _ap_all_go;
+//extern struct _PDCLIB_file_t* stderr;
+
 int mtx_lock( mtx_t * mtx )
 {
-    (void)mtx;
+    // we have to implement a recursive lock from our non-recursive kernel mutex. 
+    // that's not too difficult -- we just have to keep track of the owning task id
+    // and keep track of how many locks/unlocks occur
+    struct _internal_mtx_t* imtx = (struct _internal_mtx_t*)mtx;
+    struct mutex* kmutex = (struct mutex*)imtx->mutex_lock;
+
+    if(!_ap_all_go) { // without SMP/multithreading, there are no other threads, we can just not use the mutex
+        return thrd_success;
+    }
+
+    // with multithreading, we need to support recursive locks, so we keep track of when we obtain the lock
+    // and the # of times it's obtained
+    bool locked = try_lock((*kmutex));
+    if(locked) {
+        // lock was acquired
+        assert(imtx->lock_count == 0, "lock_count should have been 0 here");
+        imtx->owner_task_id = get_cpu()->current_task->task_id;
+        imtx->lock_count = 1;
+    } else {
+        // couldn't obtain the lock. if we're the owner of said lock, increment count and continue, otherwise block
+        if(get_cpu()->current_task->task_id == imtx->owner_task_id) {
+            __atomic_inc(&imtx->lock_count);
+        } else {
+            // block since we're not the owner of the lock
+            acquire_lock((*kmutex)); // will allow other tasks to run and eventually give us the lock
+            assert(imtx->lock_count == 0, "lock_count should have been 0 here");
+            imtx->owner_task_id = get_cpu()->current_task->task_id;
+            imtx->lock_count = 1;
+        }
+    }
+
     return thrd_success;
-//!    if ( pthread_mutex_lock( mtx ) == 0 )
-//!    {
-//!        return thrd_success;
-//!    }
-//!    else
-//!    {
-//!        return thrd_error;
-//!    }
 }
 
 #endif

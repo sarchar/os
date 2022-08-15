@@ -32,7 +32,7 @@ add_custom_target(run
                                              -netdev user,id=osnet
                                              -device e1000e,netdev=osnet,romfile=${CMAKE_CURRENT_SOURCE_DIR}/efi-e1000e.rom
                                              -k en-us
-                                             #-d int -D int.log
+                                             -d int -D int.log
 )
 
 add_custom_target(gdb
