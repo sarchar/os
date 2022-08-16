@@ -15,8 +15,7 @@ add_custom_target(run
                   DEPENDS os_iso 
                   COMMAND qemu-system-x86_64 -machine q35
                                              -bios /usr/share/ovmf/OVMF.fd
-                                             #-enable-kvm
-                                             #-cpu host
+                                             #-enable-kvm -cpu host
                                              -smp 4
                                              -m 4G
                                              -boot d

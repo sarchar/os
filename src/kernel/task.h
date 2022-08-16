@@ -11,17 +11,26 @@ enum TASK_STATE {
     TASK_STATE_BLOCKED,   // task is waiting on some event to occur
 };
 
+enum TASK_FLAGS {
+    TASK_FLAG_USER = (1 << 0),
+};
+
 struct task {
     ////////////////////////////////////////////////////////////////////////////
     // structure definition here must match task.asm
     ////////////////////////////////////////////////////////////////////////////
 
     // saved context variables
-    u64  rsp;
+    intp  rip; 
+    intp  rsp;
+    u64   rflags;
     u64  last_global_ticks;
 
     // length of time in ms the task has been running
     u64  runtime;
+
+    // flags (user mode, etc)
+    u64  flags;
 
     ////////////////////////////////////////////////////////////////////////////
     // the structure from this point forward doesn't need to match task.asm
@@ -40,9 +49,10 @@ struct task {
     intp userdata;
 
     u64  return_value;
+
     bool save_context;
     s8   priority;
-    u16  padding2;
+    u16  padding1;
     u32  padding3;
 
     struct task* prev;
@@ -50,7 +60,7 @@ struct task {
 };
 
 void task_become();
-struct task* task_create(task_entry_point_function*, intp); 
+struct task* task_create(task_entry_point_function*, intp, bool); 
 intp task_allocate_stack(u64*);
 void task_free(struct task*);
 

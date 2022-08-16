@@ -122,8 +122,6 @@ static void _create_cpu(u8 cpu_index)
 
 extern struct mutex test_mutex;
 
-static s64 idle(struct task* task) { unused(task); while(true) __hlt(); return 0; }
-
 void ap_main(u8 cpu_index)
 {
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
@@ -277,22 +275,6 @@ static void mutex_acquire(struct mutex* m)
     m->num_blocked_tasks--;
     release_lock(m->internal_lock);
 }
-
-//void mutex_dump(struct mutex* m)
-//{
-//    acquire_lock(m->internal_lock);
-//    fprintf(stderr, "mutex at 0x%lX\n", m);
-//    fprintf(stderr, "num_blocked_tasks = %d\n", m->num_blocked_tasks);
-//    fprintf(stderr, "now serving ticket = %d\n", m->lock.ticket);
-//    fprintf(stderr, "next unclaimed user = %d\n", m->lock.users);
-//    fprintf(stderr, "blocked_tasks = 0x%lX\n", m->blocked_tasks);
-//    for(u32 i = 0; i <= m->lock.users; i++) {
-//        struct mutex_blocked_task* bt = null;
-//        HT_FIND(m->blocked_tasks, i, bt);
-//        if(bt != null) fprintf(stderr, "blocked task found with user=%d task=0x%lX task_id=%d on cpu=%d\n", i, bt->task, bt->task->task_id, bt->task->cpu->cpu_index);
-//    }
-//    release_lock(m->internal_lock);
-//}
 
 static void mutex_release(struct mutex* m)
 {

@@ -29,6 +29,14 @@ static inline u64 __sti_saveflags(void)
     return flags;
 }
   
+static inline u64 __saveflags()
+{
+    u64 flags;
+    asm volatile ("pushfq\n"
+                  "\tpop %0" : "=rm"(flags) : : "memory");
+    return flags;
+}
+
 static inline void __restoreflags(u64 flags)
 {
     asm volatile ("push %0\n"

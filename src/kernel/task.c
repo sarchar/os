@@ -55,7 +55,14 @@ static __noreturn void _task_entry()
     task_exit(task->entry(task), true);
 }
 
-struct task* task_create(task_entry_point_function* entry, intp userdata)
+bool got_user_mode = false;
+static __noreturn void _user_task_entry()
+{
+    got_user_mode = true;
+    while(1) __pause();
+}
+
+struct task* task_create(task_entry_point_function* entry, intp userdata, bool is_user)
 {
     struct task* task = (struct task*)kalloc(sizeof(struct task));
     zero(task);
@@ -64,6 +71,8 @@ struct task* task_create(task_entry_point_function* entry, intp userdata)
     task->task_id = __atomic_inc(&next_task_id);
     task->state = TASK_STATE_NEW;
     task->cpu = get_cpu();
+
+    if(is_user) task->flags |= TASK_FLAG_USER;
 
     // set up the task entry point
     task->entry = entry;
@@ -77,8 +86,13 @@ struct task* task_create(task_entry_point_function* entry, intp userdata)
     task->stack_bottom = task_allocate_stack(&stack_size);
     task->rsp = (u64)task->stack_bottom + stack_size;
 
+    // entry point to the task
+    task->rip = is_user ? (u64)_user_task_entry : (u64)_task_entry;
+
+    // default cpu flags
+    task->rflags = __saveflags() & ~(1 << 9); // IF (interrupt enable flag) is bit 9. Section 3.4.3 of Volume 1 Software Development Manual
+
     // initialize parameters on the stack
-    TASK_PUSH_STACK(task, (intp)_task_entry); // rip
     TASK_PUSH_STACK(task, 0); // r15
     TASK_PUSH_STACK(task, 0); // r14
     TASK_PUSH_STACK(task, 0); // r13
@@ -202,6 +216,11 @@ static struct task* _select_next_task(struct task* start)
     return null;
 }
 
+void _task_switch_to_user(struct task* from_task, struct task* to_task)
+{
+    _task_switch_to(from_task, to_task);
+}
+
 void task_yield(enum TASK_YIELD_REASON reason)
 {
     u64 cpu_flags = __cli_saveflags();
@@ -254,9 +273,12 @@ void task_yield(enum TASK_YIELD_REASON reason)
     // we have a task, switch to it
     cpu->current_task = to_task;
     cpu->current_task->state = TASK_STATE_RUNNING;
-    _task_switch_to(from_task, to_task);
+    if(to_task->flags & TASK_FLAG_USER) _task_switch_to_user(from_task, to_task);
+    else _task_switch_to(from_task, to_task);
+
+    goto resume_task;
     
-//resume_task:
+resume_task:
     // at this point our task has just been resumed, restore interrupt flag and return
     __restoreflags(cpu_flags);
 }

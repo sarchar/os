@@ -16,7 +16,7 @@
 enum CPU_PAGE_TABLE_ENTRY_FLAGS {
     CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT   = (1 << 0),
     CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE = (1 << 1),
-    CPU_PAGE_TABLE_ENTRY_FLAG_SUPERUSER = (1 << 2),
+    CPU_PAGE_TABLE_ENTRY_FLAG_USER      = (1 << 2),
     CPU_PAGE_TABLE_ENTRY_WRITE_THROUGH  = (1 << 3),
     CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE  = (1 << 4),
     CPU_PAGE_TABLE_ENTRY_ACCESSED       = (1 << 5),
@@ -121,6 +121,9 @@ static void _map_page(intp phys, intp virt, u32 flags)
     assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
     assert(__alignof(phys, 4096) == 0, "physical address must be 4KB aligned");
 
+    // temporarily mark ALL pages as user-accessible pages
+    u64 blarg = CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+
     //fprintf(stderr, "paging: mapping page at 0x%08lX to virtual address 0x%08lX\n", phys, virt);
 
     // shift right 12 for pt1
@@ -134,7 +137,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(paging_root->_cpu_table[pml4_index] == 0) {
         pdpt = _allocate_page_table();
         paging_root->entries[pml4_index] = pdpt;
-        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
         paging_root->num_entries++;
     }
 
@@ -144,7 +147,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(pdpt->_cpu_table[pdpt_index] == 0) {
         pd = _allocate_page_table();
         pdpt->entries[pdpt_index] = pd;
-        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
         pdpt->num_entries++;
     }
 
@@ -154,7 +157,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(pd->_cpu_table[pd_index] == 0) {
         pt = _allocate_page_table();
         pd->entries[pd_index] = pt;
-        pd->_cpu_table[pd_index] = (intp)pt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        pd->_cpu_table[pd_index] = (intp)pt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
         pd->num_entries++;
     }
 
@@ -167,7 +170,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     u32 pt_flags = CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT;
     if(flags & MAP_PAGE_FLAG_DISABLE_CACHE) pt_flags |= CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE;
     if(flags & MAP_PAGE_FLAG_WRITABLE) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
-    *pte = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_4KB) | pt_flags;
+    *pte = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_4KB) | pt_flags | blarg;
     pt->num_entries++;
 }
 
@@ -240,8 +243,8 @@ void _make_flags_string(char* buf, u64 v)
     else                                      buf[1] = 'p';
     if(v & CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE) buf[2] = 'W';
     else                                        buf[2] = 'w';
-    if(v & CPU_PAGE_TABLE_ENTRY_FLAG_SUPERUSER) buf[3] = 'S';
-    else                                        buf[3] = 's';
+    if(v & CPU_PAGE_TABLE_ENTRY_FLAG_USER)     buf[3] = 'U';
+    else                                       buf[3] = 'u';
     if(v & CPU_PAGE_TABLE_ENTRY_WRITE_THROUGH) buf[4] = 'T';
     else                                       buf[4] = 't';
     if(v & CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE) buf[5] = 'C';
@@ -314,6 +317,9 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
 
     //fprintf(stderr, "paging: mapping 1GiB at 0x%08lX to virtual address 0x%08lX\n", phys, virt);
 
+    // temporarily mark ALL pages as user-accessible pages
+    u64 blarg = CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+
     // shift right 12 for pt1
     // shift right 21 for pt2
     // shift right 30 for pt3
@@ -325,7 +331,7 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     if(paging_root->_cpu_table[pml4_index] == 0) {
         pdpt = _allocate_page_table();
         paging_root->entries[pml4_index] = pdpt;
-        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
     }
 
     // create a level 2 page table (page directory) if necessary
@@ -334,7 +340,7 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     if(pdpt->_cpu_table[pdpt_index] == 0) {
         pd = _allocate_page_table();
         pdpt->entries[pdpt_index] = pd;
-        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
+        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
     }
 
     // create the entry in the level 2 table (page directory). if it already exists, error out
@@ -346,7 +352,7 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     u32 pt_flags = CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT;
     if(flags & MAP_PAGE_FLAG_DISABLE_CACHE) pt_flags |= CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE;
     if(flags & MAP_PAGE_FLAG_WRITABLE) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
-    *pde = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_2MB) | CPU_PAGE_TABLE_ENTRY_FLAG_HUGE | pt_flags;
+    *pde = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_2MB) | CPU_PAGE_TABLE_ENTRY_FLAG_HUGE | pt_flags | blarg;
 }
 
 void paging_map_2mb(intp phys, intp virt, u32 flags)

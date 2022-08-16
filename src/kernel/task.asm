@@ -1,16 +1,28 @@
-TASK_RSP_OFFSET               equ 0
-TASK_LAST_GLOBAL_TICKS_OFFSET equ 8
-TASK_RUNTIME_OFFSET           equ 16
+; must match struct task in task.h
+TASK_RIP_OFFSET               equ 0
+TASK_RSP_OFFSET               equ 8
+TASK_RFLAGS_OFFSET            equ 16
+TASK_LAST_GLOBAL_TICKS_OFFSET equ 24
+TASK_RUNTIME_OFFSET           equ 32
+TASK_FLAGS                    equ 40
 
+; must match enum TEST_FLAGS in task.h
+TASK_FLAG_USER                equ (1 << 0)
+
+; used for task timing
 extern global_ticks
 
 section .text
 align 8
 bits 64
 
+; _task_switch_to_user(struct task* from_task (rdi), struct task* to_task (rsi))
 global _task_switch_to:function (_task_switch_to.end - _task_switch_to)
 _task_switch_to:
-    ; struct task* from_task (rdi), struct task* to_task (rsi)
+    ; rip is on the stack, save it in the task structure
+    pop rdx
+    mov [edi+TASK_RIP_OFFSET], rdx
+
     ; for SysV ABI, functions must preserve rbx, rsp, rbp, r12, r13, r14, and r15 
     push r15
     push r14
@@ -18,6 +30,11 @@ _task_switch_to:
     push r12
     push rbp
     push rbx
+
+    ; save rflags
+    pushfq
+    pop rax
+    mov [edi+TASK_RFLAGS_OFFSET], rax
 
     ; save old stack pointer
     mov [edi+TASK_RSP_OFFSET], rsp
@@ -31,20 +48,62 @@ _task_switch_to:
     ; load new stack pointer
     mov rsp, [rsi+TASK_RSP_OFFSET]
 
-    ;TODO set the proper stack in TSS for this cpu. requires a separate GDT per cpu (right now it's a single shared gdt)
     ;TODO set pagetable?
 
     ; set the global ticks value now that the process is running again
     mov rax, [rbp]
     mov [rsi+TASK_LAST_GLOBAL_TICKS_OFFSET], rax
 
-.done:
+.jump:
     pop rbx
     pop rbp
     pop r12
     pop r13
     pop r14
     pop r15
-    ret
+
+    ; check if we're jumping to user code or not
+    test qword [rsi+TASK_FLAGS], TASK_FLAG_USER
+    jne .user
+
+    ; for kernel tasks, just jump to task code
+    jmp [rsi+TASK_RIP_OFFSET]
+
+.user:
+    ; for user tasks, we push the stack segment, stack pointer, code segment, rflags, and finally the instruction pointer and use iretq
+    ; iretq only pops rsp and ss if the code segment has a less privileged DPL than the current segment
+    ; the current stack pointer (before we push the iretq requirements) is what the usercode will use, save it
+    mov rdx, rsp
+
+    ; set the data segments
+    xor rax, rax
+    mov ax, 0x20 | 3 ; ap_boot_long_GDT.user_data is at offset 0x20, OR'd with the new privilege level 3
+    mov ds, ax
+    mov es, ax
+    mov fs, ax ; TODO thread local storage
+    swapgs     ; save kernel gs
+    mov gs, ax
+
+    ; first the stack segment (==user data segment)
+    push rax
+
+    ; push the stack pointer
+    push rdx
+
+    ; push rflags
+    mov rax, [rsi+TASK_RFLAGS_OFFSET]
+    push rax
+
+    ; push the code segment selector
+    xor rax, rax
+    mov ax, 0x18 | 3 ; ap_boot_long_GDT.user_code is at offset 0x18, OR'd with the new privilege level 3
+    push rax
+
+    ; finally the instruction pointer
+    mov rax, [rsi+TASK_RIP_OFFSET]
+    push rax
+
+    ; go to userland
+    iretq
 
 .end:

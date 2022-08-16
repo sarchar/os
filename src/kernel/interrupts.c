@@ -258,6 +258,13 @@ DEFINE_INTERRUPT_HANDLER(0, interrupt_div_by_zero)
     kernel_panic(COLOR(255, 128, 128));
 }
 
+DEFINE_INTERRUPT_HANDLER(6, interrupt_invalid_op)
+{
+    unused(irq_vector);
+    fprintf(stderr, "invalid opcode at address $%lX ", fault_addr);
+    kernel_panic(COLOR(0, 128, 128));
+}
+
 DEFINE_INTERRUPT_HANDLER_ERR(13, interrupt_gpf)
 {
     unused(irq_vector);

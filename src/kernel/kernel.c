@@ -351,9 +351,6 @@ static void run_command(char* cmdbuffer)
             ext2_dirent_iter_done(&iter);
             ext2_free_inode(dir);
         }
-
-        fprintf(stderr, "global_ticks = %d, cpu ticks = %d, runtime = %d\n", global_ticks, get_cpu()->ticks, get_cpu()->current_task->runtime);
-        
     } else if(strcmp(cmdbuffer, "cat") == 0) {
         struct inode* dir;
         if(open_directory(current_directory, &dir) < 0) {
@@ -490,7 +487,7 @@ static void run_command(char* cmdbuffer)
             cmdptr = end;
         }
 
-        struct task* newtask = task_create(hello_world, (intp)null);
+        struct task* newtask = task_create(hello_world, (intp)null, true);
         task_enqueue_for(atoi(targetcpu), newtask);
     }
 }
@@ -579,7 +576,7 @@ void kernel_main(struct multiboot_info* multiboot_info)
     load_drivers();
 
     // start the shell and exit
-    struct task* shell_task = task_create(shell, (intp)null);
+    struct task* shell_task = task_create(shell, (intp)null, false);
     struct cpu* cpu = get_cpu();
     task_enqueue(&cpu->current_task, shell_task);
 

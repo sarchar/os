@@ -30,6 +30,7 @@ gdb.execute("cont")
 # set some useful breakpoints
 gdb.execute("hbreak _interrupt_gpf")
 gdb.execute("hbreak _interrupt_page_fault")
+gdb.execute("hbreak _interrupt_invalid_op")
 gdb.execute("hbreak kernel_panic")
 
 

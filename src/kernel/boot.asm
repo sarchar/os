@@ -87,6 +87,18 @@ GDT:
     db PRESENT | NOT_SYS | RW                   ; Access
     db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
+.user_text:
+    dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
+    db 0x00                                     ; Base (mid, bits 16-23)
+    db PRESENT | NOT_SYS | EXEC | RW | DPL3     ; Access
+    db GRAN_4K | LONG_MODE | 0x0F               ; Flags & Limit (high, bits 16-19)
+    db 0x00                                     ; Base (high, bits 24-31)
+.user_data:
+    dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
+    db 0x00                                     ; Base (mid, bits 16-23)
+    db PRESENT | NOT_SYS | RW | DPL3            ; Access
+    db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
+    db 0x00                                     ; Base (high, bits 24-31)
 .tss: equ $ - GDT
     dd 0x00000068
     dd 0x00CF8900

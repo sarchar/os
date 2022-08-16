@@ -162,18 +162,36 @@ ap_boot_long_GDT:
 .text: equ $ - ap_boot_long_GDT
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
-    db PRESENT | NOT_SYS | EXEC | RW            ; Access
+    db PRESENT | NOT_SYS | EXEC | RW | DPL0     ; Access
     db GRAN_4K | LONG_MODE | 0x0F               ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
 .data: equ $ - ap_boot_long_GDT
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
-    db PRESENT | NOT_SYS | RW                   ; Access
+    db PRESENT | NOT_SYS | RW | DPL0            ; Access
+    db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
+    db 0x00                                     ; Base (high, bits 24-31)
+.user_text:
+    dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
+    db 0x00                                     ; Base (mid, bits 16-23)
+    db PRESENT | NOT_SYS | EXEC | RW | DPL3     ; Access
+    db GRAN_4K | LONG_MODE | 0x0F               ; Flags & Limit (high, bits 16-19)
+    db 0x00                                     ; Base (high, bits 24-31)
+.user_data:
+    dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
+    db 0x00                                     ; Base (mid, bits 16-23)
+    db PRESENT | NOT_SYS | RW | DPL3            ; Access
     db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
 .tss: equ $ - ap_boot_long_GDT
-    dd 0x00000068
-    dd 0x00CF8900
+    ; 64-bit tss takes up two GDT entries
+    dd 0x00000068                               ; Limit & Base
+    db 0x00                                     ; Base (mid, bits 16-23)
+    db 0x89                                     ; Access, bit 7 = present, bit 0..3 = TSS
+    db 0xCF                                     ; Flags (0xC, 4KiB, SZ_32), Limit (high bits 16-19)
+    db 0x00                                     ; Base (high bits 24-31)
+    dd 0x00000000                               ; Base (long bits 32-63)
+    dd 0x00000000                               ; Reserved
 .pointer:
     dw ap_boot_long_GDT.pointer - ap_boot_long_GDT - 1
     dq ap_boot_long_GDT

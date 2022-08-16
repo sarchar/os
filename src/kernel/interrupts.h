@@ -15,6 +15,7 @@ void interrupt_stub();
 void interrupt_stub_noerr();
 
 void interrupt_div_by_zero();
+void interrupt_invalid_op();
 void interrupt_gpf();
 void interrupt_page_fault();
 
