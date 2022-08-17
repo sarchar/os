@@ -7,26 +7,30 @@ extern kernel_panic
 
 global _interrupt_handler_common:function (_interrupt_handler_common.end - _interrupt_handler_common)
 _interrupt_handler_common:
-    ; the caller to this function has placed the error code, if any, into rdi, the actual irq handler into rax
-    ; and has saved both of those registers before jumping here
+    ; at entry to this function, we have
+    ;   - irq vector in rdi (arg0)
+    ;   - fault/trap address in rsi (arg1)
+    ;   - optionally, the error code in rcx (arg3)
+    ;   - the C code function handle this interrupt in rax
+    ;   - and 5 registers have been saved already: rax, rcx, rdx, rdi, rsi
 
-    ; check if GS needs to be swapped by checking if the code segment is selected to be the second entry in the GDT (= offset 8)
-    ; with 4 registers pushed onto stack the before _interrupt_handler_common, there will be a pc and cs before that
-    ; TODO this won't be useful until we have ring 3 code
+    ; first, check if GSBase needs to be swapped by checking if the code segment is selected to be the second entry in the GDT (= offset 8)
+    ; with 5 registers pushed onto stack the before _interrupt_handler_common, there will be a pc and cs before that
     ; see https://wiki.osdev.org/SWAPGS
-    cmp word [rsp+5*8], 0x08
+    ;   rsp+6*8: cs
+    ;   rsp+5*8: rip
+    ;   rsp+4*8: rax
+    ;   rsp+3*8: rcx
+    ;   rsp+2*8: rdx
+    ;   rsp+1*8: rdi
+    ;   rsp+0*8: rsi
+    cmp word [rsp+6*8], 0x08
     je .s1
     swapgs
 .s1:
-
-    ; these registers are saved by the ABI if they're to be modified,
-    ; but if we want to perform context switching we need access to them
-
-    ; save all the registers on the stack. this allows context switching
+    ; the following registers are saved by the ABI in C code, so we can be sure they won't be
+    ; modified. but we may need to save them for context switches
     push rbx
-    push rcx
-    push rdi
-    push rsi
     push rbp
     push r8
     push r9
@@ -37,7 +41,8 @@ _interrupt_handler_common:
     push r14
     push r15
 
-    ; TODO send the stack pointer as a parameter to the function call, for use in context switching
+    ; everything is pushed onto the stack, so rdx (arg2) needs a pointer to that structure
+    mov rdx, rsp
 
     cld                  ; C code following the SysV ABI requires DF to be clear on function entry
     call rax             ; Call the C function handler
@@ -53,15 +58,13 @@ _interrupt_handler_common:
     pop r9
     pop r8
     pop rbp
-    pop rsi
-    pop rdi
-    pop rcx
     pop rbx
 
     ; these registers were saved before the call to _interrupt_handler_common
     pop rsi
     pop rdi
     pop rdx
+    pop rcx
     pop rax
 
     ; check cs here

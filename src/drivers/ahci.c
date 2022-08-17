@@ -366,8 +366,9 @@ static void _ahci_port_interrupt(u8 port_index)
     }
 }
 
-static void _ahci_interrupt(intp pc, void* userdata)
+static void _ahci_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata)
 {
+    unused(regs);
     unused(pc);
     unused(userdata);
     u32 port_interrupt_status = ahci_base_memory->interrupt_status;

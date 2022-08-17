@@ -135,8 +135,9 @@ static __always_inline u64 _timer_period(struct hpet_timer* timer, u64 time_in_m
     return (time_in_microseconds * 1000000000ULL) / timer->period;
 }
 
-static void _timer_interrupt(intp pc, void* userdata)
+static void _timer_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata)
 {
+    unused(regs);
     unused(pc);
     unused(userdata);
     global_ticks++;

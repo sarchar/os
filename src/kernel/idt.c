@@ -7,13 +7,15 @@
 #include "kernel.h"
 #include "paging.h"
 
-#define IDT_FLAG_GATE_TYPE_INTERRUPT 0x0E
-#define IDT_FLAG_GATE_TYPE_TRAP      0x0F
-#define IDT_FLAG_PRIVILEGE_LEVEL0    (0 << 5)
-#define IDT_FLAG_PRIVILEGE_LEVEL1    (1 << 5)
-#define IDT_FLAG_PRIVILEGE_LEVEL2    (2 << 5)
-#define IDT_FLAG_PRIVILEGE_LEVEL3    (3 << 5)
-#define IDT_FLAG_PRESENT             0x80
+enum IDT_FLAGS {
+    IDT_FLAG_GATE_TYPE_INTERRUPT = 0x0E,
+    IDT_FLAG_GATE_TYPE_TRAP      = 0x0F,
+    IDT_FLAG_PRIVILEGE_LEVEL0    = (0 << 5),
+    IDT_FLAG_PRIVILEGE_LEVEL1    = (1 << 5),
+    IDT_FLAG_PRIVILEGE_LEVEL2    = (2 << 5),
+    IDT_FLAG_PRIVILEGE_LEVEL3    = (3 << 5),
+    IDT_FLAG_PRESENT             = 0x80
+};
 
 // see https://wiki.osdev.org/Interrupt_Descriptor_Table#Structure_on_x86-64 for the layout of this structure
 struct idt_entry {
@@ -83,6 +85,9 @@ void idt_init()
     idt_set_entry(29, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // VMM communication exception
     idt_set_entry(30, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // security exception
     idt_set_entry(31, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
+
+    // install the system call interrupt at 0x81 with privilege level of 3, allowing ring 3 code to enter the kernel here
+    idt_set_entry(0x81, interrupt_syscall, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL3 | IDT_FLAG_GATE_TYPE_INTERRUPT);
 
     // Set the rest of the interrupt handlers as installable interrupts
 #define SET_INSTALLABLE_ENTRY(n) idt_set_entry(n, interrupt_installable_##n, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT)
@@ -183,7 +188,7 @@ void idt_init()
     SET_INSTALLABLE_ENTRY(126);
     SET_INSTALLABLE_ENTRY(127);
     SET_INSTALLABLE_ENTRY(128);
-    SET_INSTALLABLE_ENTRY(129);
+//    SET_INSTALLABLE_ENTRY(129);
     SET_INSTALLABLE_ENTRY(130);
     SET_INSTALLABLE_ENTRY(131);
     SET_INSTALLABLE_ENTRY(132);

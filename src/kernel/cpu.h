@@ -149,6 +149,9 @@ struct cpu {
     u32 cpu_index;
     u32 padding;
 
+    // stack that the tss for this cpu will use
+    intp tss_stack_bottom;
+
     // current_task serves as the task queue, with the head
     // of the list being the currently running task
     struct task* current_task;

@@ -20,8 +20,9 @@ static struct {
     void*           ascii_hook_userdata;
 } kb_data = { 0, };
 
-static void _kb_interrupt(intp pc, void* userdata)
+static void _kb_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata)
 {
+    unused(regs);
     unused(pc);
     unused(userdata);
 

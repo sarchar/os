@@ -100,8 +100,14 @@ GDT:
     db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
 .tss: equ $ - GDT
-    dd 0x00000068
-    dd 0x00CF8900
+    ; 64-bit tss takes up two GDT entries
+    dd 0x00000068                               ; Limit & Base
+    db 0x00                                     ; Base (mid, bits 16-23)
+    db 0x89                                     ; Access, bit 7 = present, bit 0..3 = TSS
+    db 0xCF                                     ; Flags (0xC, 4KiB, SZ_32), Limit (high bits 16-19)
+    db 0x00                                     ; Base (high bits 24-31)
+    dd 0x00000000                               ; Base (long bits 32-63)
+    dd 0x00000000                               ; Reserved
 .pointer:
     dw $ - GDT - 1                              ; Limit (size) of the GDT
     dq GDT                                      ; 64-bit base
@@ -302,7 +308,7 @@ _start:
 	jmp .hang
 .end:
 
-; relocate the GDT into high kernel memory
+; fix up the gdt pointers to use kernel virtual memory address
 ; rdi has new offset to add to the gdt values
 global _gdt_fixup:function (_gdt_fixup.end - _gdt_fixup)
 _gdt_fixup:

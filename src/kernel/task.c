@@ -2,6 +2,7 @@
 
 #include "apic.h"
 #include "cpu.h"
+#include "interrupts.h"
 #include "kalloc.h"
 #include "kernel.h"
 #include "paging.h"
@@ -59,6 +60,7 @@ bool got_user_mode = false;
 static __noreturn void _user_task_entry()
 {
     got_user_mode = true;
+    asm volatile("mov $0xDEADBEEF, %%rax\n\tint $0x81\n" : : : "rax");
     while(1) __pause();
 }
 

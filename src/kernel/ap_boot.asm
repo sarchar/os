@@ -103,26 +103,6 @@ bits 64
 
 _ap_boot_end:
 
-; relocate the GDT into high kernel memory
-; rdi has new offset to add to the gdt values
-; this is called once on the BSP
-global _ap_gdt_fixup:function (_ap_gdt_fixup.end - _ap_gdt_fixup)
-_ap_gdt_fixup:
-    mov rsi, [rdi+ap_boot_long_GDT.pointer+2]    ; read the 64-bit address at ap_boot_long_GDT.pointer+2 (base to the GDT), but add _kernel_vma_base
-                                                 ; so that it is a virtual address already mapped
-    add rsi, rdi                                 ; add the virtual address to the GDT base
-    mov [rdi+ap_boot_long_GDT.pointer+2], rsi    ; store it in ap_boot_long_GDT.pointer+2
-    ret
-.end:
-
-; this is called on every AP ocne the table has been fixed up
-global _ap_reload_gdt:function (_ap_reload_gdt.end - _ap_reload_gdt)
-_ap_reload_gdt:
-    add rdi, ap_boot_long_GDT.pointer            ; load ap_boot_long_GDT.pointer+_kernel_vma_base into rdi
-    lgdt [rdi]                                   ; reload the GDT
-    ret
-.end:
-
 ; GDT declared in ap_boot so that it's accessible in 16-bit mode
 section .ap_boot.data align=64
 
@@ -169,18 +149,6 @@ ap_boot_long_GDT:
     dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
     db 0x00                                     ; Base (mid, bits 16-23)
     db PRESENT | NOT_SYS | RW | DPL0            ; Access
-    db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
-    db 0x00                                     ; Base (high, bits 24-31)
-.user_text:
-    dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
-    db 0x00                                     ; Base (mid, bits 16-23)
-    db PRESENT | NOT_SYS | EXEC | RW | DPL3     ; Access
-    db GRAN_4K | LONG_MODE | 0x0F               ; Flags & Limit (high, bits 16-19)
-    db 0x00                                     ; Base (high, bits 24-31)
-.user_data:
-    dd (0x0000 << 16) | 0xFFFF                  ; Limit & Base (low, bits 0-15)
-    db 0x00                                     ; Base (mid, bits 16-23)
-    db PRESENT | NOT_SYS | RW | DPL3            ; Access
     db GRAN_4K | SZ_32 | 0x0F                   ; Flags & Limit (high, bits 16-19)
     db 0x00                                     ; Base (high, bits 24-31)
 .tss: equ $ - ap_boot_long_GDT

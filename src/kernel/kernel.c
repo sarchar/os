@@ -8,6 +8,7 @@
 #include "bootmem.h"
 #include "cpu.h"
 #include "efifb.h"
+#include "gdt.h"
 #include "hpet.h"
 #include "interrupts.h"
 #include "kalloc.h"
@@ -83,12 +84,16 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // take over from the page table initialized at boot
     __cli();           // disable interrupts before changing pages
 
+    // with palloc and acpi ready, we can switch GDTs to dynamically allocated memory
+    gdt_init();
+    
     // gdt has to be fixed up to use _kernel_vma_base before switching the 
     // page table and interrupts over to highmem
     _gdt_fixup((intp)&_kernel_vma_base);
 
     // initialize paging
     paging_init();     // unmaps a large portion of lowmem
+
 
     // a few modules have to map new memory
     efifb_map();       // the EFI framebuffer needs virtual mapping
@@ -106,7 +111,7 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // finish ACPI initialization
     acpi_init_lai();
 
-    // startup smp
+    // startup smp, multithreading and tasks
     smp_init();
 
     // enumerate system devices

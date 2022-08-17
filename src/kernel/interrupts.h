@@ -3,10 +3,36 @@
 
 #define NUM_INTERRUPTS 256
 
+struct interrupt_stack_registers {
+    // the order of this structure must match the order of the registers
+    // pushed onto the stack in _interrupt_handler_common
+    u64 r15;
+    u64 r14;
+    u64 r13;
+    u64 r12;
+    u64 r11;
+    u64 r10;
+    u64 r9;
+    u64 r8;
+    u64 rbp;
+    u64 rbx;
+    u64 rsi;
+    u64 rdi;
+    u64 rdx;
+    u64 rcx;
+    u64 rax;
+    // the following 5 are pushed by the CPU, but rsp/ss are only valid if the DPL in the cs
+    // is not equal to the current PL.
+    u64 rip;
+    u64 cs;
+    u64 rflags;
+    u64 rsp;
+    u64 ss;
+};
 
 void interrupts_init();
 
-typedef void (installable_irq_handler)(intp, void*);
+typedef void (installable_irq_handler)(struct interrupt_stack_registers*, intp, void*);
 void interrupts_install_handler(u8, installable_irq_handler*, void*);
 
 // the interrupt handlers, externed for idt.c
@@ -18,6 +44,9 @@ void interrupt_div_by_zero();
 void interrupt_invalid_op();
 void interrupt_gpf();
 void interrupt_page_fault();
+
+// our system call will be at 0x81. In the future, 0x80 will be for linux system call support
+void interrupt_syscall();
 
 #define DECLARE_INSTALLABLE_INTERRUPT(n) void interrupt_installable_##n()
 
@@ -118,7 +147,6 @@ DECLARE_INSTALLABLE_INTERRUPT(125);
 DECLARE_INSTALLABLE_INTERRUPT(126);
 DECLARE_INSTALLABLE_INTERRUPT(127);
 DECLARE_INSTALLABLE_INTERRUPT(128);
-DECLARE_INSTALLABLE_INTERRUPT(129);
 DECLARE_INSTALLABLE_INTERRUPT(130);
 DECLARE_INSTALLABLE_INTERRUPT(131);
 DECLARE_INSTALLABLE_INTERRUPT(132);

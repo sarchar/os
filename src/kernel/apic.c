@@ -23,7 +23,7 @@
 #define IO_APIC_REDIERCTION_REG(n) (0x10 + (n << 1))
 
 #define LOCAL_APIC_TIMER_INTERRUPT  49
-#define LOCAL_APIC_IPCALL_INTERRUPT 129
+#define LOCAL_APIC_IPCALL_INTERRUPT 50
 
 enum LAPIC_REGISTERS {
     LAPIC_REG_LOCAL_APIC_ID                         = 0x20,
@@ -91,7 +91,7 @@ static struct {
 } io_apic = { .base = (intp)-1 };
 
 void _send_lapic_eoi();
-static void _local_apic_ipcall_interrupt(intp, void*);
+static void _local_apic_ipcall_interrupt(struct interrupt_stack_registers*, intp, void*);
 
 static inline bool _has_lapic()
 {
@@ -139,8 +139,9 @@ static inline u32 _read_lapic(u16 reg)
     return *((u32 volatile*)(local_apic_base + reg));
 }
 
-static void _local_apic_timer_interrupt(intp pc, void* userdata)
+static void _local_apic_timer_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata)
 {
+    unused(regs);
     unused(pc);
     unused(userdata);
 
@@ -573,8 +574,9 @@ s64 apic_ipcall_send(u32 dest, struct ipcall* sendipc)
     return 0;
 }
 
-static void _local_apic_ipcall_interrupt(intp pc, void* userdata)
+static void _local_apic_ipcall_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata)
 {
+    unused(regs);
     unused(pc);
     unused(userdata);
 

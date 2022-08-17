@@ -2,6 +2,7 @@
 
 #include "apic.h"
 #include "cpu.h"
+#include "gdt.h"
 #include "hashtable.h"
 #include "hpet.h"
 #include "idt.h"
@@ -83,7 +84,7 @@ void smp_init()
     }
 
     // gdt has to be fixed up to use _kernel_vma_base before switching the AP page tables and interrupts over to highmem
-    _ap_gdt_fixup((intp)&_kernel_vma_base);
+//    _ap_gdt_fixup((intp)&_kernel_vma_base);
     _ap_all_go = true;
 
     // enable the timer on the BSP too
@@ -104,6 +105,10 @@ static void _create_cpu(u8 cpu_index)
     cpu->this = cpu;
     cpu->cpu_index = cpu_index;
 
+    // switch to the kernel gdt. changing the gdt messes with GSBase, so
+    // we have to do this before set_cpu(), which has to happen before, like, everything else
+    gdt_install(cpu_index);
+
     // set the cpu struct in KernelGSBase
     set_cpu(cpu);
     __swapgs(); // put cpu struct into GSBase
@@ -111,7 +116,11 @@ static void _create_cpu(u8 cpu_index)
     // tell apic so that this cpu structure is available to other cpus
     apic_set_cpu();
 
-    // initialize the lock
+    // we need a tss stack so the kernel can switch from ring 3 to 0 safely
+    cpu->tss_stack_bottom = palloc_claim(2); // allocate 16KiB for stack
+    gdt_set_tss_rsp0(cpu->tss_stack_bottom + (1 << 14));
+
+    // initialize the ipcall lock
     declare_ticketlock(lock_init);
     cpu->ipcall_lock = lock_init;
     cpu->ipcall = null;
@@ -139,9 +148,6 @@ void ap_main(u8 cpu_index)
     // tell the BSP that we're ready and wait for the all-go signal
     _ap_boot_ack = true;
     while(!_ap_all_go) asm volatile("pause");
-
-    // reload gdt to use upper memory address
-    _ap_reload_gdt((intp)&_kernel_vma_base);
 
     // set the kernel page table
     paging_set_kernel_page_table();
