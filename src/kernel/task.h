@@ -21,9 +21,9 @@ struct task {
     ////////////////////////////////////////////////////////////////////////////
 
     // saved context variables
-    intp  rip; 
-    intp  rsp;
-    u64   rflags;
+    intp rip; 
+    intp rsp;
+    u64  rflags;
     u64  last_global_ticks;
 
     // length of time in ms the task has been running
@@ -31,6 +31,9 @@ struct task {
 
     // flags (user mode, etc)
     u64  flags;
+
+    // entry point to the actual task
+    task_entry_point_function* entry;
 
     ////////////////////////////////////////////////////////////////////////////
     // the structure from this point forward doesn't need to match task.asm
@@ -45,7 +48,6 @@ struct task {
     enum TASK_STATE state;
 
     u64  task_id;
-    task_entry_point_function* entry;
     intp userdata;
 
     u64  return_value;

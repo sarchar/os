@@ -4,7 +4,8 @@ TASK_RSP_OFFSET               equ 8
 TASK_RFLAGS_OFFSET            equ 16
 TASK_LAST_GLOBAL_TICKS_OFFSET equ 24
 TASK_RUNTIME_OFFSET           equ 32
-TASK_FLAGS                    equ 40
+TASK_FLAGS_OFFSET             equ 40
+TASK_ENTRY_OFFSET             equ 48
 
 ; must match enum TEST_FLAGS in task.h
 TASK_FLAG_USER                equ (1 << 0)
@@ -63,13 +64,16 @@ _task_switch_to:
     pop r15
 
     ; check if we're jumping to user code or not
-    test qword [rsi+TASK_FLAGS], TASK_FLAG_USER
-    jne .user
+;    test qword [rsi+TASK_FLAGS_OFFSET], TASK_FLAG_USER
+;    jne .user
 
     ; for kernel tasks, just jump to task code
     jmp [rsi+TASK_RIP_OFFSET]
 
-.user:
+.end:
+
+global _task_entry_userland:function (_task_entry_userland.end - _task_entry_userland)
+_task_entry_userland:
     ; for user tasks, we push the stack segment, stack pointer, code segment, rflags, and finally the instruction pointer and use iretq
     ; iretq only pops rsp and ss if the code segment has a less privileged DPL than the current segment
     ; the current stack pointer (before we push the iretq requirements) is what the usercode will use, save it
@@ -77,14 +81,11 @@ _task_switch_to:
 
     ; set the data segments
     xor rax, rax
-    mov ax, 0x20 | 3 ; ap_boot_long_GDT.user_data is at offset 0x20, OR'd with the new privilege level 3
-    mov ds, ax
-    mov es, ax
-    mov fs, ax ; TODO thread local storage
-    swapgs     ; save kernel gs
+    mov ax, (4*8) | 3 ; user data GDT segment is at offset 0x20, OR'd with the new privilege level 3
+    swapgs            ; save kernel gs
     mov gs, ax
 
-    ; first the stack segment (==user data segment)
+    ; first push the stack segment (==user data segment)
     push rax
 
     ; push the stack pointer
@@ -92,6 +93,7 @@ _task_switch_to:
 
     ; push rflags
     mov rax, [rsi+TASK_RFLAGS_OFFSET]
+    or rax, 1 << 9 ; set IF flag
     push rax
 
     ; push the code segment selector
@@ -99,11 +101,11 @@ _task_switch_to:
     mov ax, 0x18 | 3 ; ap_boot_long_GDT.user_code is at offset 0x18, OR'd with the new privilege level 3
     push rax
 
-    ; finally the instruction pointer
-    mov rax, [rsi+TASK_RIP_OFFSET]
+    ; finally the entry point (not RIP), since this is the entry function, not the task switch
+    mov rax, [rsi+TASK_ENTRY_OFFSET]
     push rax
 
     ; go to userland
     iretq
-
 .end:
+

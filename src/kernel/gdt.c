@@ -180,8 +180,13 @@ void gdt_set_tss_rsp0(intp rsp)
     // set rsp0
     tss->rsp0 = rsp;
 
-    // reload the task segment register
+    // reload the task segment register and set the segment registers to user data
+    // the user data segment is fine for kernel use
     asm volatile ("mov $(5*8), %%ax\n"
-                  "\tltr %%ax\n" : : : "ax");
+                  "\tltr %%ax\n"
+                  "\tmov $(4*8), %%ax\n"
+                  "\tmov %%ax, %%ds\n"
+                  "\tmov %%ax, %%es\n"
+                  "\tmov %%ax, %%fs\n" : : : "ax");
 }
 

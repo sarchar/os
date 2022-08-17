@@ -492,7 +492,8 @@ static void run_command(char* cmdbuffer)
             cmdptr = end;
         }
 
-        struct task* newtask = task_create(hello_world, (intp)null, true);
+        extern s64 _user_task_entry(struct task*);
+        struct task* newtask = task_create(_user_task_entry, (intp)null, true);
         task_enqueue_for(atoi(targetcpu), newtask);
     }
 }

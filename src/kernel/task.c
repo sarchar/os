@@ -18,6 +18,9 @@
 
 static u64 next_task_id = (u64)-1;
 
+extern void _task_switch_to(struct task*, struct task*);
+extern void _task_entry_userland(void);
+
 // task_become is used once per cpu to "become" a task, which the values of the task
 // being filled out when the first task switch occurs
 void task_become()
@@ -56,8 +59,6 @@ static __noreturn void _task_entry()
     task_exit(task->entry(task), true);
 }
 
-extern s64 _user_task_entry(struct task*);
-
 struct task* task_create(task_entry_point_function* entry, intp userdata, bool is_user)
 {
     struct task* task = (struct task*)kalloc(sizeof(struct task));
@@ -83,7 +84,7 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
     task->rsp = (u64)task->stack_bottom + stack_size;
 
     // entry point to the task
-    task->rip = is_user ? (u64)_user_task_entry : (u64)_task_entry;
+    task->rip = is_user ? (u64)_task_entry_userland : (u64)_task_entry;
 
     // default cpu flags
     task->rflags = __saveflags() & ~(1 << 9); // IF (interrupt enable flag) is bit 9. Section 3.4.3 of Volume 1 Software Development Manual
@@ -101,21 +102,28 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
 
 intp task_allocate_stack(u64* stack_size, bool is_user)
 {
-    *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
-    intp ret = palloc_claim(TASK_STACK_SIZE);
-    memset64((void *)ret, 0, *stack_size / sizeof(u64));
-
     // map the user stack as user accessible
+    u32 flags = MAP_PAGE_FLAG_WRITABLE;
+
+    intp ret = palloc_claim(TASK_STACK_SIZE);
     if(is_user) {
-        return vmem_map_pages(ret, 1 << TASK_STACK_SIZE, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
+        if(is_user) flags |= MAP_PAGE_FLAG_USER;
+        ret = vmem_map_pages(ret, 1 << TASK_STACK_SIZE, flags);
     }
+
+    *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
+    memset64((void *)ret, 0, *stack_size / sizeof(u64));
 
     return ret;
 }
 
 void task_free(struct task* task)
 {
-    if(task->stack_bottom != 0) palloc_abandon(task->stack_bottom, TASK_STACK_SIZE);
+    if(task->stack_bottom != 0) {
+        //intp phys = vmem_unmap_pages(task->stack_bottom, 1 << TASK_STACK_SIZE);
+        //palloc_abandon(phys, TASK_STACK_SIZE);
+        palloc_abandon(task->stack_bottom, TASK_STACK_SIZE);
+    }
     kfree(task);
 }
 
@@ -180,8 +188,6 @@ void task_dequeue(struct task** task_queue, struct task* task)
 
     __restoreflags(cpu_flags);
 }
-
-extern void _task_switch_to(struct task*, struct task*);
 
 static struct task* _select_next_task(struct task* start)
 {

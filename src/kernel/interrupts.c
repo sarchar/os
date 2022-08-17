@@ -7,6 +7,7 @@
 #include "interrupts.h"
 #include "kernel.h"
 #include "stdio.h"
+#include "task.h"
 #include "terminal.h"
 
 // Temporarily use PIC to enable some basic interrputs. This will all be wiped once APIC is implemented.
@@ -303,6 +304,7 @@ DEFINE_INTERRUPT_HANDLER_ERR(14, interrupt_page_fault)
     paging_map_page(new_page, (intp)access_address);
 #else
     kernel_panic(COLOR(0, 255, 0));
+    //task_exit(-1, false);
 #endif
 }
 
@@ -310,7 +312,22 @@ DEFINE_INTERRUPT_HANDLER(0x81, interrupt_syscall)
 {
     unused(irq_vector);
     unused(fault_addr);
-    fprintf(stderr, "got int129 on cpu %d: rax=0x%lX\n", get_cpu()->cpu_index, regs->rax);
+
+    struct cpu* cpu = get_cpu();
+    fprintf(stderr, "syscall: cpu %d got syscall %d (arg0=%d)\n", cpu->cpu_index, regs->rax, regs->rdi);
+
+    if(regs->rax == 1) {
+        u64 end = global_ticks + min(regs->rdi, 10000);
+        u64 cpu_flags = __sti_saveflags();
+        while(global_ticks < end) __pause();
+        __restoreflags(cpu_flags);
+    } else if(regs->rax == 2) {
+        fprintf(stderr, "syscall: cpu %d yielding task %d\n", cpu->cpu_index, cpu->current_task->task_id);
+        task_yield(TASK_YIELD_VOLUNTARY);
+        fprintf(stderr, "syscall: cpu %d continuing from yielding task %d\n", cpu->cpu_index, cpu->current_task->task_id);
+    }
+
+    regs->rax = 0; // return value
 }
 
 #define DEFINE_INSTALLABLE_INTERRUPT(n)                                  \

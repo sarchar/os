@@ -443,3 +443,13 @@ intp vmem_unmap_page(intp virt)
 {
     return paging_unmap_page(virt);
 }
+
+intp vmem_unmap_pages(intp virt, u64 npages)
+{
+    assert(npages >= 1, "must unmap at least one page");
+    intp ret = paging_unmap_page(virt);
+    for(u64 i = 1; i < npages; i++) {
+        paging_unmap_page(virt + PAGE_SIZE * i);
+    }
+    return ret;
+}

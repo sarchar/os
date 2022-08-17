@@ -40,5 +40,6 @@ void paging_debug_address(intp);
 intp vmem_map_page(intp phys, u32 flags);
 intp vmem_map_pages(intp phys, u64 npages, u32 flags);
 intp vmem_unmap_page(intp virt);  // returns the physical address stored in that page table entry
+intp vmem_unmap_pages(intp virt, u64 npages);  // returns the physical address for `virt`
 
 #endif
