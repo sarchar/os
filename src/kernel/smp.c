@@ -63,7 +63,7 @@ void smp_init()
 
         // allocate stack, pointing to the end of memory
         u64 stack_size;
-        _ap_boot_stack_bottom = task_allocate_stack(&stack_size);
+        _ap_boot_stack_bottom = task_allocate_stack(&stack_size, false);
         *(u64*)&_ap_boot_stack_top = _ap_boot_stack_bottom + stack_size; // 4096*2^2 = 16KiB
 
         // try to boot the cpu

@@ -56,13 +56,7 @@ static __noreturn void _task_entry()
     task_exit(task->entry(task), true);
 }
 
-bool got_user_mode = false;
-static __noreturn void _user_task_entry()
-{
-    got_user_mode = true;
-    asm volatile("mov $0xDEADBEEF, %%rax\n\tint $0x81\n" : : : "rax");
-    while(1) __pause();
-}
+extern s64 _user_task_entry(struct task*);
 
 struct task* task_create(task_entry_point_function* entry, intp userdata, bool is_user)
 {
@@ -85,7 +79,7 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
 
     // allocate stack, and set RSP to the base of where we initialize registers
     u64 stack_size;
-    task->stack_bottom = task_allocate_stack(&stack_size);
+    task->stack_bottom = task_allocate_stack(&stack_size, is_user);
     task->rsp = (u64)task->stack_bottom + stack_size;
 
     // entry point to the task
@@ -105,11 +99,17 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
     return task;
 }
 
-intp task_allocate_stack(u64* stack_size)
+intp task_allocate_stack(u64* stack_size, bool is_user)
 {
     *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
     intp ret = palloc_claim(TASK_STACK_SIZE);
     memset64((void *)ret, 0, *stack_size / sizeof(u64));
+
+    // map the user stack as user accessible
+    if(is_user) {
+        return vmem_map_pages(ret, 1 << TASK_STACK_SIZE, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
+    }
+
     return ret;
 }
 

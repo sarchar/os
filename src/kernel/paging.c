@@ -63,6 +63,8 @@ static void _map_kernel()
     u64 kernel_size = (intp)(&_kernel_end_address)-(intp)(&_kernel_vma_base)-(intp)(&_kernel_load_address);
     fprintf(stderr, "paging: kernel loaded at 0x%lX, vma=0x%lX, end=0x%lX, size=0x%lX\n", &_kernel_load_address, &_kernel_vma_base, &_kernel_end_address, kernel_size);
     fprintf(stderr, "paging: stack at 0x%lX, top=0x%lX\n", (intp)&_stack_bottom, (intp)&_stack_top);
+    fprintf(stderr, "paging: userland text at 0x%lX, size=0x%lX\n", (intp)&_userland_text_start, (intp)&_userland_text_end - (intp)&_userland_text_start);
+    fprintf(stderr, "paging: userland data at 0x%lX, size=0x%lX\n", (intp)&_userland_data_start, (intp)&_userland_data_end - (intp)&_userland_data_start);
 
     // map only the pages the kernel occupies into virtual memory
     for(intp offs = 0; offs < kernel_size; offs += PAGE_SIZE) {
@@ -81,6 +83,21 @@ static void _map_kernel()
         if(region_type == MULTIBOOT_REGION_TYPE_AVAILABLE || region_type == MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE) {
             paging_identity_map_region(region_start, region_size, MAP_PAGE_FLAG_WRITABLE);
         }
+    }
+
+    // TEMP TEMP userland memory!
+    // map only the pages userland occupies into virtual memory with user flag
+    for(intp offs = (intp)&_userland_text_start; offs < (intp)&_userland_text_end; offs += PAGE_SIZE) {
+        intp virt = offs;
+        intp phys = virt - (intp)&_kernel_vma_base;
+        _map_page(phys, virt, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
+    }
+
+    // map only the pages userland occupies into virtual memory with user flag
+    for(intp offs = (intp)&_userland_data_start; offs < (intp)&_userland_data_end; offs += PAGE_SIZE) {
+        intp virt = offs;
+        intp phys = virt - (intp)&_kernel_vma_base;
+        _map_page(phys, virt, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
     }
 }
 
@@ -121,9 +138,6 @@ static void _map_page(intp phys, intp virt, u32 flags)
     assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
     assert(__alignof(phys, 4096) == 0, "physical address must be 4KB aligned");
 
-    // temporarily mark ALL pages as user-accessible pages
-    u64 blarg = CPU_PAGE_TABLE_ENTRY_FLAG_USER;
-
     //fprintf(stderr, "paging: mapping page at 0x%08lX to virtual address 0x%08lX\n", phys, virt);
 
     // shift right 12 for pt1
@@ -137,7 +151,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(paging_root->_cpu_table[pml4_index] == 0) {
         pdpt = _allocate_page_table();
         paging_root->entries[pml4_index] = pdpt;
-        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
+        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
         paging_root->num_entries++;
     }
 
@@ -147,7 +161,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(pdpt->_cpu_table[pdpt_index] == 0) {
         pd = _allocate_page_table();
         pdpt->entries[pdpt_index] = pd;
-        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
+        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
         pdpt->num_entries++;
     }
 
@@ -157,7 +171,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
     if(pd->_cpu_table[pd_index] == 0) {
         pt = _allocate_page_table();
         pd->entries[pd_index] = pt;
-        pd->_cpu_table[pd_index] = (intp)pt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
+        pd->_cpu_table[pd_index] = (intp)pt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
         pd->num_entries++;
     }
 
@@ -170,7 +184,8 @@ static void _map_page(intp phys, intp virt, u32 flags)
     u32 pt_flags = CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT;
     if(flags & MAP_PAGE_FLAG_DISABLE_CACHE) pt_flags |= CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE;
     if(flags & MAP_PAGE_FLAG_WRITABLE) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
-    *pte = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_4KB) | pt_flags | blarg;
+    if(flags & MAP_PAGE_FLAG_USER) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+    *pte = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_4KB) | pt_flags;
     pt->num_entries++;
 }
 
@@ -317,9 +332,6 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
 
     //fprintf(stderr, "paging: mapping 1GiB at 0x%08lX to virtual address 0x%08lX\n", phys, virt);
 
-    // temporarily mark ALL pages as user-accessible pages
-    u64 blarg = CPU_PAGE_TABLE_ENTRY_FLAG_USER;
-
     // shift right 12 for pt1
     // shift right 21 for pt2
     // shift right 30 for pt3
@@ -331,7 +343,7 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     if(paging_root->_cpu_table[pml4_index] == 0) {
         pdpt = _allocate_page_table();
         paging_root->entries[pml4_index] = pdpt;
-        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
+        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
     }
 
     // create a level 2 page table (page directory) if necessary
@@ -340,7 +352,7 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     if(pdpt->_cpu_table[pdpt_index] == 0) {
         pd = _allocate_page_table();
         pdpt->entries[pdpt_index] = pd;
-        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | blarg;
+        pdpt->_cpu_table[pdpt_index] = (intp)pd->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
     }
 
     // create the entry in the level 2 table (page directory). if it already exists, error out
@@ -352,7 +364,8 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     u32 pt_flags = CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT;
     if(flags & MAP_PAGE_FLAG_DISABLE_CACHE) pt_flags |= CPU_PAGE_TABLE_ENTRY_CACHE_DISABLE;
     if(flags & MAP_PAGE_FLAG_WRITABLE) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE;
-    *pde = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_2MB) | CPU_PAGE_TABLE_ENTRY_FLAG_HUGE | pt_flags | blarg;
+    if(flags & MAP_PAGE_FLAG_USER) pt_flags |= CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+    *pde = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_2MB) | CPU_PAGE_TABLE_ENTRY_FLAG_HUGE | pt_flags;
 }
 
 void paging_map_2mb(intp phys, intp virt, u32 flags)
@@ -411,6 +424,18 @@ intp vmem_map_page(intp phys, u32 flags)
     intp virtual_address = phys | 0xFFFF800000000000ULL;
 
     paging_map_page(phys, virtual_address, flags);
+    return virtual_address;
+}
+
+intp vmem_map_pages(intp phys, u64 npages, u32 flags)
+{
+    assert(phys < 0x100000000, "TODO only working with low mem for now");
+    intp virtual_address = phys | 0xFFFF800000000000ULL;
+
+    for(u64 i = 0; i < npages; i++) {
+        paging_map_page(phys + PAGE_SIZE * i, virtual_address + PAGE_SIZE * i, flags);
+    }
+
     return virtual_address;
 }
 

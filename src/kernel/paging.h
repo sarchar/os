@@ -10,7 +10,8 @@
 
 enum MAP_PAGE_FLAGS {
     MAP_PAGE_FLAG_DISABLE_CACHE = (1 << 0),
-    MAP_PAGE_FLAG_WRITABLE      = (1 << 1)
+    MAP_PAGE_FLAG_WRITABLE      = (1 << 1),
+    MAP_PAGE_FLAG_USER          = (1 << 2)
 };
 
 void paging_init();
@@ -37,6 +38,7 @@ void paging_debug_address(intp);
 
 // TODO this eventually needs to move into a virtual memory manager
 intp vmem_map_page(intp phys, u32 flags);
+intp vmem_map_pages(intp phys, u64 npages, u32 flags);
 intp vmem_unmap_page(intp virt);  // returns the physical address stored in that page table entry
 
 #endif

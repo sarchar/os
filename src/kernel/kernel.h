@@ -16,6 +16,13 @@ extern u64 _kernel_load_address;
 extern u64 _kernel_end_address;
 extern u64 _stack_bottom;
 extern u64 _stack_top;
+extern u64 _userland_text_start;
+extern u64 _userland_text_end;
+extern u64 _userland_data_start;
+extern u64 _userland_data_end;
+
+extern u64 volatile global_ticks;
+
 
 extern u64 volatile global_ticks;
 

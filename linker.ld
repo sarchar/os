@@ -66,6 +66,33 @@ SECTIONS
     . = ALIGN(4K);           /* align up to page size */
     _kernel_end_address = .;
 
+    /* TEMP include some userland code. it's placed outside of "kernel" memory so that we can memory map it with user permissions */
+
+    /* Build the text (code) section */
+    _userland_text_start = .;
+    .userland.text ALIGN(4K) : AT (ADDR(.userland.text) - _kernel_vma_base) {
+        *(.userland.text)
+    }
+    _userland_text_end = .;
+
+    /* Read-only data. */
+    . = ALIGN(4K);           /* align up to page size */
+    _userland_data_start = .;
+    .userland.rodata ALIGN(4K) : AT (ADDR(.userland.rodata) - _kernel_vma_base) {
+        *(.userland.rodata)
+    }
+
+    /* Read-write data (initialized) */
+    .userland.data ALIGN(4K) : AT (ADDR(.userland.data) - _kernel_vma_base) {
+        *(.userland.data)
+    }
+ 
+    /* Read-write data (uninitialized) and stack */
+    .userland.bss ALIGN(4K) : AT (ADDR(.userland.bss) - _kernel_vma_base) {
+        *(.userland.bss)
+    }
+    _userland_data_end = .;
+
     /DISCARD/ : {
         *(.comment)
     }

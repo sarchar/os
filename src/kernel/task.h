@@ -61,7 +61,7 @@ struct task {
 
 void task_become();
 struct task* task_create(task_entry_point_function*, intp, bool); 
-intp task_allocate_stack(u64*);
+intp task_allocate_stack(u64*, bool);
 void task_free(struct task*);
 
 // yield from the current task and switch to the next one
