@@ -14,13 +14,13 @@ struct interrupt_stack_registers {
     u64 r10;
     u64 r9;
     u64 r8;
-    u64 rbp;
     u64 rbx;
     u64 rsi;
     u64 rdi;
     u64 rdx;
     u64 rcx;
     u64 rax;
+    u64 rbp;
     // the following 5 are pushed by the CPU, but rsp/ss are only valid if the DPL in the cs
     // is not equal to the current PL.
     u64 rip;

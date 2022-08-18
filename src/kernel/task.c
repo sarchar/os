@@ -10,6 +10,7 @@
 #include "task.h"
 #include "smp.h"
 #include "stdio.h"
+#include "string.h"
 
 // log2 size of the stack (order for palloc) that is allocated to each task
 #define TASK_STACK_SIZE 2     // 2^2 = 4*4096 = 16KiB
@@ -102,17 +103,15 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
 
 intp task_allocate_stack(u64* stack_size, bool is_user)
 {
-    // map the user stack as user accessible
-    u32 flags = MAP_PAGE_FLAG_WRITABLE;
-
     intp ret = palloc_claim(TASK_STACK_SIZE);
+
+    // virtual map the stack for user processes (TODO: use user vma, not kernel)
     if(is_user) {
-        if(is_user) flags |= MAP_PAGE_FLAG_USER;
-        ret = vmem_map_pages(ret, 1 << TASK_STACK_SIZE, flags);
+        ret = vmem_map_pages(ret, 1 << TASK_STACK_SIZE, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
     }
 
     *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
-    memset64((void *)ret, 0, *stack_size / sizeof(u64));
+    memset((void *)ret, 0, *stack_size);
 
     return ret;
 }
@@ -120,9 +119,15 @@ intp task_allocate_stack(u64* stack_size, bool is_user)
 void task_free(struct task* task)
 {
     if(task->stack_bottom != 0) {
-        //intp phys = vmem_unmap_pages(task->stack_bottom, 1 << TASK_STACK_SIZE);
-        //palloc_abandon(phys, TASK_STACK_SIZE);
-        palloc_abandon(task->stack_bottom, TASK_STACK_SIZE);
+        intp phys = task->stack_bottom;
+
+        // get physical address of memory
+        if(task->stack_bottom >= 0xFFFF800000000000) {
+            phys = vmem_unmap_pages(task->stack_bottom, 1 << TASK_STACK_SIZE);
+            fprintf(stderr, "user task stack 0x%lX has physical 0x%lX\n", task->stack_bottom, phys);
+        }
+
+        palloc_abandon(phys, TASK_STACK_SIZE);
     }
     kfree(task);
 }

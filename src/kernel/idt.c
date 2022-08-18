@@ -53,38 +53,38 @@ void idt_init()
 {
    
     // the first 32 interrupts are internal to the cpu
-    idt_set_entry( 0, interrupt_div_by_zero, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // division by zero
-    idt_set_entry( 1, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // debug
-    idt_set_entry( 2, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // NMI
-    idt_set_entry( 3, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // breakpoint
-    idt_set_entry( 4, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // overflow
-    idt_set_entry( 5, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // bound range exceeded
-    idt_set_entry( 6, interrupt_invalid_op , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // invalid opcode
-    idt_set_entry( 7, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // device not available
-    idt_set_entry( 8, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // double fault
-    idt_set_entry( 9, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // cop segment overrun
-    idt_set_entry(10, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // invalid tss
-    idt_set_entry(11, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // segment not present
-    idt_set_entry(12, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // stack-segment fault
-    idt_set_entry(13, interrupt_gpf        , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // general protection fault
-    idt_set_entry(14, interrupt_page_fault , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // page fault
-    idt_set_entry(15, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(16, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // x87 floating point exception
-    idt_set_entry(17, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // alignment check
-    idt_set_entry(18, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // machine check
-    idt_set_entry(19, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // SIMD floating-point exception
-    idt_set_entry(20, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // virtualization exception
-    idt_set_entry(21, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // control protection exception
-    idt_set_entry(22, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(23, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(24, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(25, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(26, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(27, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
-    idt_set_entry(28, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // hypervisor injection exception
-    idt_set_entry(29, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // VMM communication exception
-    idt_set_entry(30, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // security exception
-    idt_set_entry(31, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_INTERRUPT); // reserved
+    idt_set_entry( 0, interrupt_div_by_zero, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // division by zero
+    idt_set_entry( 1, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // debug
+    idt_set_entry( 2, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // NMI
+    idt_set_entry( 3, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // breakpoint
+    idt_set_entry( 4, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // overflow
+    idt_set_entry( 5, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // bound range exceeded
+    idt_set_entry( 6, interrupt_invalid_op , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // invalid opcode
+    idt_set_entry( 7, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // device not available
+    idt_set_entry( 8, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // double fault
+    idt_set_entry( 9, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // cop segment overrun
+    idt_set_entry(10, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // invalid tss
+    idt_set_entry(11, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // segment not present
+    idt_set_entry(12, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // stack-segment fault
+    idt_set_entry(13, interrupt_gpf        , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // general protection fault
+    idt_set_entry(14, interrupt_page_fault , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // page fault
+    idt_set_entry(15, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(16, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // x87 floating point exception
+    idt_set_entry(17, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // alignment check
+    idt_set_entry(18, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // machine check
+    idt_set_entry(19, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // SIMD floating-point exception
+    idt_set_entry(20, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // virtualization exception
+    idt_set_entry(21, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // control protection exception
+    idt_set_entry(22, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(23, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(24, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(25, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(26, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(27, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
+    idt_set_entry(28, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // hypervisor injection exception
+    idt_set_entry(29, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // VMM communication exception
+    idt_set_entry(30, interrupt_stub       , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // security exception
+    idt_set_entry(31, interrupt_stub_noerr , IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL0 | IDT_FLAG_GATE_TYPE_TRAP); // reserved
 
     // install the system call interrupt at 0x81 with privilege level of 3, allowing ring 3 code to enter the kernel here
     idt_set_entry(0x81, interrupt_syscall, IDT_FLAG_PRESENT | IDT_FLAG_PRIVILEGE_LEVEL3 | IDT_FLAG_GATE_TYPE_INTERRUPT);

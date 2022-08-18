@@ -187,12 +187,6 @@ static s64 open_directory(char* path, struct inode** inode)
     return 0;
 }
 
-static s64 hello_world(struct task* task)
-{
-    fprintf(stderr, "\nhello world from cpu %d (task %d)!\n", get_cpu()->cpu_index, task->task_id);
-    return 0;
-}
-
 static void run_command(char* cmdbuffer)
 {
     char* end = cmdbuffer + strlen(cmdbuffer);
@@ -492,8 +486,8 @@ static void run_command(char* cmdbuffer)
             cmdptr = end;
         }
 
-        extern s64 _user_task_entry(struct task*);
-        struct task* newtask = task_create(_user_task_entry, (intp)null, true);
+        extern s64 userland_task_main(struct task*);
+        struct task* newtask = task_create(userland_task_main, (intp)null, true);
         task_enqueue_for(atoi(targetcpu), newtask);
     }
 }

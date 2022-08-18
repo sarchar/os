@@ -4,6 +4,9 @@
 void smp_init();
 void smp_all_stop();
 
+extern bool volatile _ap_all_go;
+static __always_inline bool smp_ready() { return _ap_all_go; }
+
 // generic locking functions
 #define acquire_lock(lock) lock._f->acquire((intp)&lock)
 #define release_lock(lock) lock._f->release((intp)&lock)

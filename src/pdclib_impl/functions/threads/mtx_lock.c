@@ -25,7 +25,6 @@ extern int pthread_mutex_lock( mtx_t * );
 }
 #endif
 
-bool volatile _ap_all_go;
 //extern struct _PDCLIB_file_t* stderr;
 
 int mtx_lock( mtx_t * mtx )

@@ -203,12 +203,16 @@ void terminal_scroll(u32 lines)
 
 void terminal_redraw()
 {
+    u64 cpu_flags = __cli_saveflags();
+
     for(u32 y = 0; y < current_terminal.height; y++) {
         for(u32 x = 0; x < current_terminal.width; x++) {
             u8 c = current_terminal.buffer[TERMINAL_VIRTUAL_Y(y) * current_terminal.width + x];
             terminal_setc(c, x, y);
         }
     }
+
+    __restoreflags(cpu_flags);
 }
 
 static declare_ticketlock(terminal_write_lock);

@@ -6,7 +6,9 @@
 #include "idt.h"
 #include "interrupts.h"
 #include "kernel.h"
+#include "smp.h"
 #include "stdio.h"
+#include "syscall.h"
 #include "task.h"
 #include "terminal.h"
 
@@ -209,13 +211,15 @@ extern void _interrupt_handler_common(void);
         ".global " #name "\n"                      \
         ".align 128\n"                              \
         #name ":\n"                                \
+        "\t" "push %rbp\n"                         /* save rbp */                                            \
+        "\t" "mov %rsp, %rbp\n"                    /* set rbp to base of stack frame */                      \
         "\t" "push %rax\n"                         /* save rax */                                            \
         "\t" "push %rcx\n"                         /* save rcx */                                            \
         "\t" "push %rdx\n"                         /* save rdx */                                            \
         "\t" "push %rdi\n"                         /* save rdi */                                            \
         "\t" "push %rsi\n"                         /* save rsi */                                            \
         "\t" "mov $" #v ", %rdi\n"                 /* place vector number into rdi (arg0) */                 \
-        "\t" "mov 40(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
+        "\t" "mov 48(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
         "\t" "movabs $_" #name ", %rax\n"          /* load the actual irq handler address into rax */        \
         "\t" "jmp _interrupt_handler_common\n"     /* jump to common handler, which will setup rdx (arg2) */ \
     );                                             \
@@ -227,13 +231,15 @@ extern void _interrupt_handler_common(void);
         ".global " #name "\n"                      \
         ".align 128\n"                             \
         #name ":\n"                                \
+        "\t" "push %rbp\n"                         /* save rbp */                                            \
+        "\t" "mov %rsp, %rbp\n"                    /* set rbp to base of stack frame */                      \
         "\t" "xchg %rax,0(%rsp)\n"                 /* save rax by swapping the error code with it */         \
         "\t" "push %rcx\n"                         /* save rcx */                                            \
         "\t" "push %rdx\n"                         /* save rdx */                                            \
         "\t" "push %rdi\n"                         /* save rdi */                                            \
         "\t" "push %rsi\n"                         /* save rsi */                                            \
         "\t" "mov $" #v ", %rdi\n"                 /* place vector number into rdi (arg0) */                 \
-        "\t" "mov 40(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
+        "\t" "mov 48(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
         "\t" "mov %rax, %rcx\n"                    /* move the cpu error code into rcx (arg3) */             \
         "\t" "movabs $_" #name ", %rax\n"          /* load the actual irq handler address into rax */        \
         "\t" "jmp _interrupt_handler_common\n"     /* jump to common handler, which will setup rdx (arg2) */ \
@@ -246,6 +252,7 @@ DEFINE_INTERRUPT_HANDLER_ERR(255, interrupt_stub)
     unused(fault_addr);
     unused(irq_vector);
     unused(regs);
+    __cli();
     kernel_panic(COLOR(255, 0, 0));
 }
 
@@ -254,6 +261,7 @@ DEFINE_INTERRUPT_HANDLER(255, interrupt_stub_noerr)
     unused(fault_addr);
     unused(irq_vector);
     unused(regs);
+    __cli();
     kernel_panic(COLOR(255, 255, 0));
 }
 
@@ -261,6 +269,7 @@ DEFINE_INTERRUPT_HANDLER(0, interrupt_div_by_zero)
 {
     unused(irq_vector);
     unused(regs);
+    __cli();
     fprintf(stderr, "division by zero at address $%lX ", fault_addr);
     kernel_panic(COLOR(255, 128, 128));
 }
@@ -269,6 +278,7 @@ DEFINE_INTERRUPT_HANDLER(6, interrupt_invalid_op)
 {
     unused(irq_vector);
     unused(regs);
+    __cli();
     fprintf(stderr, "invalid opcode at address $%lX ", fault_addr);
     kernel_panic(COLOR(0, 128, 128));
 }
@@ -277,6 +287,7 @@ DEFINE_INTERRUPT_HANDLER_ERR(13, interrupt_gpf)
 {
     unused(irq_vector);
     unused(regs);
+    __cli();
     fprintf(stderr, "general protection fault: error = $%lX at address $%lX\n", error_code, fault_addr);
     kernel_panic(COLOR(255, 0, 0));
 }
@@ -285,9 +296,9 @@ DEFINE_INTERRUPT_HANDLER_ERR(14, interrupt_page_fault)
 {
     unused(irq_vector);
     unused(regs);
-    extern bool _ap_all_go;
 
-    if(_ap_all_go) {
+    __cli();
+    if(smp_ready()) {
         fprintf(stderr, "page fault: on cpu %d error = $%lX at address $%lX ", get_cpu()->cpu_index, error_code, fault_addr);
     } else {
         fprintf(stderr, "page fault: error = $%lX at address $%lX ", error_code, fault_addr);
@@ -313,21 +324,20 @@ DEFINE_INTERRUPT_HANDLER(0x81, interrupt_syscall)
     unused(irq_vector);
     unused(fault_addr);
 
+    // enable interrupts to allow processes to continue to be preempted
+    u64 cpu_flags = __sti_saveflags();
+
     struct cpu* cpu = get_cpu();
     fprintf(stderr, "syscall: cpu %d got syscall %d (arg0=%d)\n", cpu->cpu_index, regs->rax, regs->rdi);
-
-    if(regs->rax == 1) {
-        u64 end = global_ticks + min(regs->rdi, 10000);
-        u64 cpu_flags = __sti_saveflags();
-        while(global_ticks < end) __pause();
-        __restoreflags(cpu_flags);
-    } else if(regs->rax == 2) {
-        fprintf(stderr, "syscall: cpu %d yielding task %d\n", cpu->cpu_index, cpu->current_task->task_id);
-        task_yield(TASK_YIELD_VOLUNTARY);
-        fprintf(stderr, "syscall: cpu %d continuing from yielding task %d\n", cpu->cpu_index, cpu->current_task->task_id);
+    regs->rax = syscall_do(regs->rax, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8, regs->r9);
+    if(regs->rax == -EINVAL) {
+        // terminate the program now
+        // TODO need some sort of "crash"ing the program concept, like segmentation faults in linux.
+        // TODO maybe task_abort(reason). Yeah, I kinda like that.
+        task_exit(-EINVAL, false);
     }
 
-    regs->rax = 0; // return value
+    __restoreflags(cpu_flags);
 }
 
 #define DEFINE_INSTALLABLE_INTERRUPT(n)                                  \

@@ -54,7 +54,7 @@ static void bootmem_addregion(void* region_start, u64 size)
     bootmem_accounting.num_regions += 1;
     bootmem_accounting.free += size;
 
-    //fprintf(stderr, "bootmem: adding region $%lX size=%d\n", (intp)region_start, size);
+    //fprintf(stderr, "bootmem: adding region 0x%lX-0x%lX size=%d\n", (intp)region_start, (intp)region_start + size - 1, size);
 }
 
 void bootmem_init()

@@ -9,6 +9,7 @@
 #include "efifb.h"
 #include "kernel.h"
 #include "multiboot2.h"
+#include "paging.h"
 #include "string.h"
 #include "stdio.h"
 #include "terminal.h"
@@ -49,6 +50,11 @@ intp multiboot2_mmap_next_free_region(u64* size, u8* region_type)
                     ret = (intp)iter->addr;
                     *size = iter->len;
                     *region_type = MULTIBOOT_REGION_TYPE_AVAILABLE;
+                } else {
+                    // fine, use the memory after the end of the kernel to the end of the region
+                    ret = (intp)__alignup((intp)&_userland_data_end - (intp)&_kernel_vma_base, PAGE_SIZE); // TODO use _kernel_end_address when you get rid of .userland. segments
+                    *size = iter->len - (ret - iter->addr);
+                    *region_type = MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE; // don't use it yet, but we will need to map it
                 }
             }
             break;
