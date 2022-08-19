@@ -1,9 +1,9 @@
 [submodule "src/pdclib"]
 	path = src/pdclib
-	url = https://github.com/DevSolar/pdclib
+	url = https://github.com/sarchar/pdclib
 [submodule "src/lai"]
 	path = src/lai
 	url = https://github.com/managarm/lai
 [submodule "src/uthash"]
 	path = src/uthash
-	url = https://github.com/troydhanson/uthash
+	url = https://github.com/sarchar/uthash
