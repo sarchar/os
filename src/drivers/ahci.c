@@ -9,6 +9,7 @@
 #include "palloc.h"
 #include "pci.h"
 #include "stdio.h"
+#include "vmem.h"
 
 #define SATA_SIG_ATA    0x00000101  // SATA drive
 #define SATA_SIG_ATAPI  0xEB140101  // SATAPI drive
@@ -1097,9 +1098,7 @@ static void _identify_device(u8 port_index)
     _set_h2d_fis(hdr, tbl, 1, aport->is_atapi ? ATA_COMMAND_IDENTIFY_PACKET_DEVICE : ATA_COMMAND_IDENTIFY_DEVICE, 0, 0, 0);
 
     // set up a destination PRDT
-//    intp dest_phys = (intp)palloc_claim_one();
     intp dest_phys = (intp)kalloc(512);
-//    intp dest_virt = vmem_map_page(dest_phys, MAP_PAGE_FLAG_WRITABLE);
     intp dest_virt = dest_phys;
     _set_prdt_entry(tbl, 0, dest_phys, 512, true);
 

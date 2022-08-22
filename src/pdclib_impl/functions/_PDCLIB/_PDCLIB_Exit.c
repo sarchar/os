@@ -9,8 +9,11 @@
 */
 
 #include <stdlib.h>
+#include <stdio.h>
 
 #ifndef REGTEST
+
+#include "kernel/common.h"
 
 #include "pdclib/_PDCLIB_glue.h"
 
@@ -26,7 +29,10 @@ extern _PDCLIB_Noreturn void _exit( int status ) _PDCLIB_NORETURN;
 
 void _PDCLIB_Exit( int status )
 {
-    _exit( status );
+    unused(status);
+    fprintf(stderr, "_PDCLIB_Exit stub\n");
+    assert(false, "stub");
+    //_exit( status );
 }
 
 #endif

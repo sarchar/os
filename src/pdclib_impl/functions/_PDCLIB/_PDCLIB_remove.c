@@ -8,9 +8,13 @@
    POSIX kernels.
 */
 
+#include <stdio.h>
+
 #ifndef REGTEST
 
 #include "pdclib/_PDCLIB_glue.h"
+
+#include "kernel/common.h"
 
 #ifdef __cplusplus
 extern "C" {
@@ -24,7 +28,11 @@ extern int unlink( const char * );
 
 int _PDCLIB_remove( const char * pathname )
 {
-    return unlink( pathname );
+    unused(pathname);
+    fprintf(stderr, "_PDCLIB_remove stub\n");
+    assert(false, "stub");
+    //return unlink( pathname );
+    return 0;
 }
 
 #endif

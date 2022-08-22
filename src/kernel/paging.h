@@ -36,12 +36,4 @@ void paging_identity_map_region(intp region_start, u64 size, u32 flags);
 // dump page table information for a given virtual address
 void paging_debug_address(intp);
 
-// TODO this eventually needs to move into a virtual memory manager
-//intp vmem_map_page(intp phys, u32 flags);
-#define vmem_map_page(phys,flags) vmem_map_pages(phys, 1, flags)
-intp vmem_map_pages(intp phys, u64 npages, u32 flags);
-//intp vmem_unmap_page(intp virt);  // returns the physical address stored in that page table entry
-#define vmem_unmap_page(virt) vmem_unmap_pages(virt, 1)
-intp vmem_unmap_pages(intp virt, u64 npages);  // returns the physical address for `virt`
-
 #endif

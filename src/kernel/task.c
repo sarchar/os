@@ -11,6 +11,7 @@
 #include "smp.h"
 #include "stdio.h"
 #include "string.h"
+#include "vmem.h"
 
 // log2 size of the stack (order for palloc) that is allocated to each task
 #define TASK_STACK_SIZE 2     // 2^2 = 4*4096 = 16KiB

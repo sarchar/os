@@ -7,7 +7,10 @@
 #include "apic.h"
 #include "bootmem.h"
 #include "cpu.h"
+#include "drivers/ahci.h"
+#include "drivers/ps2keyboard.h"
 #include "efifb.h"
+#include "fs/ext2/ext2.h"
 #include "gdt.h"
 #include "hpet.h"
 #include "interrupts.h"
@@ -22,10 +25,7 @@
 #include "stdio.h"
 #include "task.h"
 #include "terminal.h"
-
-#include "drivers/ahci.h"
-#include "drivers/ps2keyboard.h"
-#include "fs/ext2/ext2.h"
+#include "vmem.h"
 
 extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
@@ -99,8 +99,13 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     terminal_redraw(); // remapping efifb may have missed some putpixel calls
     apic_map();        // the APIC needs memory mapping
 
+    // TODO add high memory blocks to palloc 
+
     // initialize the virtual memory manager
     vmem_init();
+
+    // with palloc, paging and vmem initialized, we can now have a working malloc()... 
+    free(malloc(1*1024*1024)); // initialize malloc with 1MiB of storage
 
     // safe to enable interrupts now
     __sti();
@@ -116,6 +121,12 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // startup smp, multithreading and tasks
     smp_init();
+}
+
+static void load_drivers()
+{
+    // TODO "register" all the drivers first, then call pci_enumerate_devices() ?
+    // or just load all the builtin modules and let them look for devices as they do now
 
     // enumerate system devices
     // in the future, this could happen after all drivers are "loaded",
@@ -123,11 +134,6 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // right now, drivers search for devices they're interested in
     pci_enumerate_devices();
 
-    // TODO enable high memory in palloc after paging is initialized
-}
-
-static void load_drivers()
-{
     ps2keyboard_load();
     ahci_load();
 }

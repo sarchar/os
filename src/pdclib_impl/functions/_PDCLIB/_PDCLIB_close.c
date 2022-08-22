@@ -14,6 +14,8 @@
 
 #include "pdclib/_PDCLIB_glue.h"
 
+#include "kernel/common.h"
+
 #ifdef __cplusplus
 extern "C" {
 #endif
@@ -26,7 +28,9 @@ extern int close( int fd );
 
 int _PDCLIB_close( int fd )
 {
-    return close( fd );
+    fprintf(stderr, "_PDCLIB_close stub\n");
+    assert(false, "stub");
+    //return close( fd );
 }
 
 #endif

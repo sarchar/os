@@ -900,6 +900,15 @@ typedef union { unsigned char _PDCLIB_thrd_attr_t_data[ 56 ]; long int _PDCLIB_t
      0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, } }
 #endif
 
+// make malloc threadsafe, use morecore, and support non-contiguous blocks of allocations
+#define USE_LOCKS 1
+#define HAVE_MMAP 0 
+#define MORECORE _PDCLIB_morecore 
+#define MORECORE_CONTIGUOUS 0 
+#define DEFAULT_GRANULARITY 4096
+
+void* _PDCLIB_morecore(_PDCLIB_intptr_t);
+
 /* Termux defines atexit in crtbegin_so.o leading to a multiple definition    */
 /* error from the linker. This is a crude workaround, which does NOT fix      */
 /* various run-time issues on Termux likely also related to crt linkage. But  */

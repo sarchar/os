@@ -6,6 +6,7 @@
 #include "paging.h"
 #include "palloc.h"
 #include "stdio.h"
+#include "stdlib.h"
 
 #define KEYBOARD_DATA    0x60
 #define KEYBOARD_STATUS  0x64
@@ -34,9 +35,8 @@ static void _kb_interrupt(struct interrupt_stack_registers* regs, intp pc, void*
 void ps2keyboard_load()
 {
     // set up the keyboard ring buffer
-    // TODO valloc ?
-    intp phys = palloc_claim_one();
-    kb_data.buffer = (u8*)vmem_map_page(phys, MAP_PAGE_FLAG_WRITABLE);
+    // TODO free kb_data.buffer at some point?
+    kb_data.buffer = (u8*)malloc(PAGE_SIZE); 
 
     // wait until there's no more data
     __inb(KEYBOARD_DATA);

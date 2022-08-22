@@ -7,13 +7,16 @@
 #ifndef REGTEST
 
 #include <threads.h>
+#include <stdio.h>
 
 #ifdef __cplusplus
 extern "C" {
 #endif
 
+#include "kernel/common.h"
+
 /* Implicitly casting the parameter. */
-extern int pthread_mutex_destroy( mtx_t * );
+//extern int pthread_mutex_destroy( mtx_t * );
 
 #ifdef __cplusplus
 }
@@ -21,7 +24,9 @@ extern int pthread_mutex_destroy( mtx_t * );
 
 void mtx_destroy( mtx_t * mtx )
 {
-    pthread_mutex_destroy( mtx );
+    fprintf(stderr, "mtx_destroy stub\n");
+    assert(false, "stub");
+    //pthread_mutex_destroy( mtx );
 }
 
 #endif
