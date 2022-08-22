@@ -3,13 +3,13 @@
 #include "apic.h"
 #include "cpu.h"
 #include "interrupts.h"
-#include "kalloc.h"
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
 #include "task.h"
 #include "smp.h"
 #include "stdio.h"
+#include "stdlib.h"
 #include "string.h"
 #include "vmem.h"
 
@@ -28,7 +28,7 @@ extern void _task_entry_userland(void);
 void task_become()
 {
     struct cpu* cpu = get_cpu();
-    struct task* task = (struct task*)kalloc(sizeof(struct task));
+    struct task* task = (struct task*)malloc(sizeof(struct task));
     zero(task);
 
     // initialize the linked list to just point to itself
@@ -63,7 +63,7 @@ static __noreturn void _task_entry()
 
 struct task* task_create(task_entry_point_function* entry, intp userdata, bool is_user)
 {
-    struct task* task = (struct task*)kalloc(sizeof(struct task));
+    struct task* task = (struct task*)malloc(sizeof(struct task));
     zero(task);
 
     // assign the task id
@@ -133,7 +133,8 @@ void task_free(struct task* task)
 
         palloc_abandon(phys, TASK_STACK_SIZE);
     }
-    kfree(task);
+
+    free(task);
 }
 
 void task_set_priority(s8 priority)

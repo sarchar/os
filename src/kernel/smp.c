@@ -6,12 +6,12 @@
 #include "hashtable.h"
 #include "hpet.h"
 #include "idt.h"
-#include "kalloc.h"
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
 #include "smp.h"
 #include "stdio.h"
+#include "stdlib.h"
 #include "string.h"
 #include "task.h"
 
@@ -100,7 +100,7 @@ void smp_all_stop()
 
 static void _create_cpu(u8 cpu_index)
 {
-    struct cpu* cpu = (struct cpu*)kalloc(sizeof(struct cpu));
+    struct cpu* cpu = (struct cpu*)malloc(sizeof(struct cpu));
     zero(cpu);
     cpu->this = cpu;
     cpu->cpu_index = cpu_index;
@@ -136,6 +136,9 @@ void ap_main(u8 cpu_index)
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
     //fprintf(stderr, "ap%d: started\n", cpu_index);
 
+    // set the kernel page table immediately, since _create_cpu allocates memory
+    paging_set_kernel_page_table();
+
     // initialize our cpu struct
     _create_cpu(cpu_index);
 
@@ -148,9 +151,6 @@ void ap_main(u8 cpu_index)
     // tell the BSP that we're ready and wait for the all-go signal
     _ap_boot_ack = true;
     while(!_ap_all_go) asm volatile("pause");
-
-    // set the kernel page table
-    paging_set_kernel_page_table();
 
     // enable interrupts
     idt_install(); // load the idt for this cpu

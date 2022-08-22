@@ -21,10 +21,10 @@ static intp morecore_lastcall_end = (intp)-1;
 
 void* _PDCLIB_morecore( _PDCLIB_intptr_t size )
 {
-    fprintf(stderr, "_PDCLIB_morecore(0x%lX/%ld)\n", size, size);
+//    fprintf(stderr, "_PDCLIB_morecore(0x%lX/%ld)\n", size, size);
 
     if(size == 0) { // return the end of the current program break
-        fprintf(stderr, "_PDCLIB_morecore: morecore_lastcall_end = 0x%lX\n", morecore_lastcall_end);
+//        fprintf(stderr, "_PDCLIB_morecore: morecore_lastcall_end = 0x%lX\n", morecore_lastcall_end);
 
         // if no previous call exists, return an error
         if(morecore_lastcall_end == (intp)-1) errno = ENOMEM;
@@ -49,7 +49,7 @@ void* _PDCLIB_morecore( _PDCLIB_intptr_t size )
         morecore_lastcall_end = virt + ((1 << order) << PAGE_SHIFT);
 
         // return start of newly allocated region
-        fprintf(stderr, "_PDCLIB_morecore: virt=0x%lX morecore_lastcall_end=0x%lX\n", virt, morecore_lastcall_end);
+        fprintf(stderr, "_PDCLIB_morecore: alloc size=%ld virt=0x%lX morecore_lastcall_end=0x%lX\n", size, virt, morecore_lastcall_end);
         return (void*)virt;
     } else {
         assert(false, "can't call _PDCLIB_morecore with negative argument yet");

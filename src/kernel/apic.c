@@ -6,11 +6,11 @@
 #include "hpet.h"
 #include "idt.h"
 #include "interrupts.h"
-#include "kalloc.h"
 #include "kernel.h"
 #include "paging.h"
 #include "palloc.h"
 #include "stdio.h"
+#include "stdlib.h"
 #include "string.h"
 #include "task.h"
 
@@ -535,7 +535,7 @@ struct ipcall {
 
 struct ipcall* apic_ipcall_build(enum IPCALL_FUNCTIONS func, void* payload)
 {
-    struct ipcall* ipc = kalloc(sizeof(struct ipcall));
+    struct ipcall* ipc = malloc(sizeof(struct ipcall));
     ipc->function = (u32)func;
     ipc->payload = payload;
     ipc->source_cpu_index = get_cpu()->cpu_index;
@@ -602,5 +602,8 @@ static void _local_apic_ipcall_interrupt(struct interrupt_stack_registers* regs,
         }
         break;
     }
+
+    // free the ipcall structure
+    free(ipc);
 }
 

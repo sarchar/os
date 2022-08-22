@@ -4,11 +4,11 @@
 #include "bootmem.h"
 #include "cpu.h"
 #include "hashtable.h"
-#include "kalloc.h"
 #include "kernel.h"
 #include "paging.h"
 #include "pci.h"
 #include "stdio.h"
+#include "stdlib.h"
 
 #define PCI_CONF_REG_IDS     0x0000
 #define PCI_CONF_REG_COMMAND 0x0004
@@ -132,14 +132,14 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
     HT_FIND(pci_device_vendors, config->vendor_id, vnd);
 
     if(vnd == null) { // vendor not found, create one
-        vnd = (struct pci_vendor_info*)kalloc(sizeof(struct pci_vendor_info));
+        vnd = (struct pci_vendor_info*)malloc(sizeof(struct pci_vendor_info));
         vnd->vendor_id = config->vendor_id;
         vnd->devices   = null;
         HT_ADD(pci_device_vendors, vendor_id, vnd);
     }
 
     // then add the device to the vendor's list
-    struct pci_device_info* dev = (struct pci_device_info*)kalloc(sizeof(struct pci_device_info));
+    struct pci_device_info* dev = (struct pci_device_info*)malloc(sizeof(struct pci_device_info));
 
     dev->group     = group;
     dev->bus       = bus;

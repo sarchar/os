@@ -9,6 +9,9 @@
 #include "stdio.h"
 #include "vmem.h"
 
+// verbosity levels 1, 2 or 3
+#define VMEM_VERBOSE 1
+
 struct vmem_node {
     MAKE_RB_TREE;
 
@@ -44,7 +47,9 @@ void vmem_init()
 
     RB_TREE_INSERT(vmem_free_areas, node, _vmem_node_cmp_bases);
 
+#if VMEM_VERBOSE > 0
     fprintf(stderr, "vmem: initialized virtual memory for area 0x%lX-0x%lX\n", vmem_free_areas->base, vmem_free_areas->base + vmem_free_areas->length);
+#endif
 }
 
 intp vmem_create_private()
@@ -58,7 +63,9 @@ intp vmem_create_private()
 
     RB_TREE_INSERT(private_vmem, node, _vmem_node_cmp_bases);
 
+#if VMEM_VERBOSE > 0
     fprintf(stderr, "vmem: initialized private virtual memory area 0x%lX-0x%lX\n", private_vmem->base, private_vmem->base + private_vmem->length);
+#endif
     return (intp)private_vmem;
 }
 
@@ -88,7 +95,9 @@ intp vmem_map_pages(intp phys, u64 npages, u32 flags)
     }
     release_lock(vmem_lock);
 
+#if VMEM_VERBOSE > 1
     fprintf(stderr, "vmem: mapping %d pages start 0x%lX to 0x%lX-0x%lX\n", npages, phys, virtual_address, virtual_address+wanted_size);
+#endif
     for(u64 offs = 0; offs < wanted_size; offs += PAGE_SIZE) {
         paging_map_page(phys + offs, virtual_address + offs, flags);
     }
@@ -104,14 +113,18 @@ intp vmem_unmap_pages(intp virt, u64 npages)
     intp size = npages * PAGE_SIZE;
     intp end = virt + size;
 
+#if VMEM_VERBOSE > 1
     fprintf(stderr, "vmem: unmapping %d pages at 0x%lX-0x%lX\n", npages, virt, end);
+#endif
 
     // look up the end of the freed region to see if it matches the beginning of any other region
     struct vmem_node lookup = { .base = end };
     struct vmem_node* result;
     if(RB_TREE_FIND(vmem_free_areas, result, lookup, _vmem_node_cmp_bases)) {
         // extend result downward, that's it
+#if VMEM_VERBOSE > 2
         fprintf(stderr, "    extending 0x%lX downward to 0x%lX\n", result->base, result->base - size);
+#endif
         result->base -= size;    
         result->length += size;
 
@@ -126,7 +139,9 @@ intp vmem_unmap_pages(intp virt, u64 npages)
             // update result to include the region
             result->base = result2->base;
             result->length += result2->length;
+#if VMEM_VERBOSE > 2
             fprintf(stderr, "    merging node 0x%lX-0x%lX into 0x%lX-0x%lX\n", result2->base, result2->base + result2->length, result->base, result->base + result->length);
+#endif
 
             // update the lookup to the new base
             lookup.length = result->base;
@@ -145,7 +160,9 @@ intp vmem_unmap_pages(intp virt, u64 npages)
     lookup.length = virt;
     if(RB_TREE_FIND(vmem_free_areas, result, lookup, _vmem_node_cmp_ends)) {
         // a region was found, so we can expand upwards
+#if VMEM_VERBOSE > 2
         fprintf(stderr, "    extending 0x%lX-0x%lX upward to 0x%lX\n", result->base, result->base+result->length, result->base+result->length+size);
+#endif
         result->length += size;
         goto done;
     }
@@ -155,7 +172,9 @@ intp vmem_unmap_pages(intp virt, u64 npages)
     zero(newnode);
     newnode->base = virt;
     newnode->length = size;
+#if VMEM_VERBOSE > 2
     fprintf(stderr, "    inserting new vmem_node 0x%lX-0x%lX\n", newnode->base, newnode->base+newnode->length);
+#endif
     RB_TREE_INSERT(vmem_free_areas, newnode, _vmem_node_cmp_bases);
 
 done:

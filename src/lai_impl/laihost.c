@@ -4,10 +4,10 @@
 
 #include "acpi.h"
 #include "cpu.h"
-#include "kalloc.h"
 #include "kernel.h"
 #include "pci.h"
 #include "stdio.h"
+#include "stdlib.h"
 
 // Logs a message. level can either be LAI_DEBUG_LOG for debugging info, or LAI_WARN_LOG for warnings 
 void laihost_log(int level, const char *msg)
@@ -26,19 +26,16 @@ __noreturn void laihost_panic(const char *msg)
 
 void* laihost_malloc(size_t sz)
 {
-    void* ptr = kalloc(sz);
+    void* ptr = malloc(sz);
 //    fprintf(stderr, "laihost_malloc(sz=%d)=0x%lX\n", sz, ptr);
     return ptr;
 }
 
 void* laihost_realloc(void* ptr, size_t newsz, size_t oldsz)
 {
-    void* newptr = kalloc(newsz);
+    unused(oldsz);
+    void* newptr = realloc(ptr, newsz);
 //    fprintf(stderr, "laihost_realloc(ptr=0x%lX, newsz=%d, oldsz=%d)=0x%lX\n", ptr, newsz, oldsz, newptr);
-    if(ptr != null) {
-        memcpy(newptr, ptr, oldsz);
-        kfree(ptr);
-    }
     return newptr;
 }
 
@@ -46,7 +43,7 @@ void laihost_free(void* ptr, size_t sz)
 {
     unused(sz);
 //    fprintf(stderr, "laihost_free(ptr=0x%lX, sz=%d)\n", ptr, sz);
-    kfree(ptr);
+    free(ptr);
 }
 
 // Returns the (virtual) address of the n-th table that has the given signature, or NULL when no such table was found.
@@ -124,8 +121,6 @@ void laihost_sleep(uint64_t ms)
 void* laihost_map(size_t address, size_t count)
 {
     unused(count);
-    // AHCI has already been mapped and any 'address' that has been allocated from kalloc() will have been
-    // allocated from an identity-mapped memory pool. TODO one day I'll have a kernel space virtual memory manager!
 //    fprintf(stderr, "laihost_map(address=0x%lX, count=%d)\n", address, count);
     return (void*)address;
 }

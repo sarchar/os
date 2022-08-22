@@ -297,7 +297,6 @@ DEFINE_INTERRUPT_HANDLER_ERR(14, interrupt_page_fault)
     unused(irq_vector);
     unused(regs);
 
-    __cli();
     if(smp_ready()) {
         fprintf(stderr, "page fault: on cpu %d error = $%lX at address $%lX ", get_cpu()->cpu_index, error_code, fault_addr);
     } else {

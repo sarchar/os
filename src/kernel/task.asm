@@ -22,7 +22,7 @@ global _task_switch_to:function (_task_switch_to.end - _task_switch_to)
 _task_switch_to:
     ; rip is on the stack, save it in the task structure
     pop rdx
-    mov [edi+TASK_RIP_OFFSET], rdx
+    mov [rdi+TASK_RIP_OFFSET], rdx
 
     ; for SysV ABI, functions must preserve rbx, rsp, rbp, r12, r13, r14, and r15 
     push r15
@@ -35,16 +35,16 @@ _task_switch_to:
     ; save rflags
     pushfq
     pop rax
-    mov [edi+TASK_RFLAGS_OFFSET], rax
+    mov [rdi+TASK_RFLAGS_OFFSET], rax
 
     ; save old stack pointer
-    mov [edi+TASK_RSP_OFFSET], rsp
+    mov [rdi+TASK_RSP_OFFSET], rsp
 
     ; compute how much time has passed and add it to the runtime
     mov rbp, global_ticks
     mov rax, [rbp]
-    sub rax, [edi+TASK_LAST_GLOBAL_TICKS_OFFSET]
-    add [edi+TASK_RUNTIME_OFFSET], rax
+    sub rax, [rdi+TASK_LAST_GLOBAL_TICKS_OFFSET]
+    add [rdi+TASK_RUNTIME_OFFSET], rax
     
     ; load new stack pointer
     mov rsp, [rsi+TASK_RSP_OFFSET]

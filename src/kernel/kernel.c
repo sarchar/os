@@ -249,7 +249,7 @@ static void run_command(char* cmdbuffer)
         u32 start_lba = atoi(cmdptr);
 
         // allocate 512 bytes
-        intp dest = (intp)kalloc(512); // TODO valloc?
+        intp dest = (intp)malloc(512);
 
         // read from device
         if(!ahci_read_device_sectors(port_index, start_lba, 1, dest)) return;
@@ -273,7 +273,7 @@ static void run_command(char* cmdbuffer)
         }
 
         // free data
-        kfree((void*)dest);
+        free((void*)dest);
     } else if(strcmp(cmdbuffer, "cd") == 0) {
         struct inode* dir;
 

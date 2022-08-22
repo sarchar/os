@@ -167,9 +167,6 @@ struct cpu {
     // ipcall support
     struct ticketlock ipcall_lock;
     struct ipcall*    ipcall;
-
-    // struct process* current_user_process;
-    // etc
 };
 
 static inline intp __get_cpu()
