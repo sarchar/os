@@ -57,6 +57,9 @@ struct task {
     u16  padding1;
     u32  padding3;
 
+    // private vmem space
+    intp vmem;
+
     struct task* prev;
     struct task* next;
 };

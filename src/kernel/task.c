@@ -70,7 +70,10 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
     task->state = TASK_STATE_NEW;
     task->cpu = get_cpu();
 
-    if(is_user) task->flags |= TASK_FLAG_USER;
+    if(is_user) {
+        task->vmem = vmem_create_private();
+        task->flags |= TASK_FLAG_USER;
+    }
 
     // set up the task entry point
     task->entry = entry;

@@ -94,13 +94,16 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     // initialize paging
     paging_init();     // unmaps a large portion of lowmem
 
-
     // a few modules have to map new memory
     efifb_map();       // the EFI framebuffer needs virtual mapping
     terminal_redraw(); // remapping efifb may have missed some putpixel calls
     apic_map();        // the APIC needs memory mapping
 
-    __sti();           // re-enable interrupts
+    // initialize the virtual memory manager
+    vmem_init();
+
+    // safe to enable interrupts now
+    __sti();
 
     // enable the kernel timer
     hpet_init();

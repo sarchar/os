@@ -16,8 +16,11 @@ SET_SOURCE_FILES_PROPERTIES(font.o
 #ADD_LIBRARY(data STATIC font.o)
 #SET_TARGET_PROPERTIES(data PROPERTIES LINKER_LANGUAGE C)
 
+# get uthash_impl files
+file(GLOB_RECURSE uthash_impl_files "${CMAKE_CURRENT_SOURCE_DIR}/../uthash_impl/*.c")
+
 # define the target build
-ADD_EXECUTABLE(os.bin acpi.c ap_boot.asm apic.c boot.asm bootmem.c efifb.c gdt.c hpet.c idt.c interrupts.c interrupts.asm kalloc.c kernel.c multiboot2.c paging.c palloc.c pci.c serial.c smp.c syscall.c terminal.c task.asm task.c userland.c font.o)
+ADD_EXECUTABLE(os.bin ${uthash_impl_files} acpi.c ap_boot.asm apic.c boot.asm bootmem.c efifb.c gdt.c hpet.c idt.c interrupts.c interrupts.asm kalloc.c kernel.c multiboot2.c paging.c palloc.c pci.c serial.c smp.c syscall.c terminal.c task.asm task.c userland.c font.o)
 
 # includes
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/uthash_impl")
