@@ -11,7 +11,7 @@
 
 #define assert(cond,err) do { \
         if(!(cond)) {           \
-            /* fprintf(stderr, "assertion failed at " __FILE__ ":" stringify2(__LINE__) ": %s\n", err); */ \
+            fprintf(stderr, "assertion failed at " __FILE__ ":" stringify2(__LINE__) ": %s\n", err); \
             kernel_panic(COLOR(128, 128, 128)); \
         }                                       \
     } while(false);

@@ -43,19 +43,17 @@ intp multiboot2_mmap_next_free_region(u64* size, u8* region_type)
         // maybe pass in a flags parameter and set flags based on the type of region it is
         switch(iter->type) {
         case MULTIBOOT_MEMORY_AVAILABLE:
-            if(iter->addr < 0x100000000) {
-                // the region the kernel is loaded into cannot be used for bootmem (well, unless we use _kernel_end_address 
-                // but there's no point for that right now. TODO later we can move the kernel and reclaim the entire region
-                if(mbt_load_base_addr->load_base_addr < iter->addr || mbt_load_base_addr->load_base_addr > (iter->addr + iter->len)) {
-                    ret = (intp)iter->addr;
-                    *size = iter->len;
-                    *region_type = MULTIBOOT_REGION_TYPE_AVAILABLE;
-                } else {
-                    // fine, use the memory after the end of the kernel to the end of the region
-                    ret = (intp)__alignup((intp)&_userland_data_end - (intp)&_kernel_vma_base, PAGE_SIZE); // TODO use _kernel_end_address when you get rid of .userland. segments
-                    *size = iter->len - (ret - iter->addr);
-                    *region_type = MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE; // don't use it yet, but we will need to map it
-                }
+            // the region the kernel is loaded into cannot be used for bootmem (well, unless we use _kernel_end_address 
+            // but there's no point for that right now. TODO later we can move the kernel and reclaim the entire region
+            if(mbt_load_base_addr->load_base_addr < iter->addr || mbt_load_base_addr->load_base_addr > (iter->addr + iter->len)) {
+                ret = (intp)iter->addr;
+                *size = iter->len;
+                *region_type = MULTIBOOT_REGION_TYPE_AVAILABLE;
+            } else {
+                // fine, use the memory after the end of the kernel to the end of the region
+                ret = (intp)__alignup((intp)&_userland_data_end - (intp)&_kernel_vma_base, PAGE_SIZE); // TODO use _kernel_end_address when you get rid of .userland. segments
+                *size = iter->len - (ret - iter->addr);
+                *region_type = MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE; // don't use it yet, but we will need to map it
             }
             break;
 

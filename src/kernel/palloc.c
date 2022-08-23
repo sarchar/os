@@ -7,14 +7,16 @@
 
 #include "bootmem.h"
 #include "kernel.h"
+#include "multiboot2.h"
 #include "palloc.h"
+#include "paging.h"
 #include "smp.h"
 #include "stdio.h"
 #include "string.h"
 
 #define PALLOC_VERBOSE 0
 
-#define PALLOC_MAX_ORDER 11 // 2^10 pages * 4KiB/page = 4MiB max contiguous allocation
+#define PALLOC_MAX_ORDER 11 // 1 greater than the actual order, 2^10 pages * 4KiB/page = 4MiB max contiguous allocation
 
 struct free_page {
     struct free_page* next;
@@ -28,14 +30,15 @@ static struct free_page* free_page_head[PALLOC_MAX_ORDER] = { null, };
 // we need the start of a region to be index 0 in every map
 // TODO in the long run it would be nice to have a single bitmap for all pages, per order
 struct region {
-    void* start;
-    void* end;
-    u64   size;
-    u64   npages;
-    u8*   maps[PALLOC_MAX_ORDER-1]; // highest order doesn't need a map
+    intp start;
+    u64  size;
+    u64  npages;
+    u8*  maps[PALLOC_MAX_ORDER-1]; // highest order doesn't need a map
 };
 
 static struct region* regions;
+static u8 num_highmem_regions;
+static u8 num_bootmem_regions;
 static u8 num_regions;
 
 // if nb is not null, set nb to non-zero if the bit in the bitmap was set, 0 otherwise
@@ -44,21 +47,22 @@ static u8 num_regions;
 static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
 {
     intp base_addr = (intp)base;
-    u64 block_size = 1 << (order + 12);
+    u64 block_size = 1 << (order + PAGE_SHIFT);
 
     for(u8 i = 0; i < num_regions; i++) {
         // check if not in this region. the block has to be within the region entirely
-        if(base_addr < (intp)regions[i].start || (base_addr + block_size) >= (intp)regions[i].end) continue;
+        if(base_addr < regions[i].start || (base_addr + block_size) >= (regions[i].start + regions[i].size)) continue;
 
         // base_addr is in this region, determine the bitmap block index
-        u64 index = base_addr >> (order + 1 + 12);
+        //u64 index = base_addr >> (order + 1 + PAGE_SHIFT);
+        u64 index = (base_addr - regions[i].start) >> (order + 1 + PAGE_SHIFT);
 
         // flip the bit
         regions[i].maps[order][index >> 3] ^= 1 << (index & 7);
 
-#if PALLOC_VERBOSE > 1
+#if PALLOC_VERBOSE > 2
         fprintf(stderr, "palloc: toggle bit region=$%lX order=%d index=%d base=$%lX new bit=$%02X\n",
-                (intp)regions[i].start, order, index, (intp)base, regions[i].maps[order][index >> 3] & (1 << (index & 7)));
+                regions[i].start, order, index, (intp)base, regions[i].maps[order][index >> 3] & (1 << (index & 7)));
 #endif
 
         // and get the new value
@@ -71,6 +75,58 @@ static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
     return false;
 }
 
+static void _initialize_region(struct region* r, intp region_start, u64 region_size)
+{
+    // alignup
+    u16 wasted_alignment = (intp)__alignup(region_start, 4096) - (intp)region_start;
+    region_start = (intp)__alignup(region_start, 4096);
+    region_size -= wasted_alignment;
+
+#if PALLOC_VERBOSE > 0
+    fprintf(stderr, "palloc: reclaiming region at start=$%lX size=%d wasted=%d\n", region_start, region_size, wasted_alignment);
+#endif
+
+    // put in region info
+    r->start  = region_start;
+    r->size   = region_size;
+    r->npages = region_size >> PAGE_SHIFT; // this value will be used quite a lot, so a small optimization here
+
+#if PALLOC_VERBOSE > 1
+    fprintf(stderr, "palloc: region $%lX has npages=%d\n", (intp)region_start, r->npages);
+#endif
+
+    // now add the region to free_page_head
+    while(region_size != 0) {
+        u8 order = PALLOC_MAX_ORDER - 1;
+        u32 block_size = 1 << (order + PAGE_SHIFT);
+
+        // if any bit in mask (1<<order)-1 is set on the region start address, this node can't have a buddy, so it goes down in order and stays there forever
+        // I.e., if a 4MiB region starts *not* on a 4MiB aligned boundary, it can't be two 2MiB blocks later.
+        while((order > 0) && ((((intp)region_start & (block_size - 1)) != 0) || (block_size > region_size))) {
+            --order;
+            block_size >>= 1;
+        }
+
+        // add the block to the list
+        struct free_page* fp = (struct free_page*)region_start;
+        fp->next = free_page_head[order]->next;
+        fp->prev = null; // doesn't actually point back to free_page_head[order], since that's not a block of pages
+        if(fp->next != null) {
+            fp->next->prev = fp;
+        }
+        free_page_head[order]->next = fp;
+
+#if PALLOC_VERBOSE > 2
+        fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
+#endif
+
+        // increment region_start and reduce region_size
+        region_start = (intp)region_start + block_size;
+        region_size -= block_size;
+    }
+}
+
+
 void palloc_init()
 {
     // allocate storage for our free_page_head pointers
@@ -79,8 +135,20 @@ void palloc_init()
         zero(free_page_head[i]);
     }
 
+    // later, we will be adding high memory regions to palloc, but as of right now, they aren't available
+    // in the kernel's page table. so we cound them up so that we can allocate storage for the region info
+    // that will be filled in later.
+    intp region_start;
+    u64  region_size;
+    u8   region_type;
+    num_highmem_regions = 0;
+    while((region_start = multiboot2_mmap_next_free_region(&region_size, &region_type)) != (intp)-1) {
+        if(region_type == MULTIBOOT_REGION_TYPE_AVAILABLE && region_start >= 0x100000000) num_highmem_regions++;
+    }
+
     // create storage for the region info
-    num_regions = bootmem_num_regions();
+    num_bootmem_regions = bootmem_num_regions();
+    num_regions = num_bootmem_regions + num_highmem_regions;
     regions = (struct region*)bootmem_alloc(sizeof(struct region) * num_regions, 8);
     memset(regions, 0, sizeof(struct region) * num_regions);
 
@@ -98,78 +166,66 @@ void palloc_init()
     //
     // The bitmap and sizes decrease by 2 for every higher order
     //
-    // Also note all the bitmap sizes are halved due to the buddy system
+    // Also, all the bitmap sizes are halved due to the buddy system
     //
 
-    // have to loop over all regions and build bitmaps for them individually
-    for(u8 r = 0; r < num_regions; r++) {
-        u32 npages = bootmem_get_region_size(r) >> 12;
+    // have to loop over only bootmem regions and build bitmaps for them individually
+    for(u8 r = 0; r < num_bootmem_regions; r++) {
+        u32 npages = bootmem_get_region_size(r) >> PAGE_SHIFT;
 
         // allocate the bitmaps
         for(u32 order = 0; order < PALLOC_MAX_ORDER - 1; ++order) {
-            u64 mapsize = ((npages >> (order + 1)) + 7) >> 3; // divide pages by 2^(order layer, plus 1 because of the buddy), then divide by sizeof(byte) rounded up
+            u64 mapsize = ((npages >> (order + 1)) + 7) >> 3; // divide pages by 2^(order layer, plus 1 because of the buddy), then divide by sizeof(byte) in bits, rounded up
             regions[r].maps[order] = (u8*)bootmem_alloc(mapsize, 8);
             memset(regions[r].maps[order], 0, mapsize);
         }
     }
 
     // and now that we have a bitmaps, we can start reclaiming bootmem
-    void* region_start;
-    u64 region_size;
     u8 region_index = 0;
 
     while((region_size = bootmem_reclaim_region(&region_start)) != 0) {
-        // alignup
-        u16 wasted_alignment = (intp)__alignup(region_start, 4096) - (intp)region_start;
-        region_start = __alignup(region_start, 4096);
-        region_size -= wasted_alignment;
+        _initialize_region(&regions[region_index], region_start, region_size);
+        region_index++;
+    }
+}
+
+void palloc_init_highmem()
+{
+    // now we can finally add highmem to palloc. region structures were already allocated, now we just have to initialize them
+    intp region_start;
+    u64  region_size;
+    u8   region_type;
+    u8   region_index = num_bootmem_regions; // highmem regions are right after the bootmem ones
+    while((region_start = multiboot2_mmap_next_free_region(&region_size, &region_type)) != (intp)-1) {
+        if(region_type != MULTIBOOT_REGION_TYPE_AVAILABLE || region_start < 0x100000000) continue;
+
+        // for now, we assume that all high memory is mapped by the hardware under 64TiB
+        assert((region_start + region_size) <= 0x0000400000000000UL, "only support hardware with highmem positioned under 64TiB");
+
+        // we have to allocate the bitmaps first, directly in the region itself
+        u32 npages = region_size >> PAGE_SHIFT;
+
+        for(u32 order = 0; order < PALLOC_MAX_ORDER - 1; ++order) {
+            u64 mapsize = ((npages >> (order + 1)) + 7) >> 3; // divide pages by 2^(order layer, plus 1 because of the buddy), then divide by sizeof(byte) rounded up
+            regions[region_index].maps[order] = (u8*)__alignup(region_start, 8); // map pointer needs to be 8 byte aligned
+            memset(regions[region_index].maps[order], 0, mapsize);
+
+            // reduce the remaining size of the region (_initialize_region will round up any non-page boundary, which just becomes unusable memory)
+            // all maps need to be 8 byte aligned
+            u8 wasted = (intp)regions[region_index].maps[order] - (intp)region_start;
+            region_start += (mapsize + wasted);
+            region_size -= (mapsize + wasted);
+        }
 
 #if PALLOC_VERBOSE > 0
-        fprintf(stderr, "palloc: reclaiming region at start=$%lX size=%d wasted=%d\n", (intp)region_start, region_size, wasted_alignment);
+        fprintf(stderr, "palloc: adding high mem region 0x%lX size=%d\n", region_start, region_size);
 #endif
-
-        // put in region info
-        regions[region_index].start = region_start;
-        regions[region_index].size = region_size;
-        regions[region_index].end = (void*)((intp)region_start + region_size);
-        regions[region_index].npages = region_size >> 12; // this value will be used quite a lot, so a small optimization here
-
-#if PALLOC_VERBOSE > 1
-        fprintf(stderr, "palloc: region $%lX has npages=%d\n", (intp)region_start, regions[region_index].npages);
-#endif
-
+        _initialize_region(&regions[region_index], region_start, region_size);
         region_index++;
-
-        // now add the region to free_page_head
-        while(region_size != 0) {
-            u8 order = PALLOC_MAX_ORDER - 1;
-            u32 block_size = 1 << (order + 12);
-
-            // if any bit in mask (1<<order)-1 is set on the region start address, this node can't have a buddy, so it goes down in order and stays there forever
-            // I.e., if a 4MiB region starts *not* on a 4MiB aligned boundary, it can't be two 2MiB blocks later.
-            while((order > 0) && ((((intp)region_start & (block_size - 1)) != 0) || (block_size > region_size))) {
-                --order;
-                block_size >>= 1;
-            }
-
-            // add the block to the list
-            struct free_page* fp = (struct free_page*)region_start;
-            fp->next = free_page_head[order]->next;
-            fp->prev = null; // doesn't actually point back to free_page_head[order], since that's not a block of pages
-            if(fp->next != null) {
-                fp->next->prev = fp;
-            }
-            free_page_head[order]->next = fp;
-
-#if PALLOC_VERBOSE > 1
-            fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
-#endif
-
-            // increment region_start and reduce region_size
-            region_start = (void*)((intp)region_start + block_size);
-            region_size -= block_size;
-        }
     }
+
+    assert(region_index == num_regions, "we should have all the regions now. why not?");
 }
 
 declare_ticketlock(palloc_lock);
@@ -198,7 +254,7 @@ intp palloc_claim(u8 n) // allocate 2^n pages
     free_page_head[order]->next = left->next;
     if(free_page_head[order]->next != null) free_page_head[order]->next->prev = null;
 
-#if PALLOC_VERBOSE > 0
+#if PALLOC_VERBOSE > 2
     fprintf(stderr, "palloc: removed block $%lX at order %d\n", (intp)left, order);
 #endif
 
@@ -209,7 +265,7 @@ intp palloc_claim(u8 n) // allocate 2^n pages
         // split 'fp' into two block_size/2 blocks
         struct free_page* right = (struct free_page*)((u8*)left + (block_size >> 1));
 
-#if PALLOC_VERBOSE > 0
+#if PALLOC_VERBOSE > 2
         fprintf(stderr, "palloc: splitting block order %d address=$%lX right=$%lX\n", order, (intp)left, (intp)right);
 #endif
 
@@ -263,14 +319,14 @@ void palloc_abandon(intp base, u8 n)
             palloc_togglebit((struct free_page*)base, order, &bit);
         }
 
-#if PALLOC_VERBOSE > 0
+#if PALLOC_VERBOSE > 1
         fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", base, order, bit, (u8)buddy_valid);
 #endif
 
         // a released block with no buddy must stay at this level, otherwise
         // try combining to larger blocks
         if(buddy_valid && (bit == 0) && order < PALLOC_MAX_ORDER - 1) {
-#if PALLOC_VERBOSE > 0
+#if PALLOC_VERBOSE > 2
             fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", base, buddy_addr, order + 1);
 #endif
 
@@ -279,7 +335,7 @@ void palloc_abandon(intp base, u8 n)
 
             // remove buddy from free_list
             if(buddy->prev == null) { 
-#if PALLOC_VERBOSE > 1
+#if PALLOC_VERBOSE > 2
                 fprintf(stderr, "free_page_head[%d]->next = $%lX, buddy = $%lX\n", order, free_page_head[order]->next, buddy);
 #endif
                 assert(free_page_head[order]->next == buddy, "must be the case"); // the only time a node's prev pointer should be null is if it's at the start of the free list

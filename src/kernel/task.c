@@ -103,7 +103,6 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
     u64 stack_size;
     task->stack_bottom = task_allocate_stack(task->vmem, &stack_size, is_user);
     task->rsp = (u64)task->stack_bottom + stack_size;
-    fprintf(stderr, "new task stack at 0x%lX\n", task->rsp);
 
     // we don't need to initialize the 6 registers (r15, r14, r13, r12, rbp, rbx) on the new task's stack
     // since they're already zero from task_allocate_stack. we just need to move the stack pointer to

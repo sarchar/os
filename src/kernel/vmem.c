@@ -78,7 +78,8 @@ intp vmem_create_private_memory(struct page_table* page_table)
 
     struct vmem_node* node = (struct vmem_node*)kalloc(sizeof(struct vmem_node));
     zero(node);
-    node->base = 0x0000008000000000ULL; // the PML4 page table has entries that are 0x80_00000000 (512GiB) in size, and the 0th entry is for the kernel
+    node->base = 0x0000400000000000; // the PML4 page table has entries that are 0x80_00000000 (512GiB) in size, and the first 64TiB is for identity mapping memory
+                                     // which leaves 64TiB for user space memory
     node->length = 0x0000800000000000ULL - (u64)node->base; // user land virtual memory goes up to the last valid canonical address with high bit 0 set
 
     RB_TREE_INSERT(private_vmem->free_areas, node, _vmem_node_cmp_bases);

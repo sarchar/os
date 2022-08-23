@@ -69,6 +69,9 @@ void bootmem_init()
         // We can reclaim it later
         if(region_start < 0x100000) continue;
 
+        // Likewise, we don't use memory >=4GiB since it's not mapped in the page table (yet)
+        if(region_start >= 0x100000000) continue;
+
         // Don't use AHCI regions yet either
         if(region_type == MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE) continue;
 
@@ -148,13 +151,13 @@ u64 bootmem_count_free_pages()
     return npages;
 }
 
-u64 bootmem_reclaim_region(void** region_start)
+u64 bootmem_reclaim_region(intp* region_start)
 {
     struct bootmem_region* cur = regions;
     if(cur == null) return 0;
 
     regions = cur->next;
-    *region_start = (void*)cur;
+    *region_start = (intp)cur;
     assert(cur->size != 0, "bug: all memory in this region has been consumed"); // TODO actually allow returning 0 size regions so palloc can keep proper indexing?
     return cur->size;
 }

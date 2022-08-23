@@ -99,7 +99,8 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     terminal_redraw(); // remapping efifb may have missed some putpixel calls
     apic_map();        // the APIC needs memory mapping
 
-    // TODO add high memory blocks to palloc 
+    // add high memory blocks to palloc 
+    palloc_init_highmem();
 
     // initialize the virtual memory manager
     vmem_init();
