@@ -16,12 +16,12 @@
 // log2 size of the stack (order for palloc) that is allocated to each task
 #define TASK_STACK_SIZE 2     // 2^2 = 4*4096 = 16KiB
 
-#define TASK_PUSH_STACK(t,val) task->rsp -= sizeof(u64); *((u64*)task->rsp) = (u64)(val)
+#define TASK_PUSH_STACK(t,val) (t)->rsp -= sizeof(u64); *((u64*)(t)->rsp) = (u64)(val)
 
 static u64 next_task_id = (u64)-1;
 
 extern void _task_switch_to(struct task*, struct task*);
-extern void _task_entry_userland(void);
+extern void _task_entry_user(void);
 
 // task_become is used once per cpu to "become" a task, which the values of the task
 // being filled out when the first task switch occurs
@@ -39,6 +39,11 @@ void task_become()
     task->state = TASK_STATE_RUNNING;
     task->cpu = cpu;
 
+    // page table (use the current table)
+    task->page_table = paging_get_kernel_page_table();
+    task->cr3 = paging_get_cpu_table(task->page_table);
+    assert(task->cr3 == __rdcr3(), "must match");
+
     // and timing
     task->last_global_ticks = global_ticks;
 
@@ -49,8 +54,8 @@ void task_become()
     cpu->current_task = task;
 }
 
-// _task_entry is the entry point to all kernel tasks and handles when the task returns instead of exits
-static __noreturn void _task_entry() 
+// _task_entry_kernel is the entry point to all kernel tasks and handles when the task returns instead of exits
+static __noreturn void _task_entry_kernel() 
 {
     struct task* task = get_cpu()->current_task;
 
@@ -71,11 +76,6 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
     task->state = TASK_STATE_NEW;
     task->cpu = get_cpu();
 
-    if(is_user) {
-        task->vmem = vmem_create_private();
-        task->flags |= TASK_FLAG_USER;
-    }
-
     // set up the task entry point
     task->entry = entry;
     task->userdata = userdata;
@@ -83,54 +83,58 @@ struct task* task_create(task_entry_point_function* entry, intp userdata, bool i
     // default to looping to itself
     task->prev = task->next = task;
 
-    // allocate stack, and set RSP to the base of where we initialize registers
-    u64 stack_size;
-    task->stack_bottom = task_allocate_stack(&stack_size, is_user);
-    task->rsp = (u64)task->stack_bottom + stack_size;
+    // set up the task's page table (kernel page table if kernel task, new one otherwise)
+    if(is_user) {
+        task->flags |= TASK_FLAG_USER;
+        task->page_table = paging_create_private_table();
+        task->vmem = vmem_create_private_memory(task->page_table);
+    } else {
+        task->page_table = paging_get_kernel_page_table();
+    }
+    task->cr3 = paging_get_cpu_table(task->page_table);
 
     // entry point to the task
-    task->rip = is_user ? (u64)_task_entry_userland : (u64)_task_entry;
+    task->rip = is_user ? (u64)_task_entry_user : (u64)_task_entry_kernel;
 
     // default cpu flags
     task->rflags = __saveflags() & ~(1 << 9); // IF (interrupt enable flag) is bit 9. Section 3.4.3 of Volume 1 Software Development Manual
 
-    // initialize parameters on the stack
-    TASK_PUSH_STACK(task, 0); // r15
-    TASK_PUSH_STACK(task, 0); // r14
-    TASK_PUSH_STACK(task, 0); // r13
-    TASK_PUSH_STACK(task, 0); // r12
-    TASK_PUSH_STACK(task, 0); // rbp
-    TASK_PUSH_STACK(task, 0); // rbx
+    // allocate stack, and set RSP to the top of the stack
+    u64 stack_size;
+    task->stack_bottom = task_allocate_stack(task->vmem, &stack_size, is_user);
+    task->rsp = (u64)task->stack_bottom + stack_size;
+    fprintf(stderr, "new task stack at 0x%lX\n", task->rsp);
+
+    // we don't need to initialize the 6 registers (r15, r14, r13, r12, rbp, rbx) on the new task's stack
+    // since they're already zero from task_allocate_stack. we just need to move the stack pointer to
+    // accommodate the pops that will happen later
+    task->rsp -= 6 * sizeof(u64);
 
     return task;
 }
 
-intp task_allocate_stack(u64* stack_size, bool is_user)
+intp task_allocate_stack(intp vmem, u64* stack_size, bool is_user)
 {
     intp ret = palloc_claim(TASK_STACK_SIZE);
 
-    // virtual map the stack for user processes (TODO: use user vma, not kernel)
-    if(is_user) {
-        ret = vmem_map_pages(ret, 1 << TASK_STACK_SIZE, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
-    }
+    // physical addresses are identity mapped, so we can safely clear the stack here
+    memset64((void*)ret, 0, (1ULL << (TASK_STACK_SIZE + PAGE_SHIFT - 3)));
+
+    // map the stack into virtual memory
+    u32 map_flags = MAP_PAGE_FLAG_WRITABLE;
+    if(is_user) map_flags |= MAP_PAGE_FLAG_USER;
+    ret = vmem_map_pages(vmem, ret, 1 << TASK_STACK_SIZE, map_flags);
 
     *stack_size = (1 << TASK_STACK_SIZE) * PAGE_SIZE;
-    memset((void *)ret, 0, *stack_size);
 
     return ret;
 }
 
 void task_free(struct task* task)
 {
-    if(task->stack_bottom != 0) {
-        intp phys = task->stack_bottom;
-
-        // get physical address of memory
-        if(task->stack_bottom >= 0xFFFF800000000000) {
-            phys = vmem_unmap_pages(task->stack_bottom, 1 << TASK_STACK_SIZE);
-            fprintf(stderr, "user task stack 0x%lX has physical 0x%lX\n", task->stack_bottom, phys);
-        }
-
+    if(task->stack_bottom != 0) { // the boot threads use stacks that are in .bss, and this is set to 0
+        // unmap the stack, and free the physical pages used for it
+        intp phys = vmem_unmap_pages(task->vmem, task->stack_bottom, 1 << TASK_STACK_SIZE);
         palloc_abandon(phys, TASK_STACK_SIZE);
     }
 
@@ -234,11 +238,6 @@ static struct task* _select_next_task(struct task* start)
     return null;
 }
 
-void _task_switch_to_user(struct task* from_task, struct task* to_task)
-{
-    _task_switch_to(from_task, to_task);
-}
-
 void task_yield(enum TASK_YIELD_REASON reason)
 {
     u64 cpu_flags = __cli_saveflags();
@@ -291,8 +290,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
     // we have a task, switch to it
     cpu->current_task = to_task;
     cpu->current_task->state = TASK_STATE_RUNNING;
-    if(to_task->flags & TASK_FLAG_USER) _task_switch_to_user(from_task, to_task);
-    else _task_switch_to(from_task, to_task);
+    _task_switch_to(from_task, to_task);
 
     goto resume_task;
     
@@ -347,16 +345,16 @@ void __noreturn task_exit(s64 return_value, bool save_context)
 
 // loop forever at low priority, freeing any tasks added to the exited queue
 // TODO use events to know when things have been added?
-void __noreturn task_idle_forever()
+__noreturn void task_idle_forever()
 {
     struct cpu* cpu = get_cpu();
 
-    // set a task priority so low that we never get time unless there's literally nothing else to do
-    //task_set_priority(-20);
-
     while(true) {
+        //TODO wait on an event to be signaled. using an event essentially makes this task
+        //extremely low priority. we won't wake up until a task exits, and then we can safely
+        //free it from memory
         while(cpu->exited_task != null) {
-            u64 cpu_regs = __cli_saveflags();
+            u64 cpu_regs = __cli_saveflags(); // disable preemption
             struct task* task = cpu->exited_task;
             task_dequeue(&cpu->exited_task, task);
             __restoreflags(cpu_regs);

@@ -16,6 +16,7 @@
 #include "efifb.h"
 #include "kernel.h"
 #include "multiboot2.h"
+#include "paging.h"
 #include "stdio.h"
 #include "terminal.h"
 
@@ -37,7 +38,7 @@ struct {
     u8  num_regions;
 } bootmem_accounting = { 0, };
 
-static void bootmem_addregion(void* region_start, u64 size)
+static void bootmem_addregion(intp region_start, u64 size)
 {
     if(size < BOOTMEM_SMALLEST_REGION_SIZE) {
         // not enough data remaining to care about, so toss it
@@ -47,7 +48,7 @@ static void bootmem_addregion(void* region_start, u64 size)
         return;
     }
 
-    struct bootmem_region* new_region = (struct bootmem_region*)region_start;
+    struct bootmem_region* new_region = (struct bootmem_region*)(void*)region_start;
     new_region->next = regions;
     new_region->size = size;
     regions = new_region;
@@ -72,7 +73,7 @@ void bootmem_init()
         if(region_type == MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE) continue;
 
         // Add it
-        bootmem_addregion((void*)region_start, region_size);
+        bootmem_addregion(region_start, region_size);
     }
 }
 
@@ -101,7 +102,7 @@ void* bootmem_alloc(u64 size, u8 alignment)
         return null;
     }
 
-    // treat the alignment as an increase in size
+    // treat the alignment as an increase in allocated size
     size += extra;
 
     // handle remaining region
@@ -132,13 +133,13 @@ void* bootmem_alloc(u64 size, u8 alignment)
     return (void*)__alignup(cur, alignment);
 }
 
-u32 bootmem_count_free_pages()
+u64 bootmem_count_free_pages()
 {
     struct bootmem_region* cur = regions;
-    u32 npages = 0;
+    u64 npages = 0;
     while(cur != null) {
-        u32 wasted = 4096 - __alignof(cur, 4096);
-        u32 p = (cur->size - wasted) >> 12;
+        u32 wasted = PAGE_SIZE - __alignof(cur, PAGE_SIZE);
+        u32 p = (cur->size - wasted) >> PAGE_SHIFT;
         npages += p;
         //wasted += cur->size - (p << 12);
         cur = cur->next;

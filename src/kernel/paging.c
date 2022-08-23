@@ -32,10 +32,10 @@ struct page_table {
     u8     unused0[7];
 };
 
-static struct page_table* paging_root;
+static struct page_table* kernel_page_table;
 
-static void _map_page(intp phys, intp virt, u32 flags);
-static intp _unmap_page(intp virt);
+static void _map_page(struct page_table* table_root, intp phys, intp virt, u32 flags);
+static intp _unmap_page(struct page_table* table_root, intp virt);
 static void _map_2mb(intp phys, intp virt, u32 flags);
 
 static struct page_table* _allocate_page_table()
@@ -70,7 +70,7 @@ static void _map_kernel()
     for(intp offs = 0; offs < kernel_size; offs += PAGE_SIZE) {
         intp phys = (intp)&_kernel_load_address + offs;
         intp virt = phys | (intp)&_kernel_vma_base;
-        _map_page(phys, virt, MAP_PAGE_FLAG_WRITABLE);
+        _map_page(kernel_page_table, phys, virt, MAP_PAGE_FLAG_WRITABLE);
     }
 
     // All of the lowmem free regions are identity mapped so that palloc/kalloc
@@ -81,7 +81,7 @@ static void _map_kernel()
     while((region_start = multiboot2_mmap_next_free_region(&region_size, &region_type)) != (intp)-1) {
         // also map AHCI areas for parsing ahci later
         if(region_type == MULTIBOOT_REGION_TYPE_AVAILABLE || region_type == MULTIBOOT_REGION_TYPE_AHCI_RECLAIMABLE) {
-            paging_identity_map_region(region_start, region_size, MAP_PAGE_FLAG_WRITABLE);
+            paging_identity_map_region(kernel_page_table, region_start, region_size, MAP_PAGE_FLAG_WRITABLE);
         }
     }
 
@@ -90,23 +90,23 @@ static void _map_kernel()
     for(intp offs = (intp)&_userland_text_start; offs < (intp)&_userland_text_end; offs += PAGE_SIZE) {
         intp virt = offs;
         intp phys = virt - (intp)&_kernel_vma_base;
-        _map_page(phys, virt, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
+        _map_page(kernel_page_table, phys, virt, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
     }
 
     // map only the pages userland occupies into virtual memory with user flag
     for(intp offs = (intp)&_userland_data_start; offs < (intp)&_userland_data_end; offs += PAGE_SIZE) {
         intp virt = offs;
         intp phys = virt - (intp)&_kernel_vma_base;
-        _map_page(phys, virt, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
+        _map_page(kernel_page_table, phys, virt, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_USER);
     }
 }
 
 void paging_init()
 {
     // TODO build a new page table using memory allocated from palloc and switch to it
-    // paging_root is the level 4 page table
-    paging_root = _allocate_page_table();
-    fprintf(stderr, "paging: initializing page tables (paging_root->_cpu_table=0x%lX)\n", paging_root->_cpu_table);
+    // kernel_page_table is the level 4 page table
+    kernel_page_table = _allocate_page_table();
+    fprintf(stderr, "paging: initializing page tables (kernel_page_table->_cpu_table=0x%lX)\n", kernel_page_table->_cpu_table);
 
     // map the kernel into virtual space
     _map_kernel();
@@ -115,24 +115,59 @@ void paging_init()
     // setting cr3 forces a full tlb invalidate
     paging_set_kernel_page_table();
 
-    // testing
-    u8* physpage = (u8*)palloc_claim_one();
-    physpage[1000] = 0x55; // we have identity mapping on all memory
-    physpage[1001] = 0xAA;
-    paging_map_page((intp)physpage, 0x3F00000000, MAP_PAGE_FLAG_WRITABLE);
-    assert(((u8*)0x3F00000000)[1000] == 0x55, "55 is wrong");
-    assert(((u8*)0x3F00000000)[1001] == 0xAA, "AA is wrong");
+    // create empty but present tables for all the high memory pml4 entries
+    for(u32 i = 256; i < 512; i++) {
+        if(kernel_page_table->_cpu_table[i] != 0) continue;
+
+        struct page_table* pdpt = _allocate_page_table();
+        kernel_page_table->entries[i] = pdpt;
+        kernel_page_table->_cpu_table[i] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+        kernel_page_table->num_entries++;
+    }
+    
     return;
 }
 
 void paging_set_kernel_page_table()
 {
-    __wrcr3((u64)paging_root->_cpu_table);
+    __wrcr3((u64)kernel_page_table->_cpu_table);
+}
+
+struct page_table* paging_get_kernel_page_table()
+{
+    return kernel_page_table;
+}
+
+intp paging_get_cpu_table(struct page_table* table_root)
+{
+    return (intp)table_root->_cpu_table;
+}
+
+// create a new page table root, and map the kernel into it by copying pages for 0-4GiB and 0xFFFF800000000000+
+struct page_table* paging_create_private_table()
+{
+    struct page_table* private = _allocate_page_table();
+
+    // entry 0 maps 0x00000000_00000000->0x0000007F_FFFFFFFF
+    // entry 0 will never be null
+    assert(kernel_page_table->entries[0] != null, "low mem missing pointer in page table?");
+    private->entries[0] = kernel_page_table->entries[0];
+    private->_cpu_table[0] = kernel_page_table->_cpu_table[0];
+    private->num_entries++; 
+
+    // entries 256-511 map 0x00008000_00000000-0x0000FFFF_FFFFFFFF
+    for(u64 i = 256; i < 512; i++) {
+        private->entries[i]    = kernel_page_table->entries[i];
+        private->_cpu_table[i] = kernel_page_table->_cpu_table[i];
+        if(private->entries[i] != null) private->num_entries++; // TODO maybe none of this high level pointers should be null. problem is when new pointers are added to the kernel page table that need to be reflected in private page tables
+    }
+
+    return private;
 }
 
 // _map_page does the hard work of mapping a physical address for the specified virtual address
 // location, but does not flush the TLB. For TLB flush, call paging_map_page() instead.
-static void _map_page(intp phys, intp virt, u32 flags)
+static void _map_page(struct page_table* table_root, intp phys, intp virt, u32 flags)
 {
     assert((virt >> 47) == 0 || (virt >> 47) == 0x1FFFF, "virtual address must be canonical");
     assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
@@ -147,12 +182,12 @@ static void _map_page(intp phys, intp virt, u32 flags)
 
     // create a level 3 page table (page directory pointers) if necessary
     u32 pml4_index = (virt >> 39) & 0x1FF;
-    struct page_table* pdpt = paging_root->entries[pml4_index];
-    if(paging_root->_cpu_table[pml4_index] == 0) {
+    struct page_table* pdpt = table_root->entries[pml4_index];
+    if(table_root->_cpu_table[pml4_index] == 0) {
         pdpt = _allocate_page_table();
-        paging_root->entries[pml4_index] = pdpt;
-        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
-        paging_root->num_entries++;
+        table_root->entries[pml4_index] = pdpt;
+        table_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+        table_root->num_entries++;
     }
 
     // create a level 2 page table (page directory) if necessary
@@ -190,7 +225,7 @@ static void _map_page(intp phys, intp virt, u32 flags)
 }
 
 // _unmap_page simply removes the entry that 'virt' resolves to from the lowest level page table
-static intp _unmap_page(intp virt)
+static intp _unmap_page(struct page_table* table_root, intp virt)
 {
     assert((virt >> 47) == 0 || (virt >> 47) == 0x1FFFF, "virtual address must be canonical");
     assert(__alignof(virt, 4096) == 0, "virtual address must be 4KB aligned");
@@ -204,8 +239,8 @@ static intp _unmap_page(intp virt)
 
     // find the level 3 page table (page directory pointers), and error out if it doesn't exist
     u32 pml4_index = (virt >> 39) & 0x1FF;
-    assert(paging_root->_cpu_table[pml4_index] & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT, "virtual address mapping not found");
-    struct page_table* pdpt = paging_root->entries[pml4_index];
+    assert(table_root->_cpu_table[pml4_index] & CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT, "virtual address mapping not found");
+    struct page_table* pdpt = table_root->entries[pml4_index];
 
     // find the level 2 page table (page directory pointers), and error out if it doesn't exist
     u32 pdpt_index = (virt >> 30) & 0x1FF;
@@ -242,8 +277,8 @@ static intp _unmap_page(intp virt)
     if(--pdpt->num_entries != 0) goto done;
 
     _free_page_table(pdpt);
-    paging_root->entries[pml4_index] = null;
-    paging_root->_cpu_table[pml4_index] = 0; // TODO do these have to be invalidated?
+    table_root->entries[pml4_index] = null;
+    table_root->_cpu_table[pml4_index] = 0; // TODO do these have to be invalidated?
     pdpt->num_entries -= 1;
 
 done:
@@ -277,15 +312,15 @@ void paging_debug_address(intp virt)
     char buf[] = "[........]";
 
     fprintf(stderr, "paging: table dump for address 0x%016lX\n", virt);
-    fprintf(stderr, "0x%016lX (paging_root)\n", paging_root->_cpu_table);
+    fprintf(stderr, "0x%016lX (kernel_page_table)\n", kernel_page_table->_cpu_table);
 
     // print pml4 entry
     u32 pml4_index = (virt >> 39) & 0x1FF;
-    struct page_table* pdpt = paging_root->entries[pml4_index];
-    _make_flags_string(buf, paging_root->_cpu_table[pml4_index]);
+    struct page_table* pdpt = kernel_page_table->entries[pml4_index];
+    _make_flags_string(buf, kernel_page_table->_cpu_table[pml4_index]);
     u64 base = pml4_index * (1ULL << 39);
-    fprintf(stderr, "`- [%d] 0x%016X (pdpt), 0x%016lX .. 0x%016lX flags=%s\n", pml4_index, paging_root->_cpu_table[pml4_index], base, (base + (1ULL << 39)) - 1, buf);
-    if(buf[1] == 'p' || buf[7] == 'H') return;
+    fprintf(stderr, "`- [%d] 0x%016X (pdpt), 0x%016lX .. 0x%016lX flags=%s\n", pml4_index, kernel_page_table->_cpu_table[pml4_index], base, (base + (1ULL << 39)) - 1, buf);
+    if(buf[1] == 'p' || buf[8] == 'H') return;
 
     // print page directory pointers table entry
     u32 pdpt_index = (virt >> 30) & 0x1FF;
@@ -293,7 +328,7 @@ void paging_debug_address(intp virt)
     _make_flags_string(buf, pdpt->_cpu_table[pdpt_index]);
     base += pdpt_index * (1ULL << 30);
     fprintf(stderr, "   `- [%d] 0x%016X (pd), 0x%016lX .. 0x%016lX flags=%s\n", pdpt_index, pdpt->_cpu_table[pdpt_index], base, (base + (1ULL << 30)) - 1, buf);
-    if(buf[1] == 'p' || buf[7] == 'H') return;
+    if(buf[1] == 'p' || buf[8] == 'H') return;
 
     // print page directory table entry
     u32 pd_index = (virt >> 21) & 0x1FF;
@@ -301,7 +336,7 @@ void paging_debug_address(intp virt)
     _make_flags_string(buf, pd->_cpu_table[pd_index]);
     base += pd_index * (1ULL << 21);
     fprintf(stderr, "      `- [%d] 0x%016X (pt), 0x%016lX .. 0x%016lX flags=%s\n", pd_index, pd->_cpu_table[pd_index], base, (base + (1ULL << 21)) - 1, buf);
-    if(buf[1] == 'p' || buf[7] == 'H') return;
+    if(buf[1] == 'p' || buf[8] == 'H') return;
 
     // print page table entry
     u32 pt_index = (virt >> 12) & 0x1FF;
@@ -310,16 +345,61 @@ void paging_debug_address(intp virt)
     fprintf(stderr, "         `- [%d] 0x%016X (pte), 0x%016lX .. 0x%016lX flags=%s\n", pt_index, pt->_cpu_table[pt_index], base, (base + (1ULL << 12)) - 1, buf);
 }
 
-void paging_map_page(intp phys, intp virt, u32 flags)
+void paging_debug_table(struct page_table* table_root)
+{
+    char buf[] = "[........]";
+
+    fprintf(stderr, "paging: full table dump\n");
+    fprintf(stderr, "0x%016lX (_cpu_table (cr3))\n", table_root->_cpu_table);
+
+    for(u32 pml4_index = 256; pml4_index < 512; pml4_index++) {
+        // print pml4 entry
+        struct page_table* pdpt = table_root->entries[pml4_index];
+        _make_flags_string(buf, table_root->_cpu_table[pml4_index]);
+        if(buf[1] == 'p' || buf[8] == 'H') continue;
+        u64 base = pml4_index * (1ULL << 39);
+        if(base & 0x0000800000000000) base |= 0xFFFF000000000000ULL;
+        fprintf(stderr, "`- [%d] 0x%016X (pdpt), 0x%016lX .. 0x%016lX flags=%s\n", pml4_index, table_root->_cpu_table[pml4_index], base, (base + (1ULL << 39)) - 1, buf);
+
+        for(u32 pdpt_index = 0; pdpt_index < 512; pdpt_index++) {
+            // print page directory pointers table entry
+            struct page_table* pd = pdpt->entries[pdpt_index];
+            _make_flags_string(buf, pdpt->_cpu_table[pdpt_index]);
+            if(buf[1] == 'p' || buf[8] == 'H') continue;
+            base += pdpt_index * (1ULL << 30);
+            fprintf(stderr, "   `- [%d] 0x%016X (pd), 0x%016lX .. 0x%016lX flags=%s\n", pdpt_index, pdpt->_cpu_table[pdpt_index], base, (base + (1ULL << 30)) - 1, buf);
+
+            for(u32 pd_index = 0; pd_index < 512; pd_index++) {
+                // print page directory table entry
+                struct page_table* pt = pd->entries[pd_index];
+                _make_flags_string(buf, pd->_cpu_table[pd_index]);
+                if(buf[1] == 'p' || buf[8] == 'H') continue;
+                base += pd_index * (1ULL << 21);
+                fprintf(stderr, "      `- [%d] 0x%016X (pt), 0x%016lX .. 0x%016lX flags=%s\n", pd_index, pd->_cpu_table[pd_index], base, (base + (1ULL << 21)) - 1, buf);
+
+                for(u32 pt_index = 0; pt_index < 512; pt_index++) {
+                    // print page table entry
+                    _make_flags_string(buf, pt->_cpu_table[pt_index]);
+                    if(buf[1] == 'p' || buf[8] == 'H') continue;
+                    base += pt_index * (1ULL << 12);
+                    fprintf(stderr, "         `- [%d] 0x%016X (pte), 0x%016lX .. 0x%016lX flags=%s\n", pt_index, pt->_cpu_table[pt_index], base, (base + (1ULL << 12)) - 1, buf);
+                }
+            }
+        }
+    }
+}
+
+
+void paging_map_page(struct page_table* table_root, intp phys, intp virt, u32 flags)
 {
     // call _map_page and then flushes TLB
-    _map_page(phys, virt, flags);
+    _map_page(table_root, phys, virt, flags);
     __invlpg(virt);
 }
 
-intp paging_unmap_page(intp virt)
+intp paging_unmap_page(struct page_table* table_root, intp virt)
 {
-    return _unmap_page(virt);
+    return _unmap_page(table_root, virt);
 }
 
 // _map_2mb does the hard work of mapping the physical address into the specified virtual address
@@ -339,11 +419,11 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
 
     // create a level 3 page table (page directory pointers) if necessary
     u32 pml4_index = (virt >> 39) & 0x1FF;
-    struct page_table* pdpt = paging_root->entries[pml4_index];
-    if(paging_root->_cpu_table[pml4_index] == 0) {
+    struct page_table* pdpt = kernel_page_table->entries[pml4_index];
+    if(kernel_page_table->_cpu_table[pml4_index] == 0) {
         pdpt = _allocate_page_table();
-        paging_root->entries[pml4_index] = pdpt;
-        paging_root->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
+        kernel_page_table->entries[pml4_index] = pdpt;
+        kernel_page_table->_cpu_table[pml4_index] = (intp)pdpt->_cpu_table | CPU_PAGE_TABLE_ENTRY_FLAG_PRESENT | CPU_PAGE_TABLE_ENTRY_FLAG_WRITEABLE | CPU_PAGE_TABLE_ENTRY_FLAG_USER;
     }
 
     // create a level 2 page table (page directory) if necessary
@@ -380,7 +460,7 @@ void paging_map_2mb(intp phys, intp virt, u32 flags)
     }
 }
 
-void paging_identity_map_region(intp region_start, u64 region_size, u32 flags)
+void paging_identity_map_region(struct page_table* table_root, intp region_start, u64 region_size, u32 flags)
 {
     assert(__alignof(region_start, 4096) == 0, "regions must start on page boundaries");
     assert(__alignof(region_size, 4096) == 0, "region size must be a multiple of page size");
@@ -392,7 +472,7 @@ void paging_identity_map_region(intp region_start, u64 region_size, u32 flags)
     if(pre) {
         intp pre_size = min(region_size, 0x200000 - pre); // might be less than 2MiB
         for(intp offs = 0; offs < pre_size; offs += 0x1000) {
-            _map_page(region_start + offs, region_start + offs, flags);
+            _map_page(table_root, region_start + offs, region_start + offs, flags);
         }
         region_start = (intp)__alignup(region_start, 0x200000);
         region_size -= pre_size;
@@ -407,7 +487,7 @@ void paging_identity_map_region(intp region_start, u64 region_size, u32 flags)
 
     // finally map remaining 4K pages
     while(region_size > 0) {
-        _map_page(region_start, region_start, flags);
+        _map_page(table_root, region_start, region_start, flags);
         region_start += 0x1000;
         region_size  -= 0x1000;
     }

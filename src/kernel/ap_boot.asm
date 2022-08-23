@@ -55,9 +55,9 @@ bits 32
 align 16
 .protected_mode:
     ; now switch into long mode
-    ; first set the boot page tables that identity map 0-4GB so we can continue booting
-    mov ecx, boot_page_table_level4
-    mov cr3, ecx
+    ; first, use the initial boot page table, which maps low memory
+    mov eax, boot_page_table_level4
+    mov cr3, eax
 
     ; Enable PAE
     mov eax, cr4
@@ -83,6 +83,11 @@ align 16
 
 bits 64
 .long_mode:
+    ; in long mode, load the kernel page table. otherwise, our stack won't be accessible
+    mov rsi, _ap_page_table
+    mov rax, qword [rsi]
+    mov cr3, rax
+
     ; set up the stack pointer. the boostrap processor placed our stack (top) in _ap_boot_stack_top
     mov rax, _ap_boot_stack_top
     mov rsp, [rax]
@@ -132,6 +137,10 @@ ap_boot_GDT:
 ; Set to the stack pointer to use for this AP
 global _ap_boot_stack_top:data
 _ap_boot_stack_top:
+    dq 0
+
+global _ap_page_table:data
+_ap_page_table:
     dq 0
 
 section .multiboot.data 

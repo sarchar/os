@@ -28,9 +28,11 @@ extern int close( int fd );
 
 int _PDCLIB_close( int fd )
 {
+    unused(fd);
     fprintf(stderr, "_PDCLIB_close stub\n");
     assert(false, "stub");
     //return close( fd );
+    return 0;
 }
 
 #endif

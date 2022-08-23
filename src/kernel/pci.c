@@ -84,7 +84,7 @@ static void _map_all_groups()
     struct pci_segment_group* group = pci_segment_groups;
     while(group != null) {
         intp end_address = (intp)PCI_CONF_ADDRESS(group, group->end_bus + 1, 0, 0, 0);
-        paging_identity_map_region(group->base_address, end_address - group->base_address, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+        paging_identity_map_region(PAGING_KERNEL, group->base_address, end_address - group->base_address, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
         group = group->next;
     }
 }
@@ -303,7 +303,7 @@ intp pci_device_map_bar(struct pci_device_info* dev, u8 bar_index)
     assert(__alignof(addr, 4096) == 0, "BAR address isn't page aligned");
 
     for(intp start = addr; start < addr + size; start += 0x1000) {
-        paging_map_page(start, start, map_flags); // TODO use vmem?
+        paging_map_page(PAGING_KERNEL, start, start, map_flags); // TODO use vmem?
     }
 
     return addr;
@@ -314,7 +314,7 @@ void pci_device_unmap_bar(struct pci_device_info* dev, u8 bar_index, intp virt)
     u64 size = pci_device_get_bar_size(dev, bar_index);
 
     for(intp start = virt; start < virt + size; start += 0x1000) {
-        paging_unmap_page(start); // TODO use vmem?
+        paging_unmap_page(PAGING_KERNEL, start); // TODO use vmem?
     }
 }
 

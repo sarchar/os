@@ -24,6 +24,7 @@ extern "C" {
 
 void mtx_destroy( mtx_t * mtx )
 {
+    unused(mtx);
     fprintf(stderr, "mtx_destroy stub\n");
     assert(false, "stub");
     //pthread_mutex_destroy( mtx );

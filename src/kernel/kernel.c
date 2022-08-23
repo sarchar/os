@@ -498,6 +498,8 @@ static void run_command(char* cmdbuffer)
         extern s64 userland_task_main(struct task*);
         struct task* newtask = task_create(userland_task_main, (intp)null, true);
         task_enqueue_for(atoi(targetcpu), newtask);
+    } else if(strcmp(cmdbuffer, "pt") == 0) {
+        paging_debug_table(get_cpu()->current_task->page_table);
     }
 }
 

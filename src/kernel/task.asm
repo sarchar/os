@@ -1,11 +1,13 @@
 ; must match struct task in task.h
 TASK_RIP_OFFSET               equ 0
 TASK_RSP_OFFSET               equ 8
-TASK_RFLAGS_OFFSET            equ 16
-TASK_LAST_GLOBAL_TICKS_OFFSET equ 24
-TASK_RUNTIME_OFFSET           equ 32
-TASK_FLAGS_OFFSET             equ 40
-TASK_ENTRY_OFFSET             equ 48
+TASK_CR3_OFFSET               equ 16
+TASK_RFLAGS_OFFSET            equ 24
+TASK_LAST_GLOBAL_TICKS_OFFSET equ 32
+TASK_RUNTIME_OFFSET           equ 40
+TASK_FLAGS_OFFSET             equ 48
+TASK_ENTRY_OFFSET             equ 56
+TASK_STACK_BASE_OFFSET        equ 64
 
 ; must match enum TEST_FLAGS in task.h
 TASK_FLAG_USER                equ (1 << 0)
@@ -49,7 +51,9 @@ _task_switch_to:
     ; load new stack pointer
     mov rsp, [rsi+TASK_RSP_OFFSET]
 
-    ;TODO set pagetable?
+    ; load the task's page table
+    mov rax, [rsi+TASK_CR3_OFFSET];
+    mov cr3, rax
 
     ; set the global ticks value now that the process is running again
     mov rax, [rbp]
@@ -63,17 +67,13 @@ _task_switch_to:
     pop r14
     pop r15
 
-    ; check if we're jumping to user code or not
-;    test qword [rsi+TASK_FLAGS_OFFSET], TASK_FLAG_USER
-;    jne .user
-
-    ; for kernel tasks, just jump to task code
+    ; jump to the task's current location and never return
     jmp [rsi+TASK_RIP_OFFSET]
 
 .end:
 
-global _task_entry_userland:function (_task_entry_userland.end - _task_entry_userland)
-_task_entry_userland:
+global _task_entry_user:function (_task_entry_user.end - _task_entry_user)
+_task_entry_user:
     ; for user tasks, we push the stack segment, stack pointer, code segment, rflags, and finally the instruction pointer and use iretq
     ; iretq only pops rsp and ss if the code segment has a less privileged DPL than the current segment
     ; the current stack pointer (before we push the iretq requirements) is what the usercode will use, save it

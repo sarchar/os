@@ -15,6 +15,7 @@ enum TASK_FLAGS {
     TASK_FLAG_USER = (1 << 0),
 };
 
+struct page_table;
 struct task {
     ////////////////////////////////////////////////////////////////////////////
     // structure definition here must match task.asm
@@ -23,6 +24,7 @@ struct task {
     // saved context variables
     intp rip; 
     intp rsp;
+    intp cr3;
     u64  rflags;
     u64  last_global_ticks;
 
@@ -35,11 +37,15 @@ struct task {
     // entry point to the actual task
     task_entry_point_function* entry;
 
+    // base of the stack
+    u64  stack_bottom;
+
     ////////////////////////////////////////////////////////////////////////////
     // the structure from this point forward doesn't need to match task.asm
     ////////////////////////////////////////////////////////////////////////////
 
-    u64  stack_bottom;
+    // this tasks page table
+    struct page_table* page_table;
 
     // cpu this task is on
     struct cpu*  cpu;
@@ -66,7 +72,7 @@ struct task {
 
 void task_become();
 struct task* task_create(task_entry_point_function*, intp, bool); 
-intp task_allocate_stack(u64*, bool);
+intp task_allocate_stack(intp, u64*, bool);
 void task_free(struct task*);
 
 // yield from the current task and switch to the next one
@@ -79,7 +85,7 @@ enum TASK_YIELD_REASON {
 
 void task_set_priority(s8);
 
-void task_idle_forever();
+__noreturn void task_idle_forever();
 void task_yield(enum TASK_YIELD_REASON);
 
 // exit the current task

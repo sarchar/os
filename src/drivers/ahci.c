@@ -666,7 +666,7 @@ static struct ahci_device_port* _try_initialize_port(u8 port_index, u32 ncmds)
     // we need uncached memory for the command list and FIS, so we allocate a page of memory
     // instead of using kalloc(), since kalloc returns already mapped memory
     intp phys_page = (intp)palloc_claim_one(); // phys_page is also identity mapped, but we need access to the memory without cache
-    intp virt_addr = vmem_map_page(phys_page, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    intp virt_addr = vmem_map_page(VMEM_KERNEL, phys_page, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 
     // allocate space for command list
     assert(1024 >= sizeof(struct hba_command_header) * ncmds, "too many command entries requested");
@@ -681,7 +681,7 @@ static struct ahci_device_port* _try_initialize_port(u8 port_index, u32 ncmds)
 
     // before we can change pointers in the hba_port, we must disable the receive FIS buffer and wait for the FIS engine to stop
     if(!_stop_port_processing(hba_port)) {
-        vmem_unmap_page(virt_addr);
+        vmem_unmap_page(VMEM_KERNEL, virt_addr);
         palloc_abandon(phys_page, 0);
         kfree(aport);
         return null;
@@ -883,12 +883,12 @@ static void _deactivate_port(u8 port_index)
 
     // if an IDENTIFY exists, free the memory
     if(aport->identify_device_response) {
-        intp phys = vmem_unmap_page((intp)aport->identify_device_response);
+        intp phys = vmem_unmap_page(VMEM_KERNEL, (intp)aport->identify_device_response);
         palloc_abandon(phys, 0);
     }
 
     // unmap the memory used by command_list_address and free the page associated with it
-    vmem_unmap_page(aport->command_list_address);
+    vmem_unmap_page(VMEM_KERNEL, aport->command_list_address);
     palloc_abandon(aport->command_list_phys_address, 0); // command_list_phys_address is always at the start of the allocated page
 
     // free the ahci_device_port node
@@ -982,7 +982,7 @@ static struct hba_command_table* _create_command_table(struct hba_command_header
 
     // the base address is where the table will go
     // TODO we need vmem_map_region, and we can't use vmalloc because physical memory must be contiguous
-    struct hba_command_table* tbl = (struct hba_command_table*)vmem_map_page(phys, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    struct hba_command_table* tbl = (struct hba_command_table*)vmem_map_page(VMEM_KERNEL, phys, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 	zero(tbl);
 
     // point the header at the new command table
@@ -1009,7 +1009,7 @@ static void _free_command_table(struct hba_command_header* hdr, struct hba_comma
     hdr->command_table_base   = 0;
     hdr->command_table_base_h = 0;
 
-    vmem_unmap_page((intp)tbl);
+    vmem_unmap_page(VMEM_KERNEL, (intp)tbl);
     palloc_abandon(phys, palloc_order);
 }
 

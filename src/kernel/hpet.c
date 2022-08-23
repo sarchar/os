@@ -226,7 +226,7 @@ void hpet_init()
         struct hpet_timer* timer = timers[t];
 
         // map the timer base address into virtual memory
-        paging_map_page(timer->address, timer->address, MAP_PAGE_FLAG_DISABLE_CACHE | MAP_PAGE_FLAG_WRITABLE);
+        paging_map_page(PAGING_KERNEL, timer->address, timer->address, MAP_PAGE_FLAG_DISABLE_CACHE | MAP_PAGE_FLAG_WRITABLE);
 
         // enable the timer
         hpet_timer_enable(timer);

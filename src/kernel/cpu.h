@@ -134,6 +134,13 @@ static inline void __wrcr3(u64 val)
     asm volatile("mov %0, %%cr3" : : "a"(val) );
 }
 
+static inline u64 __rdcr3()
+{
+    u64 ret;
+    asm volatile("mov %%cr3, %0" : "=a"(ret) );
+    return ret;
+}
+
 static inline void __invlpg(intp addr) 
 {
     asm volatile("invlpg (%0)" : : "r"(addr) : "memory");

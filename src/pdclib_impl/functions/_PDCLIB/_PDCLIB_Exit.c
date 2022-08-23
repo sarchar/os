@@ -33,6 +33,7 @@ void _PDCLIB_Exit( int status )
     fprintf(stderr, "_PDCLIB_Exit stub\n");
     assert(false, "stub");
     //_exit( status );
+    while(1) ; 
 }
 
 #endif

@@ -25,6 +25,7 @@ extern intp _ap_boot_start, _ap_boot_size;
 // defined in ap_boot.asm, where we store the top of stack for the cpu
 extern intp _ap_boot_stack_top;
 static intp _ap_boot_stack_bottom;
+extern intp _ap_page_table;
 
 // synchronization for bootup
 bool volatile _ap_boot_ack;
@@ -63,8 +64,11 @@ void smp_init()
 
         // allocate stack, pointing to the end of memory
         u64 stack_size;
-        _ap_boot_stack_bottom = task_allocate_stack(&stack_size, false);
+        _ap_boot_stack_bottom = task_allocate_stack((intp)null, &stack_size, false); // vmem=null means kernel virtual memory
         *(u64*)&_ap_boot_stack_top = _ap_boot_stack_bottom + stack_size; // 4096*2^2 = 16KiB
+
+        // tell the bootstrap code what to use for the kernel page table
+        *(u64*)&_ap_page_table = paging_get_cpu_table(PAGING_KERNEL);
 
         // try to boot the cpu
         if(apic_boot_cpu(i, AP_BOOT_PAGE) < 0) {
@@ -135,9 +139,6 @@ void ap_main(u8 cpu_index)
 {
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
     //fprintf(stderr, "ap%d: started\n", cpu_index);
-
-    // set the kernel page table immediately, since _create_cpu allocates memory
-    paging_set_kernel_page_table();
 
     // initialize our cpu struct
     _create_cpu(cpu_index);

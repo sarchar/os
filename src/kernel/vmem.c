@@ -19,8 +19,13 @@ struct vmem_node {
     u64  length;
 };
 
-struct vmem_node* vmem_free_areas = null;
-declare_ticketlock(vmem_lock);
+struct vmem {
+    struct vmem_node* free_areas;
+    struct page_table* page_table;
+    struct ticketlock lock;
+};
+
+struct vmem* kernel_vmem = null;
 
 // compare two regions using their base address
 static s64 _vmem_node_cmp_bases(struct vmem_node const* a, struct vmem_node const* b)
@@ -40,44 +45,61 @@ static s64 _vmem_node_cmp_ends(struct vmem_node const* a, struct vmem_node const
 
 void vmem_init()
 {
+    kernel_vmem = (struct vmem*)kalloc(sizeof(struct vmem));
+    zero(kernel_vmem);
+
+    declare_ticketlock(lock_init);
+    kernel_vmem->lock = lock_init;
+
+    // when mapping/unmapping, make sure to use the kernel page table
+    kernel_vmem->page_table = paging_get_kernel_page_table();
+
     struct vmem_node* node = (struct vmem_node*)kalloc(sizeof(struct vmem_node));
     zero(node);
     node->base = 0xFFFF800000000000;
     node->length = (u64)&_kernel_vma_base - (u64)node->base;
 
-    RB_TREE_INSERT(vmem_free_areas, node, _vmem_node_cmp_bases);
+    RB_TREE_INSERT(kernel_vmem->free_areas, node, _vmem_node_cmp_bases);
 
 #if VMEM_VERBOSE > 0
-    fprintf(stderr, "vmem: initialized virtual memory for area 0x%lX-0x%lX\n", vmem_free_areas->base, vmem_free_areas->base + vmem_free_areas->length);
+    fprintf(stderr, "vmem: initialized virtual memory for area 0x%lX-0x%lX\n", kernel_vmem->free_areas->base, kernel_vmem->free_areas->base + kernel_vmem->free_areas->length);
 #endif
 }
 
-intp vmem_create_private()
+intp vmem_create_private_memory(struct page_table* page_table)
 {
-    struct vmem_node* private_vmem = null;
+    struct vmem* private_vmem = (struct vmem*)kalloc(sizeof(struct vmem));
+    zero(private_vmem);
+
+    declare_ticketlock(lock_init);
+    private_vmem->lock = lock_init;
+
+    private_vmem->page_table = page_table;
 
     struct vmem_node* node = (struct vmem_node*)kalloc(sizeof(struct vmem_node));
     zero(node);
-    node->base = 0x0000000100000000;
-    node->length = 0x0000800000000000 - (u64)node->base;
+    node->base = 0x0000008000000000ULL; // the PML4 page table has entries that are 0x80_00000000 (512GiB) in size, and the 0th entry is for the kernel
+    node->length = 0x0000800000000000ULL - (u64)node->base; // user land virtual memory goes up to the last valid canonical address with high bit 0 set
 
-    RB_TREE_INSERT(private_vmem, node, _vmem_node_cmp_bases);
+    RB_TREE_INSERT(private_vmem->free_areas, node, _vmem_node_cmp_bases);
 
 #if VMEM_VERBOSE > 0
-    fprintf(stderr, "vmem: initialized private virtual memory area 0x%lX-0x%lX\n", private_vmem->base, private_vmem->base + private_vmem->length);
+    fprintf(stderr, "vmem: initialized private virtual memory area 0x%lX-0x%lX\n", private_vmem->free_areas->base, private_vmem->free_areas->base + private_vmem->free_areas->length - 1);
 #endif
     return (intp)private_vmem;
 }
 
-intp vmem_map_pages(intp phys, u64 npages, u32 flags)
+intp vmem_map_pages(intp _vmem, intp phys, u64 npages, u32 flags)
 {
+    struct vmem* vmem = (struct vmem*)(_vmem == 0 ? kernel_vmem : (void*)_vmem);
+
     intp virtual_address;
     u64 wanted_size = npages << PAGE_SHIFT;
 
     // loop over free areas looking for a large enough node
-    acquire_lock(vmem_lock);
+    acquire_lock(vmem->lock);
     struct vmem_node* iter;
-    RB_TREE_FOREACH(vmem_free_areas, iter) {
+    RB_TREE_FOREACH(vmem->free_areas, iter) {
         virtual_address = iter->base;
 
         if(iter->length > wanted_size) {
@@ -86,27 +108,29 @@ intp vmem_map_pages(intp phys, u64 npages, u32 flags)
             iter->length -= wanted_size;
         } else if(iter->length == wanted_size) {
             // remove the node
-            RB_TREE_REMOVE(vmem_free_areas, iter);
+            RB_TREE_REMOVE(vmem->free_areas, iter);
             kfree(iter);
         }
 
         // done either way
         break;
     }
-    release_lock(vmem_lock);
+    release_lock(vmem->lock);
 
 #if VMEM_VERBOSE > 1
     fprintf(stderr, "vmem: mapping %d pages start 0x%lX to 0x%lX-0x%lX\n", npages, phys, virtual_address, virtual_address+wanted_size);
 #endif
     for(u64 offs = 0; offs < wanted_size; offs += PAGE_SIZE) {
-        paging_map_page(phys + offs, virtual_address + offs, flags);
+        paging_map_page(vmem->page_table, phys + offs, virtual_address + offs, flags);
     }
 
     return virtual_address;
 }
 
-intp vmem_unmap_pages(intp virt, u64 npages)
+intp vmem_unmap_pages(intp _vmem, intp virt, u64 npages)
 {
+    struct vmem* vmem = (struct vmem*)(_vmem == 0 ? kernel_vmem : (void*)_vmem);
+
     intp ret;
     assert(npages != 0, "must unmap at least one page");
 
@@ -120,7 +144,8 @@ intp vmem_unmap_pages(intp virt, u64 npages)
     // look up the end of the freed region to see if it matches the beginning of any other region
     struct vmem_node lookup = { .base = end };
     struct vmem_node* result;
-    if(RB_TREE_FIND(vmem_free_areas, result, lookup, _vmem_node_cmp_bases)) {
+    acquire_lock(vmem->lock);
+    if(RB_TREE_FIND(vmem->free_areas, result, lookup, _vmem_node_cmp_bases)) {
         // extend result downward, that's it
 #if VMEM_VERBOSE > 2
         fprintf(stderr, "    extending 0x%lX downward to 0x%lX\n", result->base, result->base - size);
@@ -132,9 +157,9 @@ intp vmem_unmap_pages(intp virt, u64 npages)
         lookup.base = 0;
         lookup.length = result->base;
         struct vmem_node* result2;
-        while(RB_TREE_FIND(vmem_free_areas, result2, lookup, _vmem_node_cmp_ends)) {
+        while(RB_TREE_FIND(vmem->free_areas, result2, lookup, _vmem_node_cmp_ends)) {
             // so result2 is a node that ends where result begins, so they can be merged
-            RB_TREE_REMOVE(vmem_free_areas, result2);
+            RB_TREE_REMOVE(vmem->free_areas, result2);
 
             // update result to include the region
             result->base = result2->base;
@@ -158,7 +183,7 @@ intp vmem_unmap_pages(intp virt, u64 npages)
     // so we can just extend a single region upward without having to check for others
     lookup.base = 0; // will have to match a region that ends with the new address
     lookup.length = virt;
-    if(RB_TREE_FIND(vmem_free_areas, result, lookup, _vmem_node_cmp_ends)) {
+    if(RB_TREE_FIND(vmem->free_areas, result, lookup, _vmem_node_cmp_ends)) {
         // a region was found, so we can expand upwards
 #if VMEM_VERBOSE > 2
         fprintf(stderr, "    extending 0x%lX-0x%lX upward to 0x%lX\n", result->base, result->base+result->length, result->base+result->length+size);
@@ -175,13 +200,14 @@ intp vmem_unmap_pages(intp virt, u64 npages)
 #if VMEM_VERBOSE > 2
     fprintf(stderr, "    inserting new vmem_node 0x%lX-0x%lX\n", newnode->base, newnode->base+newnode->length);
 #endif
-    RB_TREE_INSERT(vmem_free_areas, newnode, _vmem_node_cmp_bases);
+    RB_TREE_INSERT(vmem->free_areas, newnode, _vmem_node_cmp_bases);
 
 done:
-    ret = paging_unmap_page(virt); // unmap the first page to get the physical return address
+    release_lock(vmem->lock);
 
+    ret = paging_unmap_page(vmem->page_table, virt); // unmap the first page to get the physical return address
     for(u64 offs = PAGE_SIZE; offs < size; offs += PAGE_SIZE) {
-        paging_unmap_page(virt + offs);
+        paging_unmap_page(vmem->page_table, virt + offs);
     }
 
     return ret;

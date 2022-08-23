@@ -43,7 +43,7 @@ void* _PDCLIB_morecore( _PDCLIB_intptr_t size )
         intp phys = palloc_claim(order);
 
         // map physical pages into kernel virtual memory
-        intp virt = vmem_map_pages(phys, 1 << order, MAP_PAGE_FLAG_WRITABLE);
+        intp virt = vmem_map_pages(VMEM_KERNEL, phys, 1 << order, MAP_PAGE_FLAG_WRITABLE);
 
         // calculate end of allocated region
         morecore_lastcall_end = virt + ((1 << order) << PAGE_SHIFT);

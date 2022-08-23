@@ -295,8 +295,8 @@ void apic_set_cpu()
 
 void apic_map()
 {
-    paging_map_page(io_apic.base   , io_apic.base   , MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
-    paging_map_page(local_apic_base, local_apic_base, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    paging_map_page(PAGING_KERNEL, io_apic.base   , io_apic.base   , MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    paging_map_page(PAGING_KERNEL, local_apic_base, local_apic_base, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 
     // TODO move to a location more specific to initializing the BSP lapic
     u32 v = _read_lapic(LAPIC_REG_LOCAL_APIC_ID_VERSION);

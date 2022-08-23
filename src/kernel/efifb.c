@@ -73,7 +73,7 @@ void efifb_map()
     global_efifb.disabled = true;
     intp region_start = (intp)global_efifb.framebuffer;
     u64 region_size = (u64)__alignup((intp)(global_efifb.pitch * global_efifb.height), 4096);
-    paging_identity_map_region(region_start, region_size, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    paging_identity_map_region(PAGING_KERNEL, region_start, region_size, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
     global_efifb.disabled = false;
 }
 
