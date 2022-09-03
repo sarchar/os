@@ -32,6 +32,7 @@
 #define min(a, b) (((a) <= (b)) ? (a) : (b))
 #define countof(a) (sizeof(a) / sizeof((a)[0]))
 #define unused(x) ((void)(x))
+#define container_of(t,n,inst) (((t)*)((intp)(inst) - offsetof(t,n)))
 
 typedef uint8_t   u8;
 typedef uint16_t  u16;

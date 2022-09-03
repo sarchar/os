@@ -329,7 +329,7 @@ DEFINE_INTERRUPT_HANDLER(0x81, interrupt_syscall)
     struct cpu* cpu = get_cpu();
     fprintf(stderr, "syscall: cpu %d got syscall %d (arg0=%d)\n", cpu->cpu_index, regs->rax, regs->rdi);
     regs->rax = syscall_do(regs->rax, regs->rdi, regs->rsi, regs->rdx, regs->rcx, regs->r8, regs->r9);
-    if(regs->rax == -EINVAL) {
+    if((s64)regs->rax == -EINVAL) {
         // terminate the program now
         // TODO need some sort of "crash"ing the program concept, like segmentation faults in linux.
         // TODO maybe task_abort(reason). Yeah, I kinda like that.

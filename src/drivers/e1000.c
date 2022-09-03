@@ -3,10 +3,12 @@
 #include "apic.h"
 #include "cpu.h"
 #include "e1000.h"
+#include "errno.h"
 #include "interrupts.h"
 #include "kalloc.h"
 #include "kernel.h"
 #include "net/ethernet.h"
+#include "net/net.h"
 #include "paging.h"
 #include "palloc.h"
 #include "pci.h"
@@ -136,7 +138,7 @@ struct e1000_tx_desc {
 static_assert(sizeof(struct e1000_tx_desc) == 16, "e1000_tx_desc is a fixed structure of size 16");
 
 struct e1000_device {
-    //struct net_device net_device;
+    struct net_device       net_device;
     struct pci_device_info* pci_device;
 
     intp bar0;
@@ -266,6 +268,8 @@ static s64 _read_mac_address(struct e1000_device* edev)
     }
 
     fprintf(stderr, "e1000: device has MAC %02x:%02x:%02x:%02x:%02x:%02x\n", edev->mac[0], edev->mac[1], edev->mac[2], edev->mac[3], edev->mac[4], edev->mac[5]);
+    net_set_hw_address(&edev->net_device, NET_DEVICE_HW_TYPE_ETHERNET, edev->mac);
+
     return 0;
 }
 
@@ -366,7 +370,9 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
     struct e1000_device* edev = (struct e1000_device*)malloc(sizeof(struct e1000_device));
     zero(edev);
 
-    //edev->net_device = net_new_device("e1000", eth_index); // will create vnode #device=netdev #netdev=N #driver=e1000 #e1000=N
+    // initialize the network device
+    net_create_device(&edev->net_device, "e1000", eth_index); // will create vnode #device=net #netdev=N #driver=e1000 #e1000=N
+    net_set_transmit_packet_function(&edev->net_device, &e1000_net_transmit_packet);
 
     edev->pci_device = pci_dev;
     edev->bar0_mmio  = pci_device_is_bar_mmio(pci_dev, 0);
@@ -420,7 +426,7 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 
     // TEMP send a packet
     // the buffer below is an ICMP ping packet from 192.168.1.32 to 192.168.1.64
-    void e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length);
+    s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length);
     u8 buf[] = {
             0x45, 0x00, 0x00, 0x3C, 0x82, 0x47, 0x00, 0x00, 0x20, 0x01, 0x94, 0xC9, 0xC0, 0xA8, 0x01, 0x20, 
             0xC0, 0xA8, 0x01, 0x40, 0x08, 0x00, 0x48, 0x5C, 0x01, 0x00, 0x04, 0x00, 0x61, 0x62, 0x63, 0x64, 
@@ -487,27 +493,6 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
     }
 }
 
-// network [short] to host short
-__always_inline u16 ntohs(u8* p)
-{
-//#ifdef __LITTLE_ENDIAN__, etc
-    return (p[0] << 8) | p[1];
-}
-
-// host to network short
-__always_inline u16 htons(u16 v)
-{
-//#ifdef __LITTLE_ENDIAN__, etc
-    return ((v >> 8) & 0x00FF) | ((v & 0x00FF) << 8);
-}
-
-// network [long] to host long
-__always_inline u32 ntohl(u8* p)
-{
-//#ifdef __LITTLE_ENDIAN__, etc
-    return ((u32)p[0] << 24) | ((u32)p[1] << 16) | ((u32)p[2] << 8) | (u32)p[3];
-}
-
 static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc)
 {
     // safety check for bogus packets
@@ -521,19 +506,25 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     u16 payload_size = desc->length - 14 - 4; // 14 bytes for header, 4 bytes for FCS (ethernet CRC)
     u32 ethernet_crc = ntohl(&data[desc->length - 4]);
 
-    fprintf(stderr, "e1000: packet start\n");
-    fprintf(stderr, "        status          = 0x%02X\n", desc->status);
-    fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
-    fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
-    fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" : "unknown"));
-    fprintf(stderr, "        payload size    = %d\n", payload_size);
-    fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
+    if(ethertype == ETHERTYPE_ARP) {
+        fprintf(stderr, "e1000: packet start\n");
+        fprintf(stderr, "        status          = 0x%02X\n", desc->status);
+        fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
+        fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
+        fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" : "unknown"));
+        fprintf(stderr, "        payload size    = %d\n", payload_size);
+        fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
+    }
 
     // drop this packet if it's too large
     if(payload_size > 1500) return;
 
     //TODO CRCs?
-    //TODO net_receive_packet(edev->network_device, ethertype, &data[14], payload_size);
+    u8 net_protocol = NET_PROTOCOL_UNSUPPORTED;
+    if(ethertype == ETHERTYPE_IPv4)      net_protocol = NET_PROTOCOL_IPv4;
+    else if(ethertype == ETHERTYPE_IPv6) net_protocol = NET_PROTOCOL_IPv6;
+
+    net_receive_packet(&edev->net_device, net_protocol, &data[14], payload_size);
 }
 
 static void _receive_packets(struct e1000_device* edev)
@@ -541,18 +532,13 @@ static void _receive_packets(struct e1000_device* edev)
     struct e1000_rx_desc* desc;
 
     while(((desc = &edev->rx_desc[edev->rx_desc_next])->status & E1000_RXTXDESC_STATUS_FLAG_DONE) != 0) {
-        u8* data = (u8*)desc->address;
-
-        fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
+        //fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
         assert(desc->status & E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET, "multi-frame packets not supported atm. EOP must be set on all packets");
 
         // print the packet
         _handle_packet(edev, desc);
 
-        // mark desc as available again
-        desc->status = 0;
-
-        // check the next packet
+        // tell the hardware the packet is processed
         _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_next);
         edev->rx_desc_next = (edev->rx_desc_next + 1) % edev->rx_desc_count;
     }
@@ -572,17 +558,16 @@ static void _transmit_packet(struct e1000_device* edev, intp data, u16 length)
     struct e1000_tx_desc* desc = &edev->tx_desc[edev->tx_desc_next];
     memcpy((void*)desc->address, (void*)data, length);
     desc->length = length;
+    desc->status = 0; // clear status, as FLAG_DONE indicates the hw has transmitted the packet
     desc->command |= E1000_TXDESC_COMMAND_FLAG_END_OF_PACKET |
                      E1000_TXDESC_COMMAND_FLAG_INSERT_FCS    |
                      E1000_TXDESC_COMMAND_FLAG_REPORT_STATUS;
 
     edev->tx_desc_next = (edev->tx_desc_next + 1) % edev->tx_desc_count;
     _write_command(edev, E1000_REG_TXDESC_TAIL, edev->tx_desc_next);
-
-    while((desc->status & E1000_RXTXDESC_STATUS_FLAG_DONE) == 0) ;
 }
 
-void e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length)
+s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length)
 {
     u8* buf = (u8*)__builtin_alloca(length + 14);
 
@@ -599,6 +584,23 @@ void e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertyp
     memcpy(&buf[14], (void*)data, length);
 
     _transmit_packet(edev, (intp)buf, length + 14);
+
+    return 0;
 }
 
+s64 e1000_net_transmit_packet(struct net_device* ndev, u8 net_protocol, u8* dest_address, u8 dest_address_length, u8* packet, u16 packet_length)
+{
+    //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
+
+    struct e1000_device* edev = (struct e1000_device*)((intp)ndev - offsetof(struct e1000_device, net_device));
+    if(dest_address_length != 6) return -EINVAL;
+
+    u16 ethertype;
+    if     (net_protocol == NET_PROTOCOL_IPv4) ethertype = ETHERTYPE_IPv4;
+    else if(net_protocol == NET_PROTOCOL_IPv6) ethertype = ETHERTYPE_IPv6;
+    else if(net_protocol == NET_PROTOCOL_ARP)  ethertype = ETHERTYPE_ARP;
+    else   return -EINVAL;
+
+    return e1000_transmit_packet(edev, dest_address, ethertype, (intp)packet, packet_length);
+}
 

@@ -18,6 +18,8 @@
 #include "kalloc.h"
 #include "kernel.h"
 #include "multiboot2.h"
+#include "net/arp.h"
+#include "net/net.h"
 #include "paging.h"
 #include "palloc.h"
 #include "pci.h"
@@ -123,6 +125,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // startup smp, multithreading and tasks
     smp_init();
+
+    // initialize networking
+    net_init();
 }
 
 static void load_drivers()
@@ -503,6 +508,19 @@ static void run_command(char* cmdbuffer)
         task_enqueue_for(atoi(targetcpu), newtask);
     } else if(strcmp(cmdbuffer, "pt") == 0) {
         paging_debug_table(get_cpu()->current_task->page_table);
+    } else if(strcmp(cmdbuffer, "arp") == 0) {
+        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        if(ndev == null) return;
+
+        u8 ipv4_addr[] = { 172, 21, 160, 3 };
+        u64 buflen;
+        u8* buf = arp_create_request(ndev, NET_PROTOCOL_IPv4, ipv4_addr, 4, &buflen); // lookup IPv4 type
+        if(buf == null) return;
+
+        u8 dest_mac[] = { 0x00, 0x15, 0x5d, 0x89, 0xad, 0x11 };
+        net_transmit_packet(ndev, NET_PROTOCOL_ARP, dest_mac, 6, buf, buflen); // transmit ARP packet
+
+        free(buf);
     }
 }
 

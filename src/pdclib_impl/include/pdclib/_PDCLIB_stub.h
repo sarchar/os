@@ -16,11 +16,21 @@ typedef _PDCLIB_size_t size_t;
 #define MAP_PRIVATE 0
 
 extern int errno;
-#define ENOMEM -1
-#define EINVAL -1
-#define ETIMEDOUT -1
-#define EBUSY -1
-#define EINTR -1
+#ifndef ENOMEM
+#  define ENOMEM _PDCLIB_ENOMEM
+#endif
+#ifndef EINVAL
+#  define EINVAL _PDCLIB_EINVAL
+#endif
+#ifndef EBUSY
+#  define EBUSY _PDCLIB_EBUSY
+#endif
+#ifndef ETIMEDOUT
+#  define ETIMEDOUT _PDCLIB_ETIMEDOUT
+#endif
+#ifndef EINTR
+#  define EINTR _PDCLIB_EINTR
+#endif
 
 #endif
 

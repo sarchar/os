@@ -199,12 +199,13 @@ static inline void __swapgs()
 // synchronization primitives
 //
 // from http://locklessinc.com/articles/locks/
-#define __atomic_xadd(p, v) __sync_fetch_and_add((p), (v))
-#define __atomic_add(p, v) __sync_add_and_fetch((p), (v))
-
-#define __atomic_inc(p) __atomic_add((p), 1)
-#define __atomic_dec(p) __atomic_add((p), -1)
-#define __atomic_set_bit(p, v) __sync_or_and_fetch((p), 1<<(v))
+#define __atomic_xadd(p, v)      __sync_fetch_and_add((p), (v))
+#define __atomic_add(p, v)       __sync_add_and_fetch((p), (v))
+#define __atomic_xinc(p)         __atomic_xadd((p), 1)
+#define __atomic_inc(p)          __atomic_add((p), 1)
+#define __atomic_xdec(p)         __atomic_xadd((p), -1)
+#define __atomic_dec(p)          __atomic_add((p), -1)
+#define __atomic_set_bit(p, v)   __sync_or_and_fetch((p), 1<<(v))
 #define __atomic_clear_bit(p, v) __sync_and_and_fetch((p), ~(1<<(v)))
 
 #define __compare_and_exchange(p, o, n) __sync_val_compare_and_swap((p), (o), (n))

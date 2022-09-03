@@ -26,7 +26,7 @@ ADD_EXECUTABLE(os.bin ${uthash_impl_files} acpi.c ap_boot.asm apic.c boot.asm bo
 TARGET_INCLUDE_DIRECTORIES(os.bin SYSTEM PRIVATE "${CMAKE_SOURCE_DIR}/src" "${CMAKE_SOURCE_DIR}/src/uthash_impl")
 
 # libs
-TARGET_LINK_LIBRARIES(os.bin gcc drivers fs pdclib lailib)
+TARGET_LINK_LIBRARIES(os.bin gcc drivers fs lailib net pdclib)
 
 # configure linker flags
 #SET_TARGET_PROPERTIES(os.bin PROPERTIES LINK_FLAGS "-T ${CMAKE_SOURCE_DIR}/linker.ld -ffreestanding -O2 -nostdlib -lgcc")

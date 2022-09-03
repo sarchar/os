@@ -33,6 +33,7 @@ ADD_SUBDIRECTORY(src/drivers)
 ADD_SUBDIRECTORY(src/fs)
 ADD_SUBDIRECTORY(src/kernel)
 ADD_SUBDIRECTORY(src/lai_impl)
+ADD_SUBDIRECTORY(src/net)
 ADD_SUBDIRECTORY(src/pdclib_impl)
  
 # Include the isobuild project
