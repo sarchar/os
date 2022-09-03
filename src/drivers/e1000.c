@@ -6,6 +6,7 @@
 #include "interrupts.h"
 #include "kalloc.h"
 #include "kernel.h"
+#include "net/ethernet.h"
 #include "paging.h"
 #include "palloc.h"
 #include "pci.h"
@@ -45,6 +46,8 @@ enum E1000_REG {
 };
 
 enum E1000_IFLAG {
+    E1000_IFLAG_TX_DESC_WRITTEN_BACK     = 1 << 0,
+    E1000_IFLAG_TX_QUEUE_EMPTY           = 1 << 1,
     E1000_IFLAG_LINK_STATUS_CHANGE       = 1 << 2,
     E1000_IFLAG_RX_SEQUENCE_ERROR        = 1 << 3,
     E1000_IFLAG_RX_DESC_MIN_THRESHOLD_0  = 1 << 4,
@@ -56,9 +59,12 @@ enum E1000_IFLAG {
 enum E1000_RXTXCONTROL_FLAGS {
     E1000_RXTXCONTROL_FLAG_RESET                        = 1 << 0,
     E1000_RXTXCONTROL_FLAG_ENABLE                       = 1 << 1,
-    E1000_RXTXCONTROL_FLAG_STORE_BAD_PACKET             = 1 << 2,
-    E1000_RXTXCONTROL_FLAG_UNICAST_PROMISCUOUS_ENABLE   = 1 << 3,
-    E1000_RXTXCONTROL_FLAG_MULTICAST_PROMISCUOUS_ENABLE = 1 << 4,
+    E1000_RXCONTROL_FLAG_STORE_BAD_PACKET               = 1 << 2,
+    E1000_TXCONTROL_FLAG_BUSY_CHECK_ENABLE              = 1 << 2,
+    E1000_RXCONTROL_FLAG_UNICAST_PROMISCUOUS_ENABLE     = 1 << 3,
+    E1000_TXCONTROL_FLAG_PAD_SHORT_PACKETS              = 1 << 3,
+    E1000_RXCONTROL_FLAG_MULTICAST_PROMISCUOUS_ENABLE   = 1 << 4,
+    E1000_TXCONTROL_FLAG_COLLISION_THRESHOLD_SHIFT      = 4,
     E1000_RXTXCONTROL_FLAG_LONG_PACKET_ENABLE           = 1 << 5,
     E1000_RXTXCONTROL_FLAG_LOOPBACK_MODE_NONE           = 0 << 6,
     E1000_RXTXCONTROL_FLAG_LOOPBACK_MODE_MAC            = 1 << 6,
@@ -67,6 +73,7 @@ enum E1000_RXTXCONTROL_FLAGS {
     E1000_RXTXCONTROL_FLAG_RX_DESC_THRESHOLD_HALF       = 0 << 8,
     E1000_RXTXCONTROL_FLAG_RX_DESC_THRESHOLD_QUARTER    = 1 << 8,
     E1000_RXTXCONTROL_FLAG_RX_DESC_THRESHOLD_EIGHTH     = 2 << 8,
+    E1000_TXCONTROL_FLAG_COLLISION_DISTANCE_SHIFT       = 12,
     E1000_RXTXCONTROL_FLAG_BROADCAST_ENABLE             = 1 << 15,
     E1000_RXTXCONTROL_FLAG_DESC_SIZE_2048               = 0 << 16,
     E1000_RXTXCONTROL_FLAG_DESC_SIZE_1024               = 1 << 16,
@@ -75,20 +82,33 @@ enum E1000_RXTXCONTROL_FLAGS {
     E1000_RXTXCONTROL_FLAG_DESC_SIZE_16384              = 1 << 16, // these next 3 require BUFFER_SIZE_EXTENSION set
     E1000_RXTXCONTROL_FLAG_DESC_SIZE_8192               = 2 << 16,
     E1000_RXTXCONTROL_FLAG_DESC_SIZE_4096               = 3 << 16,
+    E1000_TXCONTROL_FLAG_RETRANSMIT_ON_LATE_COLLISION   = 1 << 24,
     E1000_RXTXCONTROL_FLAG_BUFFER_SIZE_EXTENSION        = 1 << 25,
     E1000_RXTXCONTROL_FLAG_STRIP_ETHERNET_CRC           = 1 << 26,
 };
 
-enum E1000_RXTXDESC_STATUS {
-    E1000_RXTXDESC_STATUS_DONE = 1 << 0,
-    E1000_RXTXDESC_STATUS_EOP  = 1 << 1,
+enum E1000_RXTXDESC_STATUS_FLAGS {
+    E1000_RXTXDESC_STATUS_FLAG_DONE          = 1 << 0,
+    E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET = 1 << 1,
+    E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM = 1 << 2,
+};
+
+enum E1000_TXDESC_COMMAND_FLAGS {
+    E1000_TXDESC_COMMAND_FLAG_END_OF_PACKET          = 1 << 0,
+    E1000_TXDESC_COMMAND_FLAG_INSERT_FCS             = 1 << 1,
+    E1000_TXDESC_COMMAND_FLAG_INSERT_CHECKSUM        = 1 << 2,
+    E1000_TXDESC_COMMAND_FLAG_REPORT_STATUS          = 1 << 3,
+    E1000_TXDESC_COMMAND_FLAG_REPORT_PACKET_SENT     = 1 << 4,
+    E1000_TXDESC_COMMAND_FLAG_VLAN_PACKET_ENABLE     = 1 << 6,
+    E1000_TXDESC_COMMAND_FLAG_INTERRUPT_DELAY_ENABLE = 1 << 7,
 };
 
 #define E1000_DEFAULT_IFLAGS \
     (E1000_IFLAG_LINK_STATUS_CHANGE      | \
      E1000_IFLAG_RX_TIMER_INT_RING_0     | \
      E1000_IFLAG_RX_DESC_MIN_THRESHOLD_0 | \
-     E1000_IFLAG_RX_SEQUENCE_ERROR)
+     E1000_IFLAG_RX_SEQUENCE_ERROR       | \
+     E1000_IFLAG_TX_DESC_WRITTEN_BACK)
 
 #define FLUSH_WRITE(edev) (_read_command(edev, E1000_REG_STATUS))
      
@@ -279,12 +299,12 @@ static void _setup_rx(struct e1000_device* edev)
     _write_command(edev, E1000_REG_RXDESC_ADDR_H, ptr >> 32);          // 64-bit physical address to the desc array
     _write_command(edev, E1000_REG_RXDESC_ADDR_L, ptr & 0xFFFFFFFF);
     _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_count - 1);  // tail points to the last element
-    _write_command(edev, E1000_REG_RXDESC_HEAD, edev->rx_desc_next);
     edev->rx_desc_next = 0;
+    _write_command(edev, E1000_REG_RXDESC_HEAD, edev->rx_desc_next);
 
     // configure and enable the rx ring buffer
-    rxcontrol |= E1000_RXTXCONTROL_FLAG_STORE_BAD_PACKET;
-    rxcontrol |= E1000_RXTXCONTROL_FLAG_UNICAST_PROMISCUOUS_ENABLE | E1000_RXTXCONTROL_FLAG_MULTICAST_PROMISCUOUS_ENABLE;
+    rxcontrol |= E1000_RXCONTROL_FLAG_STORE_BAD_PACKET;
+    rxcontrol |= E1000_RXCONTROL_FLAG_UNICAST_PROMISCUOUS_ENABLE | E1000_RXCONTROL_FLAG_MULTICAST_PROMISCUOUS_ENABLE;
     rxcontrol |= E1000_RXTXCONTROL_FLAG_LOOPBACK_MODE_NONE;
     rxcontrol |= E1000_RXTXCONTROL_FLAG_RX_DESC_THRESHOLD_HALF;
     rxcontrol |= E1000_RXTXCONTROL_FLAG_BROADCAST_ENABLE;
@@ -298,6 +318,46 @@ static void _setup_rx(struct e1000_device* edev)
 
 static void _setup_tx(struct e1000_device* edev)
 {
+    // allocate one page for tx descriptors
+    intp ptr = palloc_claim_one();
+    edev->tx_desc = (struct e1000_tx_desc*)vmem_map_page(VMEM_KERNEL, ptr, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    edev->tx_desc_count = PAGE_SIZE / sizeof(struct e1000_tx_desc);
+
+    for(u32 d = 0; d < edev->tx_desc_count; d++) {
+        struct e1000_tx_desc* desc = &edev->tx_desc[d];
+        zero(desc);
+
+        // for now we're going to assume MTU is <2kb (page size / 2), so there will be enough room for the ethernet header and frame
+        // so we can use 1 page for two descriptors
+        if((d & 0x01) == 0) {
+            desc->address = palloc_claim_one();
+        } else {
+            desc->address = edev->tx_desc[d & ~0x01].address + (PAGE_SIZE >> 1);
+        }
+    }
+
+    // disable TX before changing buffers
+    u32 txcontrol = _read_command(edev, E1000_REG_TXCONTROL);
+    _write_command(edev, E1000_REG_TXCONTROL, txcontrol & ~E1000_RXTXCONTROL_FLAG_ENABLE);
+
+    // TODO set TX delay timer ?
+
+    _write_command(edev, E1000_REG_TXDESC_LEN, edev->tx_desc_count * sizeof(struct e1000_tx_desc)); // set length in bytes of the descriptors array
+    _write_command(edev, E1000_REG_TXDESC_ADDR_H, ptr >> 32);          // 64-bit physical address to the desc array
+    _write_command(edev, E1000_REG_TXDESC_ADDR_L, ptr & 0xFFFFFFFF);
+    edev->tx_desc_next = 0;
+    _write_command(edev, E1000_REG_TXDESC_TAIL, edev->tx_desc_next);
+    _write_command(edev, E1000_REG_TXDESC_HEAD, edev->tx_desc_next);
+
+    // configure and enable the tx ring buffer
+    txcontrol |= E1000_TXCONTROL_FLAG_PAD_SHORT_PACKETS;
+    txcontrol |= (15 << E1000_TXCONTROL_FLAG_COLLISION_THRESHOLD_SHIFT);
+    txcontrol |= (64 << E1000_TXCONTROL_FLAG_COLLISION_DISTANCE_SHIFT);
+    txcontrol |= E1000_TXCONTROL_FLAG_RETRANSMIT_ON_LATE_COLLISION;
+
+    _write_command(edev, E1000_REG_TXCONTROL, txcontrol | E1000_RXTXCONTROL_FLAG_ENABLE);
+
+    fprintf(stderr, "e1000: tx ring buffer initialized with %d descriptors\n", edev->tx_desc_count);
 }
 
 static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
@@ -342,7 +402,6 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
     }
 
     interrupts_install_handler(cpu_irq, _e1000_interrupt, (void*)edev);
-    __restoreflags(cpu_flags);
 
     // allow PCI to trigger interrupts (and enable bus mastering)
     u32 cmd = edev->pci_device->config->command & ~PCI_COMMAND_FLAG_DISABLE_INTERRUPTS;
@@ -350,6 +409,7 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 
     // enable interrupts on the controller
     _enable_interrupts(edev);
+    __restoreflags(cpu_flags);
 
     // setup rx/tx buffers
     _setup_rx(edev);
@@ -357,6 +417,18 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 
     // trigger a link change interrupt
     //_write_command(edev, E1000_REG_INTERRUPT_CAUSE_SET, E1000_IFLAG_LINK_STATUS_CHANGE);
+
+    // TEMP send a packet
+    // the buffer below is an ICMP ping packet from 192.168.1.32 to 192.168.1.64
+    void e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length);
+    u8 buf[] = {
+            0x45, 0x00, 0x00, 0x3C, 0x82, 0x47, 0x00, 0x00, 0x20, 0x01, 0x94, 0xC9, 0xC0, 0xA8, 0x01, 0x20, 
+            0xC0, 0xA8, 0x01, 0x40, 0x08, 0x00, 0x48, 0x5C, 0x01, 0x00, 0x04, 0x00, 0x61, 0x62, 0x63, 0x64, 
+            0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 
+            0x75, 0x76, 0x77, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69
+    };
+    u8 dest[6] = { 0x00, 0x15, 0x5d, 0x89, 0xad, 0x11 };
+    e1000_transmit_packet(edev, dest, ETHERTYPE_IPv4, (intp)buf, sizeof(buf));
 }
 
 static void _enable_interrupts(struct e1000_device* edev)
@@ -398,6 +470,18 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
         cause &= ~E1000_IFLAG_LINK_STATUS_CHANGE;
     }
 
+    if(cause & E1000_IFLAG_TX_DESC_WRITTEN_BACK) {
+        fprintf(stderr, "e1000: transmit packet completed\n");
+
+        cause &= ~E1000_IFLAG_TX_DESC_WRITTEN_BACK;
+    }
+
+    if(cause & E1000_IFLAG_TX_QUEUE_EMPTY) {
+        fprintf(stderr, "e1000: tx queue empty\n");
+
+        cause &= ~E1000_IFLAG_TX_QUEUE_EMPTY;
+    }
+
     if(cause != 0) {
         fprintf(stderr, "e1000: unhandled interrupt cause 0x%lX\n", cause);
     }
@@ -408,6 +492,13 @@ __always_inline u16 ntohs(u8* p)
 {
 //#ifdef __LITTLE_ENDIAN__, etc
     return (p[0] << 8) | p[1];
+}
+
+// host to network short
+__always_inline u16 htons(u16 v)
+{
+//#ifdef __LITTLE_ENDIAN__, etc
+    return ((v >> 8) & 0x00FF) | ((v & 0x00FF) << 8);
 }
 
 // network [long] to host long
@@ -431,11 +522,12 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     u32 ethernet_crc = ntohl(&data[desc->length - 4]);
 
     fprintf(stderr, "e1000: packet start\n");
+    fprintf(stderr, "        status          = 0x%02X\n", desc->status);
     fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
     fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
-    fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == 0x0800) ? "IPv4" : ((ethertype == 0x86DD) ? "IPv6" : "unknown"));
+    fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" : "unknown"));
     fprintf(stderr, "        payload size    = %d\n", payload_size);
-    fprintf(stderr, "        ethernet crc    = 0x%08X\n", ethernet_crc);
+    fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
 
     // drop this packet if it's too large
     if(payload_size > 1500) return;
@@ -448,11 +540,14 @@ static void _receive_packets(struct e1000_device* edev)
 {
     struct e1000_rx_desc* desc;
 
-    while(((desc = &edev->rx_desc[edev->rx_desc_next])->status & E1000_RXTXDESC_STATUS_DONE) != 0) {
+    while(((desc = &edev->rx_desc[edev->rx_desc_next])->status & E1000_RXTXDESC_STATUS_FLAG_DONE) != 0) {
         u8* data = (u8*)desc->address;
 
         fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
-        assert(desc->status & E1000_RXTXDESC_STATUS_EOP, "multi-frame packets not supported atm. EOP must be set on all packets");
+        assert(desc->status & E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET, "multi-frame packets not supported atm. EOP must be set on all packets");
+
+        // print the packet
+        _handle_packet(edev, desc);
 
         // mark desc as available again
         desc->status = 0;
@@ -460,12 +555,50 @@ static void _receive_packets(struct e1000_device* edev)
         // check the next packet
         _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_next);
         edev->rx_desc_next = (edev->rx_desc_next + 1) % edev->rx_desc_count;
-
-        // print the packet
-        _handle_packet(edev, desc);
     }
 
     // update the tail to be 1 behind our read pointer
     //_write_command(edev, E1000_REG_RXDESC_TAIL, (edev->rx_desc_next - 1) % edev->rx_desc_count);
 }
+
+static void _transmit_packet(struct e1000_device* edev, intp data, u16 length)
+{
+    // drop packets that are too large
+    if(length > 1500) {
+        fprintf(stderr, "e1000: dropped tx packet (size %d too large)\n", length);
+        return;
+    }
+
+    struct e1000_tx_desc* desc = &edev->tx_desc[edev->tx_desc_next];
+    memcpy((void*)desc->address, (void*)data, length);
+    desc->length = length;
+    desc->command |= E1000_TXDESC_COMMAND_FLAG_END_OF_PACKET |
+                     E1000_TXDESC_COMMAND_FLAG_INSERT_FCS    |
+                     E1000_TXDESC_COMMAND_FLAG_REPORT_STATUS;
+
+    edev->tx_desc_next = (edev->tx_desc_next + 1) % edev->tx_desc_count;
+    _write_command(edev, E1000_REG_TXDESC_TAIL, edev->tx_desc_next);
+
+    while((desc->status & E1000_RXTXDESC_STATUS_FLAG_DONE) == 0) ;
+}
+
+void e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length)
+{
+    u8* buf = (u8*)__builtin_alloca(length + 14);
+
+    // destination mac address
+    memcpy(&buf[0], dest_mac, 6);
+
+    // source mac address
+    memcpy(&buf[6], edev->mac, 6);
+
+    // set the ethertype
+    *(u16*)&buf[12] = htons(ethertype);
+
+    // copy the data
+    memcpy(&buf[14], (void*)data, length);
+
+    _transmit_packet(edev, (intp)buf, length + 14);
+}
+
 
