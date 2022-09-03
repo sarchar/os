@@ -13,7 +13,7 @@ add_custom_target(os_iso ALL
 
 add_custom_target(run
                   DEPENDS os_iso 
-                  COMMAND qemu-system-x86_64 -machine q35
+                  COMMAND sudo qemu-system-x86_64 -machine q35
                                              -bios /usr/share/ovmf/OVMF.fd
                                              #-enable-kvm -cpu host
                                              -smp 4
@@ -30,15 +30,17 @@ add_custom_target(run
                                              -device ide-hd,drive=extra,bus=ahci.1
                                              -usb
                                              -device usb-mouse
-                                             -netdev user,id=osnet
-                                             -device e1000e,netdev=osnet,romfile=${CMAKE_CURRENT_SOURCE_DIR}/efi-e1000e.rom
+					     #-netdev user,id=osnet,hostfwd=tcp::5555-:22
+					     -netdev tap,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper,id=osnet
+                                             -device e1000,netdev=osnet
+                                             #-device e1000e,netdev=osnet,romfile=${CMAKE_CURRENT_SOURCE_DIR}/efi-e1000e.rom
                                              -k en-us
                                              -d int -D int.log
 )
 
 add_custom_target(gdb
                   DEPENDS os_iso 
-                  COMMAND qemu-system-x86_64 -machine q35
+                  COMMAND sudo qemu-system-x86_64 -machine q35
                                              -bios /usr/share/ovmf/OVMF.fd
                                              #-enable-kvm
                                              #-cpu host
@@ -57,8 +59,10 @@ add_custom_target(gdb
                                              -device ide-hd,drive=extra,bus=ahci.1
                                              -usb
                                              -device usb-mouse
-                                             -netdev user,id=osnet
-                                             -device e1000e,netdev=osnet,romfile=${CMAKE_CURRENT_SOURCE_DIR}/efi-e1000e.rom
+					     #-netdev user,id=osnet
+					     -netdev tap,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper,id=osnet
+                                             -device e1000,netdev=osnet
+                                             #-device e1000e,netdev=osnet,romfile=${CMAKE_CURRENT_SOURCE_DIR}/efi-e1000e.rom
                                              -k en-us
                                              -s -S
 )

@@ -9,6 +9,7 @@
 #include "pci.h"
 #include "stdio.h"
 #include "stdlib.h"
+#include "vmem.h"
 
 #define PCI_CONF_REG_IDS     0x0000
 #define PCI_CONF_REG_COMMAND 0x0004
@@ -246,7 +247,7 @@ void pci_iterate_vendor_devices(u16 vendor_id, pci_iterate_devices_cb cb, void* 
     }
 }
 
-u64 pci_device_get_bar_size(struct pci_device_info* dev, u8 bar_index)
+u64 pci_device_get_mmio_bar_size(struct pci_device_info* dev, u8 bar_index)
 {
     // TODO cache this value in dev->bar_sizes ?
     //
@@ -255,7 +256,8 @@ u64 pci_device_get_bar_size(struct pci_device_info* dev, u8 bar_index)
     intp addr = (intp)dev->config->h0.bar[bar_index];
     intp addrh;
 
-    if((addr & PCI_BAR_TYPE) == PCI_BAR_TYPE_64BIT) {
+    u8 bar_type = pci_device_get_mmio_bar_type(dev, bar_index);
+    if(bar_type == PCI_BAR_TYPE_64BIT) {
         addrh = (intp)dev->config->h0.bar[bar_index + 1];
         dev->config->h0.bar[bar_index + 1] = 0xFFFFFFFF;
     }
@@ -263,7 +265,7 @@ u64 pci_device_get_bar_size(struct pci_device_info* dev, u8 bar_index)
     dev->config->h0.bar[bar_index] = 0xFFFFFFFF;
 
     u64 res = (u64)dev->config->h0.bar[bar_index];
-    if((addr & PCI_BAR_TYPE) == PCI_BAR_TYPE_64BIT) {
+    if(bar_type == PCI_BAR_TYPE_64BIT) {
         res |= (u64)dev->config->h0.bar[bar_index + 1] << 32;
         dev->config->h0.bar[bar_index + 1] = (u32)addrh;
     } else {
@@ -286,32 +288,39 @@ intp pci_device_map_bar(struct pci_device_info* dev, u8 bar_index)
     }
 
     // because BARs are at the same offset for both header types we can use h0
-    u64 size = pci_device_get_bar_size(dev, bar_index);
     intp addr = (intp)dev->config->h0.bar[bar_index];
 
-    if((addr & PCI_BAR_TYPE) == PCI_BAR_TYPE_64BIT) {
-        addr |= (intp)dev->config->h0.bar[bar_index + 1] << 32;
+    if(pci_device_is_bar_mmio(dev, bar_index)) {
+        u64 size = pci_device_get_mmio_bar_size(dev, bar_index);
+        u8 bar_type = pci_device_get_mmio_bar_type(dev, bar_index);
+
+        // extend the address to 64 bits if necessary
+        if(bar_type == PCI_BAR_TYPE_64BIT) {
+            addr |= (intp)dev->config->h0.bar[bar_index + 1] << 32;
+        }
+
+        fprintf(stderr, "pci: device 0x%04X:0x%04X bar %d MMIO at 0x%lX size 0x%lX\n", dev->config->vendor_id, dev->config->device_id, bar_index, addr, size);
+
+        // map the entire bar space into kernel vmem
+        u8 map_flags = MAP_PAGE_FLAG_WRITABLE;
+        if((addr & PCI_BAR_PREFETCHABLE) == 0) map_flags |= MAP_PAGE_FLAG_DISABLE_CACHE;
+
+        addr &= ~(intp)PCI_BAR_NON_MMIO_ADDRESS_BITS;
+        assert(__alignof(addr, 4096) == 0, "BAR address isn't page aligned");
+
+        return vmem_map_pages(VMEM_KERNEL, addr, size >> PAGE_SHIFT, map_flags);
+    } else {
+        fprintf(stderr, "pci: device 0x%04X:0x%04X bar %d IO at port 0x%lX\n", dev->config->vendor_id, dev->config->device_id, bar_index, addr);
+
+        // IO ports aren't memory mapped, so return that directly
+        addr &= ~(intp)PCI_BAR_NON_IO_ADDRESS_BITS;
+        return addr;
     }
-
-    fprintf(stderr, "pci: device 0x%04X:0x%04X bar %d at 0x%lX size 0x%lX\n", dev->config->vendor_id, dev->config->device_id, bar_index, addr, size);
-
-    // memory map one page at ABAR
-    u8 map_flags = MAP_PAGE_FLAG_WRITABLE;
-    if((addr & PCI_BAR_PREFETCHABLE) == 0) map_flags |= MAP_PAGE_FLAG_DISABLE_CACHE;
-
-    addr &= ~(intp)PCI_BAR_NON_ADDRESS_BITS;
-    assert(__alignof(addr, 4096) == 0, "BAR address isn't page aligned");
-
-    for(intp start = addr; start < addr + size; start += 0x1000) {
-        paging_map_page(PAGING_KERNEL, start, start, map_flags); // TODO use vmem?
-    }
-
-    return addr;
 }
 
 void pci_device_unmap_bar(struct pci_device_info* dev, u8 bar_index, intp virt)
 {
-    u64 size = pci_device_get_bar_size(dev, bar_index);
+    u64 size = pci_device_get_mmio_bar_size(dev, bar_index);
 
     for(intp start = virt; start < virt + size; start += 0x1000) {
         paging_unmap_page(PAGING_KERNEL, start); // TODO use vmem?

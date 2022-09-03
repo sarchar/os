@@ -70,11 +70,12 @@ enum PCI_STATUS_FLAG {
 };
 
 enum PCI_BAR {
-    PCI_BAR_TYPE             = 0x03 << 1,
-    PCI_BAR_TYPE_32BIT       = 0x0 << 1,
-    PCI_BAR_TYPE_64BIT       = 0x2 << 1,
-    PCI_BAR_PREFETCHABLE     = 1 << 3,
-    PCI_BAR_NON_ADDRESS_BITS = 0x0F
+    PCI_BAR_TYPE                  = 0x03 << 1,
+    PCI_BAR_TYPE_32BIT            = 0x0 << 1,
+    PCI_BAR_TYPE_64BIT            = 0x2 << 1,
+    PCI_BAR_PREFETCHABLE          = 1 << 3,
+    PCI_BAR_NON_MMIO_ADDRESS_BITS = 0x0F,
+    PCI_BAR_NON_IO_ADDRESS_BITS   = 0x03
 };
 
 struct pci_segment_group {
@@ -257,9 +258,19 @@ typedef bool (*pci_iterate_devices_cb)(struct pci_device_info*, void*);
 void pci_iterate_devices(pci_iterate_devices_cb, void*);
 void pci_iterate_vendor_devices(u16, pci_iterate_devices_cb, void*);
 
-u64 pci_device_get_bar_size(struct pci_device_info*, u8);
+u64 pci_device_get_mmio_bar_size(struct pci_device_info*, u8);
 intp pci_device_map_bar(struct pci_device_info*, u8);
 void pci_device_unmap_bar(struct pci_device_info*, u8, intp);
+
+__always_inline u8 pci_device_get_mmio_bar_type(struct pci_device_info* dev, u8 bar_index)
+{
+    return (u8)((intp)dev->config->h0.bar[bar_index] & PCI_BAR_TYPE);
+}
+
+__always_inline u8 pci_device_is_bar_mmio(struct pci_device_info* dev, u8 bar_index)
+{
+    return (dev->config->h0.bar[bar_index] & 0x01) == 0;
+}
 
 u32 pci_setup_msi(struct pci_device_info*, u8);
 void pci_set_enable_msi(struct pci_device_info*, bool);

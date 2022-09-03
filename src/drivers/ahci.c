@@ -406,7 +406,7 @@ void ahci_load()
         return;
     }
 
-    fprintf(stderr, "ahci: found device %04X:%04X (irq = %d)\n", dev->config->vendor_id, dev->config->device_id, dev->config->h0.interrupt_line);
+    fprintf(stderr, "ahci: found device %04X:%04X (interrupt_line = %d)\n", dev->config->vendor_id, dev->config->device_id, dev->config->h0.interrupt_line);
 
     // also known as ABAR in the documentation
     ahci_base_memory = (struct hba_memory*)pci_device_map_bar(dev, 5);

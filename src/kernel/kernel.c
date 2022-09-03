@@ -8,6 +8,7 @@
 #include "bootmem.h"
 #include "cpu.h"
 #include "drivers/ahci.h"
+#include "drivers/e1000.h"
 #include "drivers/ps2keyboard.h"
 #include "efifb.h"
 #include "fs/ext2/ext2.h"
@@ -137,6 +138,7 @@ static void load_drivers()
 
     ps2keyboard_load();
     ahci_load();
+    e1000_load();
 }
 
 static char current_directory[256] = "/";
