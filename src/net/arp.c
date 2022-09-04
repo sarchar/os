@@ -153,26 +153,31 @@ u8* arp_create_reply(struct net_device* ndev, u8 net_protocol, u8* dest_hardware
                            reslen);
 }
 
-
-void arp_receive_packet(struct net_device* ndev, u8* packet, u16 packet_length)
+void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 {
     struct arp_packet* inp = (struct arp_packet*)packet;
     u16 opcode = htons(inp->opcode);
 
     // verify packet length
     // first, hardware address length
-    if(ntohs(inp->hardware_type) == ARP_HARDWARE_TYPE_ETHERNET) { // Ethernet
-        if(inp->hardware_address_length != 6) return;
-    }
+    if(ntohs(inp->hardware_type) != ARP_HARDWARE_TYPE_ETHERNET) return; // must be type Ethernet
 
+    // must have 6 byte ethernet hardware addresses
+    if(inp->hardware_address_length != 6) return;
+
+    // verify the protocol
     u16 protocol_type = htons(inp->protocol_type);
     if(protocol_type == ETHERTYPE_IPv4) {
         if(inp->protocol_address_length != 4) return;
     } else if(protocol_type == ETHERTYPE_IPv6) {
         //if(inp->protocol_address_length != 16) return;
         return; //TODO IPv6
+    } else {
+        return; // unsupported protocol
     }
 
+    // validate the packet size. ethernet will pad packets to at least 64 bytes, so we have to allow packets larger than
+    // what we really need
     u16 wanted_packet_length = sizeof(struct arp_packet) + 2 * (inp->hardware_address_length + inp->protocol_address_length);
     if(wanted_packet_length > packet_length) {
         fprintf(stderr, "arp: incoming packet of size %d incorrect (wanted %d)\n", packet_length, wanted_packet_length);
@@ -186,6 +191,11 @@ void arp_receive_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 
     if(opcode == ARP_OPCODE_REQUEST && protocol_type == ETHERTYPE_IPv4 && memcmp(dest_protocol_address, my_addr, 4) == 0) {
         fprintf(stderr, "arp: sending response\n");
+
+        // TODO look up a net_interface that corresponds to (protocol_type, dest_protocol_address). if one exists,
+        // build an ARP response using that interface information, but deliver on the net_device that received the ARP.
+        // TODO might we ever need to route the response to a different network device? if so, we'll need to route 
+        // based on the source_protocol_address, perhaps.
 
         // someone is looking for our address, tell them
         u64 response_packet_length;

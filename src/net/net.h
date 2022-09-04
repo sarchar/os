@@ -36,6 +36,8 @@ enum NET_PROTOCOL {
 struct net_device;
 typedef s64 (net_device_transmit_packet_function)(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length);
 
+// There's a one-to-one mapping from net_device to hardware addresses. They're generally created by network drivers
+// but virtual network devices can exist.
 struct net_device {
     // read/write/other callback functions
     // vnode pointer?
@@ -49,14 +51,32 @@ struct net_device {
     net_device_transmit_packet_function* hw_transmit_packet;
 };
 
+// Base class for network interfaces, like IPv4/6, that can be assigned to network devices.
+// The interface defines the local address and how to encapsulate packets in the assigned protocol
+struct net_interface {
+    // TODO send_packet, receive_packet, etc
+};
+
+struct net_address {
+    u8 address_type;
+    u8 unused[7];
+
+    union {
+        u32 ipv4;
+    };
+};
 
 void net_init();
+
 void net_create_device(struct net_device* ndev, char* driver_name, u16 driver_index);
 void net_set_hw_address(struct net_device* ndev, u8 device_hw_type, u8* hw_address);
 void net_set_transmit_packet_function(struct net_device* ndev, net_device_transmit_packet_function*);
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length);
 s64  net_transmit_packet(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length);
-
 struct net_device* net_device_by_index(u16); //TODO this should be removed eventually and net_device_from_vnode(vfs_find("#netdev=index")) should be used
+
+//TODO
+void net_set_address(struct net_address* addr, u8 net_protocol, u8* data, u8 data_length);
+void net_route_packet(struct net_address* dest, u8* payload, u8 payload_length);
 
 #endif
