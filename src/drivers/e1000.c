@@ -1,3 +1,5 @@
+// Based off of instruction https://wiki.osdev.org/Intel_Ethernet_i217
+// and constants from https://elixir.bootlin.com/linux/latest/source/drivers/net/ethernet/intel/e1000/e1000_main.c
 #include "common.h"
 
 #include "apic.h"
@@ -161,6 +163,7 @@ static void _enable_interrupts(struct e1000_device*);
 static void _disable_interrupts(struct e1000_device*);
 static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata);
 static void _receive_packets(struct e1000_device*);
+static s64  _net_transmit_e1000_packet(struct net_device*, u8*, u8, u8, u8*, u16);
 
 static bool _find_e1000_devices_cb(struct pci_device_info* dev, void* userinfo)
 {
@@ -372,7 +375,7 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 
     // initialize the network device
     net_create_device(&edev->net_device, "e1000", eth_index); // will create vnode #device=net #netdev=N #driver=e1000 #e1000=N
-    net_set_transmit_packet_function(&edev->net_device, &e1000_net_transmit_packet);
+    net_set_transmit_packet_function(&edev->net_device, &_net_transmit_e1000_packet);
 
     edev->pci_device = pci_dev;
     edev->bar0_mmio  = pci_device_is_bar_mmio(pci_dev, 0);
@@ -502,19 +505,26 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     }
 
     u8* data = (u8*)desc->address;
-    u16 ethertype = ntohs(&data[12]);
+    u16 ethertype = ntohs(*(u16*)&data[12]);
     u16 payload_size = desc->length - 14 - 4; // 14 bytes for header, 4 bytes for FCS (ethernet CRC)
-    u32 ethernet_crc = ntohl(&data[desc->length - 4]);
+    u32 ethernet_crc = ntohl(*(u32*)&data[desc->length - 4]);
 
-    if(ethertype == ETHERTYPE_ARP) {
-        fprintf(stderr, "e1000: packet start\n");
-        fprintf(stderr, "        status          = 0x%02X\n", desc->status);
-        fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
-        fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
-        fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" : "unknown"));
-        fprintf(stderr, "        payload size    = %d\n", payload_size);
-        fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
-    }
+    fprintf(stderr, "e1000: packet start (length = %d)\n", desc->length);
+    fprintf(stderr, "        status          = 0x%02X\n", desc->status);
+    fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
+    fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
+    fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" 
+                                                                            : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" 
+                                                                                : ((ethertype == ETHERTYPE_ARP) ? "ARP" : "unknown")));
+    fprintf(stderr, "        payload size    = %d\n", payload_size);
+    fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
+
+    //if(ethertype == ETHERTYPE_ARP) {
+    //    fprintf(stderr, "        data            =\n");
+    //    for(u32 i = 0; i < desc->length; i++) {
+    //        fprintf(stderr, "%02X ", data[i]);
+    //    }
+    //}
 
     // drop this packet if it's too large
     if(payload_size > 1500) return;
@@ -523,6 +533,7 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     u8 net_protocol = NET_PROTOCOL_UNSUPPORTED;
     if(ethertype == ETHERTYPE_IPv4)      net_protocol = NET_PROTOCOL_IPv4;
     else if(ethertype == ETHERTYPE_IPv6) net_protocol = NET_PROTOCOL_IPv6;
+    else if(ethertype == ETHERTYPE_ARP)  net_protocol = NET_PROTOCOL_ARP;
 
     net_receive_packet(&edev->net_device, net_protocol, &data[14], payload_size);
 }
@@ -588,7 +599,7 @@ s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype
     return 0;
 }
 
-s64 e1000_net_transmit_packet(struct net_device* ndev, u8 net_protocol, u8* dest_address, u8 dest_address_length, u8* packet, u16 packet_length)
+static s64 _net_transmit_e1000_packet(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length)
 {
     //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
 

@@ -4,6 +4,7 @@
 #include "errno.h"
 #include "kernel/cpu.h"
 #include "kernel/kernel.h"
+#include "net/ipv4.h"
 #include "net/net.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -48,11 +49,11 @@ void net_set_transmit_packet_function(struct net_device* ndev, net_device_transm
     ndev->hw_transmit_packet = func;
 }
 
-s64 net_transmit_packet(struct net_device* ndev, u8 net_protocol, u8* dest_address, u8 dest_address_length, u8* packet, u16 packet_length)
+s64 net_transmit_packet(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length)
 {
     if(ndev->hw_transmit_packet == null) return -ENOTSUP;
 
-    return ndev->hw_transmit_packet(ndev, net_protocol, dest_address, dest_address_length, packet, packet_length);
+    return ndev->hw_transmit_packet(ndev, dest_address, dest_address_length, net_protocol, packet, packet_length);
 }
 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)
@@ -60,11 +61,15 @@ void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u1
     //TODO queue packet and wake up the network thread using an event lock
     switch(net_protocol) {
     case NET_PROTOCOL_IPv4:
-        //ip_receive_packet(...)
+        ipv4_receive_packet(ndev, packet, packet_length);
         break;
 
     case NET_PROTOCOL_IPv6:
         //ipv6_receive_packet(...)
+        break;
+
+    case NET_PROTOCOL_ARP:
+        arp_receive_packet(ndev, packet, packet_length);
         break;
 
     default:

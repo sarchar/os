@@ -514,11 +514,11 @@ static void run_command(char* cmdbuffer)
 
         u8 ipv4_addr[] = { 172, 21, 160, 3 };
         u64 buflen;
-        u8* buf = arp_create_request(ndev, NET_PROTOCOL_IPv4, ipv4_addr, 4, &buflen); // lookup IPv4 type
+        u8* buf = arp_create_request(ndev, NET_PROTOCOL_IPv4, ipv4_addr, &buflen); // lookup IPv4 type
         if(buf == null) return;
 
-        u8 dest_mac[] = { 0x00, 0x15, 0x5d, 0x89, 0xad, 0x11 };
-        net_transmit_packet(ndev, NET_PROTOCOL_ARP, dest_mac, 6, buf, buflen); // transmit ARP packet
+        u8 dest_mac[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+        net_transmit_packet(ndev, dest_mac, 6, NET_PROTOCOL_ARP, buf, buflen); // transmit ARP packet
 
         free(buf);
     }
