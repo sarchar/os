@@ -237,3 +237,15 @@ int write(int fd, char* buf, u64 size)
 
     return size;
 }
+
+
+#include "kernel.h"
+int read(int fd, void * buf, size_t count)
+{
+    unused(fd);
+    unused(buf);
+    unused(count);
+    assert(false, "who called this?");
+    return 0;
+}
+

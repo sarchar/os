@@ -3,6 +3,7 @@
 #include "kernel/cpu.h"
 #include "kernel/kernel.h"
 #include "net/ethernet.h"
+#include "net/ipv4.h"
 #include "net/net.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -97,7 +98,7 @@ u8* arp_create_request(struct net_device* ndev, u8 net_protocol, u8* lookup_addr
     u16 protocol_type;
 
     // setup the hardware type and address size
-    if(ndev->hw_type == NET_DEVICE_HW_TYPE_ETHERNET) {
+    if(ndev->hardware_address.protocol == NET_PROTOCOL_ETHERNET) {
         hardware_type = ARP_HARDWARE_TYPE_ETHERNET;
     } else {
         assert(false, "other hardware types aren't supported");
@@ -116,20 +117,23 @@ u8* arp_create_request(struct net_device* ndev, u8 net_protocol, u8* lookup_addr
     }
 
     return _new_arp_packet(ARP_OPCODE_REQUEST, hardware_type, protocol_type, 
-                           ndev->hw_address, // source_hardware_address
+                           ndev->hardware_address.ethernet, // source_hardware_address
                            my_addr,          // source_protocol_address
                            ZERO_MAC,         // dest_hardware_address (zeroed for the ARP request)
                            lookup_address,   // dest_protocol_address (the address we're requesting ARP for)
                            reslen);
 }
 
-u8* arp_create_reply(struct net_device* ndev, u8 net_protocol, u8* dest_hardware_address, u8* dest_protocol_address, u64* reslen)
+u8* arp_create_reply(struct net_interface* iface, u8 net_protocol, u8* dest_hardware_address, u8* dest_protocol_address, u64* reslen)
 {
     u16 hardware_type;
     u16 protocol_type;
 
+    // get the network device this interface is attached to
+    struct net_device* ndev = iface->net_device;
+
     // setup the hardware type and address size
-    if(ndev->hw_type == NET_DEVICE_HW_TYPE_ETHERNET) {
+    if(ndev->hardware_address.protocol == NET_PROTOCOL_ETHERNET) {
         hardware_type = ARP_HARDWARE_TYPE_ETHERNET;
     } else {
         assert(false, "other hardware types aren't supported");
@@ -145,11 +149,18 @@ u8* arp_create_reply(struct net_device* ndev, u8 net_protocol, u8* dest_hardware
         assert(false, "incomplete"); //TODO ipv6 arp
     }
 
+    // setup source_protocol_address
+    u8 source_protocol_address[4];
+    source_protocol_address[0] = (iface->address.ipv4 >> 24) & 0xFF;
+    source_protocol_address[1] = (iface->address.ipv4 >> 16) & 0xFF;
+    source_protocol_address[2] = (iface->address.ipv4 >>  8) & 0xFF;
+    source_protocol_address[3] = (iface->address.ipv4 >>  0) & 0xFF;
+
     return _new_arp_packet(ARP_OPCODE_REPLY, hardware_type, protocol_type, 
-                           ndev->hw_address,          // source_hardware_address
-                           my_addr,                   // source_protocol_address
-                           dest_hardware_address,     // dest_hardware_address
-                           dest_protocol_address,     // dest_protocol_address (the address we're requesting ARP for)
+                           ndev->hardware_address.ethernet,  // source_hardware_address
+                           source_protocol_address,          // source_protocol_address
+                           dest_hardware_address,            // dest_hardware_address
+                           dest_protocol_address,            // dest_protocol_address (the address we're requesting ARP for)
                            reslen);
 }
 
@@ -176,30 +187,42 @@ void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_le
         return; // unsupported protocol
     }
 
-    // validate the packet size. ethernet will pad packets to at least 64 bytes, so we have to allow packets larger than
-    // what we really need
+    // validate the packet size. ethernet will pad packets to at least 64 bytes, so we have to allow packets larger than what we really need
     u16 wanted_packet_length = sizeof(struct arp_packet) + 2 * (inp->hardware_address_length + inp->protocol_address_length);
     if(wanted_packet_length > packet_length) {
         fprintf(stderr, "arp: incoming packet of size %d incorrect (wanted %d)\n", packet_length, wanted_packet_length);
         return;
     }
 
+    // set up address pointers
     u8* source_hardware_address = inp->addresses;
     u8* source_protocol_address = source_hardware_address + inp->hardware_address_length;
     u8* dest_hardware_address   = source_protocol_address + inp->protocol_address_length;
     u8* dest_protocol_address   = dest_hardware_address   + inp->hardware_address_length;
 
-    if(opcode == ARP_OPCODE_REQUEST && protocol_type == ETHERTYPE_IPv4 && memcmp(dest_protocol_address, my_addr, 4) == 0) {
+    if(opcode == ARP_OPCODE_REQUEST && protocol_type == ETHERTYPE_IPv4) { // && memcmp(dest_protocol_address, my_addr, 4) == 0) {
+        // the incoming response forms an IPv4 address, so let's see if we have an interface for that device
+        struct net_address search_address;
+        zero(&search_address);
+        search_address.protocol = NET_PROTOCOL_IPv4;
+        search_address.ipv4 = (dest_protocol_address[0] << 24) | (dest_protocol_address[1] << 16) | (dest_protocol_address[2] << 8) | (dest_protocol_address[3] << 0);
+
+        struct net_interface* iface = net_device_find_interface(ndev, &search_address); // TODO search all interfaces, not just ones on this device?
+        if(iface == null) {
+            char buf[16];
+            ipv4_format_address(buf, search_address.ipv4);
+            fprintf(stderr, "arp: no device found for IP address %s\n", buf);
+            return;
+        }
+
         fprintf(stderr, "arp: sending response\n");
 
-        // TODO look up a net_interface that corresponds to (protocol_type, dest_protocol_address). if one exists,
-        // build an ARP response using that interface information, but deliver on the net_device that received the ARP.
         // TODO might we ever need to route the response to a different network device? if so, we'll need to route 
         // based on the source_protocol_address, perhaps.
 
         // someone is looking for our address, tell them
         u64 response_packet_length;
-        u8* response_packet = arp_create_reply(ndev, NET_PROTOCOL_IPv4, source_hardware_address, source_protocol_address, &response_packet_length);
+        u8* response_packet = arp_create_reply(iface, NET_PROTOCOL_IPv4, source_hardware_address, source_protocol_address, &response_packet_length);
         if(response_packet != null) {
             net_transmit_packet(ndev, source_hardware_address, inp->hardware_address_length, NET_PROTOCOL_ARP, response_packet, response_packet_length); // transmit ARP packet
             free(response_packet);

@@ -60,8 +60,11 @@ static u16 _compute_checksum(u8* data, u16 data_length)
 //    return packet_start;
 //}
 
-static void _handle_echo(struct net_device* ndev, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
+static void _handle_echo(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
 {
+    unused(iface);
+    unused(_compute_checksum);
+
     // fix up the incoming header
     struct icmp_echo* echo = (struct icmp_echo*)(packet + sizeof(struct icmp_header));
     echo->identifier = ntohs(echo->identifier);
@@ -71,8 +74,10 @@ static void _handle_echo(struct net_device* ndev, struct ipv4_header* iphdr, u8*
     u16 icmp_echo_data_length = packet_length - sizeof(struct icmp_header) - sizeof(struct icmp_echo);
 
     char src[16];
+    char dest[16];
     ipv4_format_address(src, iphdr->source_address);
-    fprintf(stderr, "icmp: got echo from %s: identifier=0x%04X sequence=%d icmp_echo_data_length=%d\n", src, echo->identifier, echo->sequence_number, icmp_echo_data_length);
+    ipv4_format_address(dest, iface->address.ipv4);
+    fprintf(stderr, "icmp: %s got echo from %s: identifier=0x%04X sequence=%d icmp_echo_data_length=%d\n", dest, src, echo->identifier, echo->sequence_number, icmp_echo_data_length);
 
 //    // create an echo reply packet
 //    // TODO make packet creation some kind of recursive callback system? some layers need the data to create checksums
@@ -99,7 +104,7 @@ static void _handle_echo(struct net_device* ndev, struct ipv4_header* iphdr, u8*
 //    icmp_send_packet(ndev, iphdr->source_address, packet_start, packet_size);
 }
 
-void icmp_receive_packet(struct net_device* ndev, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
+void icmp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
 {
     struct icmp_header* hdr = (struct icmp_header*)packet;
 
@@ -108,7 +113,7 @@ void icmp_receive_packet(struct net_device* ndev, struct ipv4_header* iphdr, u8*
 
     switch(hdr->type) {
     case ICMP_TYPE_ECHO:
-        _handle_echo(ndev, iphdr, packet, packet_length);
+        _handle_echo(iface, iphdr, packet, packet_length);
         break;
 
     default:

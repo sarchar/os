@@ -1,7 +1,7 @@
 #ifndef __NET_IPv4_H__
 #define __NET_IPv4_H__
 
-struct net_device;
+#include "net/net.h"
 
 enum IPv4_PROTOCOL {
     IPv4_PROTOCOL_ICMP = 1,
@@ -10,10 +10,7 @@ enum IPv4_PROTOCOL {
 };
 
 struct ipv4_interface {
-    //struct net_interface interface; // base class?
-    struct net_device* owner_device;
-
-    u32 assigned_address;
+    struct net_interface net_interface;
 };
 
 struct ipv4_header {
@@ -33,13 +30,17 @@ struct ipv4_header {
     u8  protocol;                // 10th byte of the header
     u16 header_checksum;         // 11th and 12th bytes must be converted from network
     u32 source_address;          // bytes 13-16 need to be converted from network
-    u32 destination_address;     // bytes 17-20 need to be converted from network
+    u32 dest_address;            // bytes 17-20 need to be converted from network
     u8  options[];
 } __packed;
+
+struct net_interface* ipv4_create_interface(struct net_address* local_address);
 
 void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length);
 
 void ipv4_format_address(char* buf, u32 address);
+void ipv4_parse_address_string(struct net_address* addr, char*);
+void net_set_address(struct net_address* addr, u8 net_protocol, u8* data, u8 data_length);
 
 u8* ipv4_create_packet(u32 dest_address, u8 ipv4_protocol, u16 payload_size, u8* payload_start, u8* packet_size);
 

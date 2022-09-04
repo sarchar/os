@@ -2,8 +2,8 @@
 #define __HASHTABLE_H__
 
 #define uthash_fatal(msg) PANIC(COLOR(255,0,255))
-#define uthash_malloc(sz) kalloc(sz)
-#define uthash_free(ptr,sz) kfree(ptr)
+#define uthash_malloc(sz) malloc(sz)
+#define uthash_free(ptr,sz) free(ptr)
 
 #include "uthash/src/uthash.h"
 

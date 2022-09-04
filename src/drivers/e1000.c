@@ -271,8 +271,6 @@ static s64 _read_mac_address(struct e1000_device* edev)
     }
 
     fprintf(stderr, "e1000: device has MAC %02x:%02x:%02x:%02x:%02x:%02x\n", edev->mac[0], edev->mac[1], edev->mac[2], edev->mac[3], edev->mac[4], edev->mac[5]);
-    net_set_hw_address(&edev->net_device, NET_DEVICE_HW_TYPE_ETHERNET, edev->mac);
-
     return 0;
 }
 
@@ -367,15 +365,30 @@ static void _setup_tx(struct e1000_device* edev)
     fprintf(stderr, "e1000: tx ring buffer initialized with %d descriptors\n", edev->tx_desc_count);
 }
 
+#include "net/ipv4.h" // TEMP
+static void _register_network_device(struct e1000_device* edev, u8 eth_index)
+{
+    // set the hardware addres on the network device
+    struct net_address hardware_address;
+    hardware_address.protocol = NET_PROTOCOL_ETHERNET;
+    memcpy(hardware_address.ethernet, edev->mac, 6);
+
+    // initialize the network device
+    net_init_device(&edev->net_device, "e1000", eth_index, &hardware_address); // will create vnode #device=net:N #driver=e1000:M
+    net_set_transmit_packet_function(&edev->net_device, &_net_transmit_e1000_packet);
+
+    // TODO TEMP create an IPv4 interface on this device
+    struct net_address local_addr;
+    ipv4_parse_address_string(&local_addr, "172.21.160.20");
+    struct net_interface* iface = ipv4_create_interface(&local_addr); // TODO will create #interface=ipv4:N
+    net_device_register_interface(&edev->net_device, iface);
+}
+
 static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 {
     fprintf(stderr, "e1000: initializing device %04X:%04X (interrupt_line = %d)\n", pci_dev->config->vendor_id, pci_dev->config->device_id, pci_dev->config->h0.interrupt_line);
     struct e1000_device* edev = (struct e1000_device*)malloc(sizeof(struct e1000_device));
     zero(edev);
-
-    // initialize the network device
-    net_create_device(&edev->net_device, "e1000", eth_index); // will create vnode #device=net #netdev=N #driver=e1000 #e1000=N
-    net_set_transmit_packet_function(&edev->net_device, &_net_transmit_e1000_packet);
 
     edev->pci_device = pci_dev;
     edev->bar0_mmio  = pci_device_is_bar_mmio(pci_dev, 0);
@@ -388,6 +401,10 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
     for(u32 i = 0; i < 0x80; i++) {
         _write_command(edev, 0x5200 + i * 4, 0);
     }
+
+    // setup rx/tx buffers
+    _setup_rx(edev);
+    _setup_tx(edev);
 
     // map the interrupt from the PCI device to a new interrupt callback here in this module
     u64 cpu_flags = __cli_saveflags();
@@ -416,28 +433,29 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
     u32 cmd = edev->pci_device->config->command & ~PCI_COMMAND_FLAG_DISABLE_INTERRUPTS;
     edev->pci_device->config->command = cmd | PCI_COMMAND_FLAG_BUS_MASTER;
 
-    // enable interrupts on the controller
-    _enable_interrupts(edev);
+    // restore cpu interrupts
     __restoreflags(cpu_flags);
 
-    // setup rx/tx buffers
-    _setup_rx(edev);
-    _setup_tx(edev);
+    // create the network device
+    _register_network_device(edev, eth_index);
+
+    // enable interrupts on the device
+    _enable_interrupts(edev);
 
     // trigger a link change interrupt
     //_write_command(edev, E1000_REG_INTERRUPT_CAUSE_SET, E1000_IFLAG_LINK_STATUS_CHANGE);
 
-    // TEMP send a packet
-    // the buffer below is an ICMP ping packet from 192.168.1.32 to 192.168.1.64
-    s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length);
-    u8 buf[] = {
-            0x45, 0x00, 0x00, 0x3C, 0x82, 0x47, 0x00, 0x00, 0x20, 0x01, 0x94, 0xC9, 0xC0, 0xA8, 0x01, 0x20, 
-            0xC0, 0xA8, 0x01, 0x40, 0x08, 0x00, 0x48, 0x5C, 0x01, 0x00, 0x04, 0x00, 0x61, 0x62, 0x63, 0x64, 
-            0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 
-            0x75, 0x76, 0x77, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69
-    };
-    u8 dest[6] = { 0x00, 0x15, 0x5d, 0x89, 0xad, 0x11 };
-    e1000_transmit_packet(edev, dest, ETHERTYPE_IPv4, (intp)buf, sizeof(buf));
+    //!// TEMP send a packet
+    //!// the buffer below is an ICMP ping packet from 192.168.1.32 to 192.168.1.64
+    //!s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length);
+    //!u8 buf[] = {
+    //!        0x45, 0x00, 0x00, 0x3C, 0x82, 0x47, 0x00, 0x00, 0x20, 0x01, 0x94, 0xC9, 0xC0, 0xA8, 0x01, 0x20, 
+    //!        0xC0, 0xA8, 0x01, 0x40, 0x08, 0x00, 0x48, 0x5C, 0x01, 0x00, 0x04, 0x00, 0x61, 0x62, 0x63, 0x64, 
+    //!        0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 
+    //!        0x75, 0x76, 0x77, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69
+    //!};
+    //!u8 dest[6] = { 0x00, 0x15, 0x5d, 0x89, 0xad, 0x11 };
+    //!e1000_transmit_packet(edev, dest, ETHERTYPE_IPv4, (intp)buf, sizeof(buf));
 }
 
 static void _enable_interrupts(struct e1000_device* edev)
@@ -531,7 +549,7 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
 
     //TODO CRCs?
     u8 net_protocol = NET_PROTOCOL_UNSUPPORTED;
-    if(ethertype == ETHERTYPE_IPv4)      net_protocol = NET_PROTOCOL_IPv4;
+    if     (ethertype == ETHERTYPE_IPv4) net_protocol = NET_PROTOCOL_IPv4;
     else if(ethertype == ETHERTYPE_IPv6) net_protocol = NET_PROTOCOL_IPv6;
     else if(ethertype == ETHERTYPE_ARP)  net_protocol = NET_PROTOCOL_ARP;
 
@@ -546,10 +564,11 @@ static void _receive_packets(struct e1000_device* edev)
         //fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
         assert(desc->status & E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET, "multi-frame packets not supported atm. EOP must be set on all packets");
 
-        // print the packet
+        // process the packet before updating the tail pointer. this allows the packet to be copied before memory is reused
         _handle_packet(edev, desc);
 
         // tell the hardware the packet is processed
+        desc->status = 0;  // clear FLAG_DONE especially
         _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_next);
         edev->rx_desc_next = (edev->rx_desc_next + 1) % edev->rx_desc_count;
     }

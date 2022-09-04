@@ -10,28 +10,30 @@
 #include "stdio.h"
 #include "stdlib.h"
 
-static int netdev_next_index = 0;
+static u16 netdev_next_index = 0;
 
 static struct net_device* netdevs_tmp[256] = { null, }; // TEMP TODO get rid of this and use vfs
 
 void net_init()
 {
-    fprintf(stderr, "net: init %d\n", offsetof(struct net_device, hw_type));
 }
 
 // will create vnode #device=net:N #driver=driver_name:M
-void net_create_device(struct net_device* ndev, char* driver_name, u16 driver_index)
+void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address)
 {
     zero(ndev);
 
-    u16 netdev_index = __atomic_xinc(&netdev_next_index);
+    ndev->hardware_address = *hardware_address;
+    ndev->index            = __atomic_xinc(&netdev_next_index);
 
     char buf[256];
-    sprintf(buf, "#device=net:%d #driver=%s:%d", netdev_index, driver_name, driver_index);
+    sprintf(buf, "#device=net:%d #driver=%s:%d", ndev->index, driver_name, driver_index);
     //TODO vfs_create_vnode(&ndev->vnode, buf);
     //TODO vfs_register_vnode(&ndev->vnode);
+    fprintf(stderr, "net: registered device %s\n", buf);
 
-    netdevs_tmp[netdev_index] = ndev;
+    //TODO just temp for now
+    netdevs_tmp[ndev->index] = ndev;
 }
 
 struct net_device* net_device_by_index(u16 netdev_index)
@@ -39,22 +41,49 @@ struct net_device* net_device_by_index(u16 netdev_index)
     return netdevs_tmp[netdev_index];
 }
 
-void net_set_hw_address(struct net_device* ndev, u8 device_hw_type, u8* hw_address)
+void net_set_hardware_address(struct net_device* ndev, struct net_address* address)
 {
-    ndev->hw_type    = device_hw_type;
-    ndev->hw_address = hw_address;
+    ndev->hardware_address = *address;
 }
 
 void net_set_transmit_packet_function(struct net_device* ndev, net_device_transmit_packet_function* func)
 {
-    ndev->hw_transmit_packet = func;
+    ndev->hardware_transmit_packet = func;
+}
+
+void net_device_register_interface(struct net_device* ndev, struct net_interface* iface)
+{
+    struct net_interface* tmp;
+    HT_FIND(ndev->interfaces, iface->address, tmp);
+
+    if(tmp != null) {
+        fprintf(stderr, "net: error interface already registered");
+        return;
+    }
+
+    iface->net_device = ndev;
+
+    HT_ADD(ndev->interfaces, address, iface);
+
+    if(iface->protocol == NET_PROTOCOL_IPv4) {
+        char buf[16];
+        ipv4_format_address(buf, iface->address.ipv4);
+        fprintf(stderr, "net: registered IPv4 device interface %s\n", buf);
+    }
+}
+
+struct net_interface* net_device_find_interface(struct net_device* ndev, struct net_address* search_address)
+{
+    struct net_interface* tmp;
+    HT_FIND(ndev->interfaces, *search_address, tmp);
+    return tmp;
 }
 
 s64 net_transmit_packet(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length)
 {
-    if(ndev->hw_transmit_packet == null) return -ENOTSUP;
+    if(ndev->hardware_transmit_packet == null) return -ENOTSUP;
 
-    return ndev->hw_transmit_packet(ndev, dest_address, dest_address_length, net_protocol, packet, packet_length);
+    return ndev->hardware_transmit_packet(ndev, dest_address, dest_address_length, net_protocol, packet, packet_length);
 }
 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)
