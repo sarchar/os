@@ -9,6 +9,13 @@ enum IPv4_PROTOCOL {
     IPv4_PROTOCOL_UDP  = 17,
 };
 
+enum IPv4_HEADER_FLAGS {
+    IPv4_HEADER_FLAG_MAY_FRAGMENT   = 0 << 1,
+    IPv4_HEADER_FLAG_DONT_FRAGMENT  = 1 << 1,
+    IPv4_HEADER_FLAG_LAST_FRAGMENT  = 0 << 2,
+    IPv4_HEADER_FLAG_MORE_FRAGMENTS = 1 << 2,
+};
+
 struct ipv4_interface {
     struct net_interface net_interface;
 };
@@ -42,6 +49,9 @@ void ipv4_format_address(char* buf, u32 address);
 void ipv4_parse_address_string(struct net_address* addr, char*);
 void net_set_address(struct net_address* addr, u8 net_protocol, u8* data, u8 data_length);
 
-u8* ipv4_create_packet(u32 dest_address, u8 ipv4_protocol, u16 payload_size, u8* payload_start, u8* packet_size);
+//u8* ipv4_create_packet(u32 dest_address, u8 ipv4_protocol, u16 payload_size, u8* payload_start, u8* packet_size);
+u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_address, 
+                     u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_packet, void* userdata, 
+                     u16* packet_length);
 
 #endif

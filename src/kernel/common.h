@@ -27,6 +27,8 @@
 #define __aligndown(x, n) (void*)((intp)(x) & ~((n)-1))
 #define __interrupt __attribute__((interrupt))
 #define __popcnt(x) __builtin_popcountll(x)
+#define __bswap16(x) __builtin_bswap16(x)
+#define __bswap32(x) __builtin_bswap32(x)
 
 #define max(a, b) (((a) >= (b)) ? (a) : (b))
 #define min(a, b) (((a) <= (b)) ? (a) : (b))

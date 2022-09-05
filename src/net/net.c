@@ -46,11 +46,6 @@ void net_set_hardware_address(struct net_device* ndev, struct net_address* addre
     ndev->hardware_address = *address;
 }
 
-void net_set_transmit_packet_function(struct net_device* ndev, net_device_transmit_packet_function* func)
-{
-    ndev->hardware_transmit_packet = func;
-}
-
 void net_device_register_interface(struct net_device* ndev, struct net_interface* iface)
 {
     struct net_interface* tmp;
@@ -79,11 +74,10 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
     return tmp;
 }
 
-s64 net_transmit_packet(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length)
+s64 net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 {
-    if(ndev->hardware_transmit_packet == null) return -ENOTSUP;
-
-    return ndev->hardware_transmit_packet(ndev, dest_address, dest_address_length, net_protocol, packet, packet_length);
+    if(ndev->send_packet == null) return -ENOTSUP;
+    return ndev->send_packet(ndev, packet, packet_length);
 }
 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)

@@ -15,13 +15,114 @@ u8 gateway_mac_address[] = { 0x00, 0x15, 0x5d, 0xa2, 0x97, 0x22 }; // TODO use A
 u8 gateway_ip_address[]  = { 172, 21, 160, 1 };
 
 static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* packet, u16 packet_length);
+static void _ipv4_header_to_host(struct ipv4_header* hdr);
+static void _ipv4_header_to_network(struct ipv4_header* hdr);
 
-//u8* ipv4_create_packet(u32 dest_address, u8 ipv4_protocol, u16 payload_size, u8* payload_start, u8* packet_size)
-//{
-//    // IPv4 packets are passed through to the net device, so no higher layers exist
-//    // TODO would be nice to 'claim' a memory location from the network device driver, since it 
-//    // has outgoing data storage
-//}
+// identical to the ICMP checksum, how coincidental
+static u16 _ipv4_compute_checksum(u8* data, u16 data_length)
+{
+    u32 sum = 0;
+
+    while(data_length > 1) {
+        u16 word = ((u16)data[0] << 0) | ((u16)data[1] << 8);
+        sum += word;
+        data += 2;
+        data_length -= 2;
+
+        while(sum > 0xFFFF) {
+            u16 high = sum >> 16;
+            sum &= 0xFFFF;
+            sum += high;
+        }
+    }
+
+    if(data_length) {
+        u16 word = (u16)data[0] << 8;
+        sum += word; // add the last byte extended with a 0
+    }
+
+    // one's complement of the sum of the data
+    return ~sum;
+}
+
+struct ipv4_build_packet_info {
+    struct net_address*       dest_address;
+    u16                       identification;
+    u8                        ipv4_protocol;
+    net_wrap_packet_callback* build_payload;
+    void*                     payload_userdata;
+};
+
+static s64 _build_ipv4_packet(struct net_interface* iface, u8* ipv4_packet_start, void* userdata)
+{
+    struct ipv4_header* hdr = (struct ipv4_header*)ipv4_packet_start;
+    struct ipv4_build_packet_info* info = (struct ipv4_build_packet_info*)userdata;
+
+    // some layers need the payload built in order to compute things like checksum, but ipv4 doesn't.
+    // however, to stay somewhat consistent across the code, we'll build the packets inner layers first
+    s64 payload_length = info->build_payload(iface, ipv4_packet_start + sizeof(struct ipv4_header), info->payload_userdata);
+    if(payload_length < 0) return payload_length;
+    u64 total_length = payload_length + sizeof(struct ipv4_header);
+
+    // construct the IPv4 header
+    hdr->header_length   = sizeof(struct ipv4_header) / 4;
+    hdr->version         = 4;
+    hdr->type_of_service = 0;    // normal delivery
+    hdr->total_length    = total_length;
+    hdr->identification  = info->identification;
+    hdr->fragment_offset = 0;
+    hdr->flags           = IPv4_HEADER_FLAG_DONT_FRAGMENT | IPv4_HEADER_FLAG_LAST_FRAGMENT;
+    hdr->time_to_live    = 64;
+    hdr->protocol        = info->ipv4_protocol;
+    hdr->header_checksum = 0;    // start at 0 to compute the checksum
+    hdr->source_address  = iface->address.ipv4;
+    hdr->dest_address    = info->dest_address->ipv4;
+
+    // and fix up the header's endianness
+    _ipv4_header_to_network(hdr);
+
+    // compute the checksum of the header before fixing endianness
+    hdr->header_checksum = _ipv4_compute_checksum((u8*)hdr, hdr->header_length * 4);
+
+    return total_length;
+}
+
+u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_address, u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata, u16* packet_length)
+{
+    static u16 identification = 0;
+
+    assert(iface->protocol == NET_PROTOCOL_IPv4, "can only call ipv4_wrap_packet on IPv4 network interfaces");
+
+    u8 ipv4_protocol;
+    if(payload_protocol == NET_PROTOCOL_ICMP) ipv4_protocol = IPv4_PROTOCOL_ICMP;
+    else {
+        assert(false, "unsupported protocol");
+        return null;
+    }
+
+    struct ipv4_build_packet_info info = {
+        .dest_address     = dest_address,
+        .identification   = __atomic_xinc(&identification),
+        .ipv4_protocol    = ipv4_protocol,
+        .build_payload    = build_payload,
+        .payload_userdata = userdata
+    };
+
+    u16 packet_size = sizeof(struct ipv4_header) + payload_size;
+
+    // IPv4 is a toplevel layer, so it calls directly into the network device for packet memory
+    struct net_address dest;     // TODO use ARP tables to map the gateway's IP to a mac address
+    zero(&dest);
+    dest.protocol = NET_PROTOCOL_ETHERNET;
+
+    if(dest_address->ipv4 == 0xac15ab6b) { // if we're addressed to 172.21.171.107, use the appropriate MAC
+        u8 host[] = { 0x00, 0x15, 0x5d, 0x89, 0xaf, 0x34 };
+        memcpy(dest.mac, host, 6);
+    } else {
+        memcpy(dest.mac, gateway_mac_address, 6);
+    }
+    return iface->net_device->wrap_packet(iface->net_device, iface, &dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info, packet_length);
+}
 
 void ipv4_parse_address_string(struct net_address* addr, char* buf)
 {
@@ -45,11 +146,13 @@ struct net_interface* ipv4_create_interface(struct net_address* local_address)
     iface->net_interface.address        = *local_address;
     iface->net_interface.protocol       = NET_PROTOCOL_IPv4;
     iface->net_interface.receive_packet = &_ipv4_interface_receive_packet;
+    iface->net_interface.wrap_packet    = &ipv4_wrap_packet;
 
     return &iface->net_interface;
 }
 
-static void _fixup_ipv4_header(struct ipv4_header* hdr)
+// this and _ipv4_header_to_network is identical, but are separate for readability
+static void _ipv4_header_to_host(struct ipv4_header* hdr)
 {
     hdr->total_length              = ntohs(hdr->total_length);
     hdr->identification            = ntohs(hdr->identification);
@@ -64,6 +167,16 @@ static void _fixup_ipv4_header(struct ipv4_header* hdr)
     //fprintf(stderr, "source_address=0x%08X dest_address=0x%08X\n", hdr->source_address, hdr->dest_address);
 }
 
+static void _ipv4_header_to_network(struct ipv4_header* hdr)
+{
+    hdr->total_length              = htons(hdr->total_length);
+    hdr->identification            = htons(hdr->identification);
+    hdr->fragment_offset_and_flags = htons(hdr->fragment_offset_and_flags);
+    hdr->header_checksum           = htons(hdr->header_checksum);
+    hdr->source_address            = htonl(hdr->source_address);
+    hdr->dest_address              = htonl(hdr->dest_address);
+}
+
 void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 {
     // immediately return if our packet is too short
@@ -71,7 +184,7 @@ void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_l
 
     // get the IP header
     struct ipv4_header* hdr = (struct ipv4_header*)packet;
-    _fixup_ipv4_header(hdr);
+    _ipv4_header_to_host(hdr);
 
     char buf1[16], buf2[16];
     ipv4_format_address(buf1, hdr->source_address);

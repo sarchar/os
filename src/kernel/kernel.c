@@ -142,7 +142,7 @@ static void load_drivers()
     pci_enumerate_devices();
 
     ps2keyboard_load();
-    ahci_load();
+    //ahci_load();
     e1000_load();
 }
 
@@ -509,18 +509,18 @@ static void run_command(char* cmdbuffer)
     } else if(strcmp(cmdbuffer, "pt") == 0) {
         paging_debug_table(get_cpu()->current_task->page_table);
     } else if(strcmp(cmdbuffer, "arp") == 0) {
-        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
-        if(ndev == null) return;
+        //struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        //if(ndev == null) return;
 
-        u8 ipv4_addr[] = { 172, 21, 160, 3 };
-        u64 buflen;
-        u8* buf = arp_create_request(ndev, NET_PROTOCOL_IPv4, ipv4_addr, &buflen); // lookup IPv4 type
-        if(buf == null) return;
+        //u8 ipv4_addr[] = { 172, 21, 160, 1 };
+        //u64 buflen;
+        //u8* buf = arp_create_request(ndev, NET_PROTOCOL_IPv4, ipv4_addr, &buflen); // lookup IPv4 type
+        //if(buf == null) return;
 
-        u8 dest_mac[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-        net_transmit_packet(ndev, dest_mac, 6, NET_PROTOCOL_ARP, buf, buflen); // transmit ARP packet
+        //u8 dest_mac[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
+        //net_transmit_packet(ndev, dest_mac, 6, NET_PROTOCOL_ARP, buf, buflen); // transmit ARP packet
 
-        free(buf);
+        //free(buf);
     }
 }
 
@@ -608,9 +608,9 @@ void kernel_main(struct multiboot_info* multiboot_info)
     load_drivers();
 
     // start the shell and exit
-    struct task* shell_task = task_create(shell, (intp)null, false);
-    struct cpu* cpu = get_cpu();
-    task_enqueue(&cpu->current_task, shell_task);
+//    struct task* shell_task = task_create(shell, (intp)null, false);
+//    struct cpu* cpu = get_cpu();
+//    task_enqueue(&cpu->current_task, shell_task);
 
     // never exit
     task_idle_forever();

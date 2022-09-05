@@ -163,7 +163,10 @@ static void _enable_interrupts(struct e1000_device*);
 static void _disable_interrupts(struct e1000_device*);
 static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata);
 static void _receive_packets(struct e1000_device*);
-static s64  _net_transmit_e1000_packet(struct net_device*, u8*, u8, u8, u8*, u16);
+static u8* _net_wrap_e1000_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, 
+                                  u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata, 
+                                  u16* final_size);
+static s64  _net_send_e1000_packet(struct net_device*, u8*, u16);
 
 static bool _find_e1000_devices_cb(struct pci_device_info* dev, void* userinfo)
 {
@@ -371,11 +374,12 @@ static void _register_network_device(struct e1000_device* edev, u8 eth_index)
     // set the hardware addres on the network device
     struct net_address hardware_address;
     hardware_address.protocol = NET_PROTOCOL_ETHERNET;
-    memcpy(hardware_address.ethernet, edev->mac, 6);
+    memcpy(hardware_address.mac, edev->mac, 6);
 
     // initialize the network device
     net_init_device(&edev->net_device, "e1000", eth_index, &hardware_address); // will create vnode #device=net:N #driver=e1000:M
-    net_set_transmit_packet_function(&edev->net_device, &_net_transmit_e1000_packet);
+    edev->net_device.send_packet = &_net_send_e1000_packet;
+    edev->net_device.wrap_packet = &_net_wrap_e1000_packet;
 
     // TODO TEMP create an IPv4 interface on this device
     struct net_address local_addr;
@@ -498,13 +502,13 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
     }
 
     if(cause & E1000_IFLAG_TX_DESC_WRITTEN_BACK) {
-        fprintf(stderr, "e1000: transmit packet completed\n");
+        //fprintf(stderr, "e1000: transmit packet completed\n");
 
         cause &= ~E1000_IFLAG_TX_DESC_WRITTEN_BACK;
     }
 
     if(cause & E1000_IFLAG_TX_QUEUE_EMPTY) {
-        fprintf(stderr, "e1000: tx queue empty\n");
+        //fprintf(stderr, "e1000: tx queue empty\n");
 
         cause &= ~E1000_IFLAG_TX_QUEUE_EMPTY;
     }
@@ -527,15 +531,15 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     u16 payload_size = desc->length - 14 - 4; // 14 bytes for header, 4 bytes for FCS (ethernet CRC)
     u32 ethernet_crc = ntohl(*(u32*)&data[desc->length - 4]);
 
-    fprintf(stderr, "e1000: packet start (length = %d)\n", desc->length);
-    fprintf(stderr, "        status          = 0x%02X\n", desc->status);
-    fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
-    fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
-    fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" 
-                                                                            : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" 
-                                                                                : ((ethertype == ETHERTYPE_ARP) ? "ARP" : "unknown")));
-    fprintf(stderr, "        payload size    = %d\n", payload_size);
-    fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
+    //fprintf(stderr, "e1000: packet start (length = %d)\n", desc->length);
+    //fprintf(stderr, "        status          = 0x%02X\n", desc->status);
+    //fprintf(stderr, "        destination MAC = %02x:%02x:%02x:%02x:%02x:%02x\n", data[0], data[1], data[2], data[3], data[4], data[5]);
+    //fprintf(stderr, "        source MAC      = %02x:%02x:%02x:%02x:%02x:%02x\n", data[6], data[7], data[8], data[9], data[10], data[11]);
+    //fprintf(stderr, "        ethertype       = 0x%04X (%s)\n", ethertype, (ethertype == ETHERTYPE_IPv4) ? "IPv4" 
+    //                                                                        : ((ethertype == ETHERTYPE_IPv6) ? "IPv6" 
+    //                                                                            : ((ethertype == ETHERTYPE_ARP) ? "ARP" : "unknown")));
+    //fprintf(stderr, "        payload size    = %d\n", payload_size);
+    //fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
 
     //if(ethertype == ETHERTYPE_ARP) {
     //    fprintf(stderr, "        data            =\n");
@@ -577,16 +581,24 @@ static void _receive_packets(struct e1000_device* edev)
     //_write_command(edev, E1000_REG_RXDESC_TAIL, (edev->rx_desc_next - 1) % edev->rx_desc_count);
 }
 
-static void _transmit_packet(struct e1000_device* edev, intp data, u16 length)
+static s64 _transmit_packet(struct e1000_device* edev, u8* data, u16 length)
 {
     // drop packets that are too large
     if(length > 1500) {
         fprintf(stderr, "e1000: dropped tx packet (size %d too large)\n", length);
-        return;
+        return -EINVAL;
     }
 
+    // dump packet
+    //for(u16 offs = 0; offs < length; offs += 16) {
+    //    for(u16 j = 0; j < 16 && (offs+j) < length; j++) {
+    //        fprintf(stderr, "%02X ", data[offs+j]);
+    //    }
+    //    fprintf(stderr, "\n");
+    //}
+
     struct e1000_tx_desc* desc = &edev->tx_desc[edev->tx_desc_next];
-    memcpy((void*)desc->address, (void*)data, length);
+    memcpy((void*)desc->address, data, length);
     desc->length = length;
     desc->status = 0; // clear status, as FLAG_DONE indicates the hw has transmitted the packet
     desc->command |= E1000_TXDESC_COMMAND_FLAG_END_OF_PACKET |
@@ -595,42 +607,55 @@ static void _transmit_packet(struct e1000_device* edev, intp data, u16 length)
 
     edev->tx_desc_next = (edev->tx_desc_next + 1) % edev->tx_desc_count;
     _write_command(edev, E1000_REG_TXDESC_TAIL, edev->tx_desc_next);
+
+    return length;
 }
 
-s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length)
+static s64 _net_send_e1000_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 {
-    u8* buf = (u8*)__builtin_alloca(length + 14);
+    //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
+    struct e1000_device* edev = (struct e1000_device*)((intp)ndev - offsetof(struct e1000_device, net_device));
+    return _transmit_packet(edev, packet, packet_length);
+}
 
-    // destination mac address
-    memcpy(&buf[0], dest_mac, 6);
+// TODO maybe there should be an ethernet layer outside of the e1000 driver
+static u8* _net_wrap_e1000_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata, u16* packet_size)
+{
+    //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
+    struct e1000_device* edev = (struct e1000_device*)((intp)ndev - offsetof(struct e1000_device, net_device));
+
+    // validate the destination address
+    if(dest_address->protocol != NET_PROTOCOL_ETHERNET) {
+        errno = -EINVAL;
+        return null;
+    }
+
+    // lowest layer (hardware) is responsible for allocating packet storage -- TODO do something with the tx ring buffer!
+    *packet_size = payload_size + 14;
+    u8* buf = (u8*)malloc(*packet_size);
+
+    // build the inner layers first
+    if(build_payload(iface, buf + 14, userdata) < 0) return null;
+
+    // then the rest of the ethernet frame, first destination mac address
+    memcpy(&buf[0], dest_address->mac, 6);
 
     // source mac address
     memcpy(&buf[6], edev->mac, 6);
 
     // set the ethertype
-    *(u16*)&buf[12] = htons(ethertype);
-
-    // copy the data
-    memcpy(&buf[14], (void*)data, length);
-
-    _transmit_packet(edev, (intp)buf, length + 14);
-
-    return 0;
-}
-
-static s64 _net_transmit_e1000_packet(struct net_device* ndev, u8* dest_address, u8 dest_address_length, u8 net_protocol, u8* packet, u16 packet_length)
-{
-    //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
-
-    struct e1000_device* edev = (struct e1000_device*)((intp)ndev - offsetof(struct e1000_device, net_device));
-    if(dest_address_length != 6) return -EINVAL;
-
     u16 ethertype;
     if     (net_protocol == NET_PROTOCOL_IPv4) ethertype = ETHERTYPE_IPv4;
     else if(net_protocol == NET_PROTOCOL_IPv6) ethertype = ETHERTYPE_IPv6;
     else if(net_protocol == NET_PROTOCOL_ARP)  ethertype = ETHERTYPE_ARP;
-    else   return -EINVAL;
+    else {
+        errno = -EINVAL;
+        free(buf);
+        return null;
+    }
 
-    return e1000_transmit_packet(edev, dest_address, ethertype, (intp)packet, packet_length);
+    *(u16*)&buf[12] = htons(ethertype);
+
+    return buf;
 }
 
