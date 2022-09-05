@@ -95,10 +95,11 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     _gdt_fixup((intp)&_kernel_vma_base);
 
     // initialize paging
+    efifb_disable();   // disable the framebuffer until it gets remapped. we can't have screen drawing during paging update
     paging_init();     // unmaps a large portion of lowmem
 
     // a few modules have to map new memory
-    efifb_map();       // the EFI framebuffer needs virtual mapping
+    efifb_map();       // the EFI framebuffer needs virtual mapping, also re-enables the screen
     terminal_redraw(); // remapping efifb may have missed some putpixel calls
     apic_map();        // the APIC needs memory mapping
 
@@ -142,7 +143,7 @@ static void load_drivers()
     pci_enumerate_devices();
 
     ps2keyboard_load();
-    //ahci_load();
+    ahci_load();
     e1000_load();
 }
 
@@ -608,9 +609,9 @@ void kernel_main(struct multiboot_info* multiboot_info)
     load_drivers();
 
     // start the shell and exit
-//    struct task* shell_task = task_create(shell, (intp)null, false);
-//    struct cpu* cpu = get_cpu();
-//    task_enqueue(&cpu->current_task, shell_task);
+    struct task* shell_task = task_create(shell, (intp)null, false);
+    struct cpu* cpu = get_cpu();
+    task_enqueue(&cpu->current_task, shell_task);
 
     // never exit
     task_idle_forever();

@@ -66,6 +66,11 @@ void efifb_init()
     }
 }
 
+void efifb_disable()
+{
+    global_efifb.disabled = true;
+}
+
 // called after kernel paging takes over so that we know to remap the efi framebuffer
 // identity map the frame buffer. it should be in lowmem
 void efifb_map()

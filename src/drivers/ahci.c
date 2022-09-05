@@ -982,12 +982,14 @@ static struct hba_command_table* _create_command_table(struct hba_command_header
 
     // the base address is where the table will go
     // TODO we need vmem_map_region, and we can't use vmalloc because physical memory must be contiguous
-    struct hba_command_table* tbl = (struct hba_command_table*)vmem_map_page(VMEM_KERNEL, phys, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
+    struct hba_command_table* tbl = (struct hba_command_table*)vmem_map_pages(VMEM_KERNEL, phys, 1 << palloc_order, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 	zero(tbl);
 
     // point the header at the new command table
     hdr->command_table_base   = (u32)(phys & 0xFFFFFFFF);
     hdr->command_table_base_h = (u32)(phys >> 32);
+
+    //fprintf(stderr, "ahci: created command table phys=0x%lX virt=0x%lX\n", phys, tbl);
 
     return tbl;
 }
@@ -1005,11 +1007,11 @@ static void _free_command_table(struct hba_command_header* hdr, struct hba_comma
         assert(false, "not entirely implememnted yet. need vmem_map_region to get a virtual contiguous address space");
     }
 
-    intp phys = (intp)hdr->command_table_base | ((intp)hdr->command_table_base_h << 32);
     hdr->command_table_base   = 0;
     hdr->command_table_base_h = 0;
 
-    vmem_unmap_page(VMEM_KERNEL, (intp)tbl);
+    intp phys = vmem_unmap_pages(VMEM_KERNEL, (intp)tbl, 1 << palloc_order);
+    //fprintf(stderr, "ahci: freeing command table phys=0x%lX virt=0x%lX\n", phys, tbl);
     palloc_abandon(phys, palloc_order);
 }
 

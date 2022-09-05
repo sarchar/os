@@ -54,13 +54,14 @@ static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
         if(base_addr < regions[i].start || (base_addr + block_size) >= (regions[i].start + regions[i].size)) continue;
 
         // base_addr is in this region, determine the bitmap block index
-        //u64 index = base_addr >> (order + 1 + PAGE_SHIFT);
-        u64 index = (base_addr - regions[i].start) >> (order + 1 + PAGE_SHIFT);
+        // since region start could be an odd page, we'll clear that bit to make sure
+        // the index calculation is correct
+        u64 index = (base_addr - (regions[i].start & ~PAGE_SIZE)) >> (order + 1 + PAGE_SHIFT);
 
         // flip the bit
         regions[i].maps[order][index >> 3] ^= 1 << (index & 7);
 
-#if PALLOC_VERBOSE > 2
+#if PALLOC_VERBOSE > 3
         fprintf(stderr, "palloc: toggle bit region=$%lX order=%d index=%d base=$%lX new bit=$%02X\n",
                 regions[i].start, order, index, (intp)base, regions[i].maps[order][index >> 3] & (1 << (index & 7)));
 #endif
@@ -92,7 +93,7 @@ static void _initialize_region(struct region* r, intp region_start, u64 region_s
     r->npages = region_size >> PAGE_SHIFT; // this value will be used quite a lot, so a small optimization here
 
 #if PALLOC_VERBOSE > 1
-    fprintf(stderr, "palloc: region $%lX has npages=%d\n", (intp)region_start, r->npages);
+    fprintf(stderr, "palloc: region 0x%lX has npages=%d end=0x%lX\n", region_start, r->npages, region_start + r->size);
 #endif
 
     // now add the region to free_page_head
@@ -116,7 +117,7 @@ static void _initialize_region(struct region* r, intp region_start, u64 region_s
         }
         free_page_head[order]->next = fp;
 
-#if PALLOC_VERBOSE > 2
+#if PALLOC_VERBOSE > 3
         fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
 #endif
 
@@ -260,7 +261,7 @@ intp palloc_claim(u8 n) // allocate 2^n pages
 
     // split blocks all the way down to the requested size, if necessary
     while(order != n) {
-        u64 block_size = (1 << order) << 12; // 2^n*4096
+        u64 block_size = 1 << (order + PAGE_SHIFT); // 2^n*4096
     
         // split 'fp' into two block_size/2 blocks
         struct free_page* right = (struct free_page*)((u8*)left + (block_size >> 1));
@@ -272,7 +273,7 @@ intp palloc_claim(u8 n) // allocate 2^n pages
         // immediately toggle the bit out of the order the block comes from, before any splits
         palloc_togglebit(left, order, null);
 
-        assert(((intp)left ^ (1 << ((order - 1) + 12))) == (intp)right, "verifying buddy address");
+        assert(((intp)left ^ (1 << ((order - 1) + PAGE_SHIFT))) == (intp)right, "verifying buddy address");
 
         // add the right node to the free page list at the lower order. the bitmap bit will be 
         // toggled below/next time through the loop
@@ -307,12 +308,13 @@ void palloc_abandon(intp base, u8 n)
 
     while(true) {
         // start by determining if the buddy is available or not
-        u64 block_size = 1 << (order + 12); // 2^n*4096
+        u64 block_size = 1 << (order + PAGE_SHIFT); // 2^n*4096
         intp buddy_addr = base ^ block_size; // toggle the bit to get the buddy address
 
-        // buddy_addr and 'base' both have the same bitmap index
-        // but we try to set buddy_addr first (most of the time it succeeds),
-        // but if buddy_addr isn't valid, then flip the bit on base and return
+        // buddy_addr and 'base' both have the same bitmap index for palloc_togglebit,
+        // so we try to set buddy_addr first (most of the time it succeeds),
+        // but if buddy_addr isn't valid, then flip the bit on base instead. now we know
+        // if there's a valid buddy to merge
         u8 bit;
         bool buddy_valid;
         if(!(buddy_valid = palloc_togglebit((struct free_page*)buddy_addr, order, &bit))) {
