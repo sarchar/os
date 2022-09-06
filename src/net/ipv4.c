@@ -1,7 +1,10 @@
 #include "kernel/common.h"
 
+#include "errno.h"
 #include "kernel/cpu.h"
 #include "kernel/kernel.h"
+#include "kernel/paging.h"
+#include "net/arp.h"
 #include "net/ethernet.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
@@ -11,8 +14,9 @@
 #include "string.h"
 
 // current gateway
-u8 gateway_mac_address[] = { 0x00, 0x15, 0x5d, 0xa2, 0x97, 0x22 }; // TODO use ARP to determine the gateway's ethernet address
-u8 gateway_ip_address[]  = { 172, 21, 160, 1 };
+//u8 gateway_mac_address[] = { 0x00, 0x15, 0x5d, 0xcb, 0x2e, 0x3f }; // TODO use ARP to determine the gateway's ethernet address
+//u8 gateway_mac_address[] = { 0x00, 0x15, 0x5d, 0x89, 0xaf, 0x34 };
+static char const* gateway_ip_address = "192.168.53.1";
 
 static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* packet, u16 packet_length);
 static void _ipv4_header_to_host(struct ipv4_header* hdr);
@@ -111,20 +115,30 @@ u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_addre
     u16 packet_size = sizeof(struct ipv4_header) + payload_size;
 
     // IPv4 is a toplevel layer, so it calls directly into the network device for packet memory
-    struct net_address dest;     // TODO use ARP tables to map the gateway's IP to a mac address
-    zero(&dest);
-    dest.protocol = NET_PROTOCOL_ETHERNET;
+    struct net_address hw_dest;     // TODO use ARP tables to map the gateway's IP to a mac address
 
-    if(dest_address->ipv4 == 0xac15ab6b) { // if we're addressed to 172.21.171.107, use the appropriate MAC
-        u8 host[] = { 0x00, 0x15, 0x5d, 0x89, 0xaf, 0x34 };
-        memcpy(dest.mac, host, 6);
-    } else {
-        memcpy(dest.mac, gateway_mac_address, 6);
+    // If we know how to deliver to dest_address directly via ethernet, use it. otherwise, look up the gateway and use that
+    // TODO replace err with errno when thread local storage is supported
+    s64 err;
+    if((err = arp_lookup(dest_address, &hw_dest)) < 0 && err == -ENOENT) {
+        struct net_address gateway_address;
+        ipv4_parse_address_string(&gateway_address, gateway_ip_address);
+        if((err = arp_lookup(&gateway_address, &hw_dest)) < 0) {
+            // TODO with no hardware address available, we should send out an ARP right here and 
+            // then sleep the task waiting on a response
+
+            char buf[16];
+            ipv4_format_address(buf, gateway_address.ipv4);
+            fprintf(stderr, "ip: no hardware address available for %s..dropping packet\n", buf);
+        }
     }
-    return iface->net_device->wrap_packet(iface->net_device, iface, &dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info, packet_length);
+
+    if(err < 0) return null;
+
+    return iface->net_device->wrap_packet(iface->net_device, iface, &hw_dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info, packet_length);
 }
 
-void ipv4_parse_address_string(struct net_address* addr, char* buf)
+void ipv4_parse_address_string(struct net_address* addr, char const* buf)
 {
     zero(addr);
 
@@ -189,7 +203,7 @@ void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_l
     char buf1[16], buf2[16];
     ipv4_format_address(buf1, hdr->source_address);
     ipv4_format_address(buf2, hdr->dest_address);
-    fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s\n", hdr->identification, hdr->protocol, buf1, buf2);
+    //fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s\n", hdr->identification, hdr->protocol, buf1, buf2);
 
     // look up the net_interface that handles packets addressed to hdr->dest_address
     // if no interface is found, we can ignore the packet. otherwise, deliver the packet to that interface

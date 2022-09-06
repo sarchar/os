@@ -118,7 +118,35 @@ s64 icmp_send_packet(struct net_interface* iface, struct net_address* dest_addre
     return net_send_packet(iface->net_device, packet_start, packet_length);
 }
 
-static void _handle_echo(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
+s64 icmp_send_echo(struct net_interface* iface, struct net_address* dest_address, u16 sequence_number)
+{
+    static u16 next_echo_identifier = 0;
+
+    // build a payload
+    u16 icmp_echo_data_length = 56;
+    u8  icmp_echo_data[56];
+    u8  i = (intp)iface & 0xFF; 
+    for(u8 j = 0; j < countof(icmp_echo_data); j++) {
+        icmp_echo_data[j] = i++;
+    }
+
+    // allocate icmp_echo_header (+data) on the stack
+    u16 icmp_echo_length = sizeof(struct icmp_echo) + icmp_echo_data_length;
+    struct icmp_echo* icmp_echo = (struct icmp_echo*)__builtin_alloca(icmp_echo_length);
+
+    // only increment next_echo_identifier when sequence_number is 0
+    if(sequence_number == 0) __atomic_inc(&next_echo_identifier);
+
+    // setup packet
+    icmp_echo->identifier      = htons(next_echo_identifier);
+    icmp_echo->sequence_number = htons(sequence_number);
+    memcpy(icmp_echo->data, icmp_echo_data, icmp_echo_data_length);
+
+    // send the echo ICMP
+    return icmp_send_packet(iface, dest_address, ICMP_TYPE_ECHO, 0, (u8*)icmp_echo, icmp_echo_length);
+}
+
+static void _receive_echo(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
 {
     unused(iface);
 
@@ -135,7 +163,7 @@ static void _handle_echo(struct net_interface* iface, struct ipv4_header* iphdr,
     char dest[16];
     ipv4_format_address(src, iphdr->source_address);
     ipv4_format_address(dest, iface->address.ipv4);
-    fprintf(stderr, "icmp: %s got echo from %s: identifier=0x%04X sequence=%d icmp_echo_data_length=%d\n", dest, src, echo->identifier, echo->sequence_number, icmp_echo_data_length);
+    //fprintf(stderr, "icmp: %s got echo from %s: identifier=0x%04X sequence=%d icmp_echo_data_length=%d\n", dest, src, echo->identifier, echo->sequence_number, icmp_echo_data_length);
 
     // build the reply address
     struct net_address reply_address;
@@ -154,30 +182,26 @@ static void _handle_echo(struct net_interface* iface, struct ipv4_header* iphdr,
 
     // send the reply ICMP
     icmp_send_packet(iface, &reply_address, ICMP_TYPE_ECHO_REPLY, 0, (u8*)icmp_echo_reply, icmp_echo_reply_length);
+}
 
-//    // create an echo reply packet
-//    // TODO make packet creation some kind of recursive callback system? some layers need the data to create checksums
-//    u16 packet_size;
-//    u8* icmp_packet_start;
-//    u8* packet_start = icmp_create_packet(iphdr->source_address, ICMP_TYPE_ECHO_REPLY, 0, sizeof(struct icmp_echo) + icmp_echo_data_length, &icmp_packet_start, &packet_size);
-//
-//    // fill in the packet data
-//    struct icmp_header* icmp_reply_header = (struct icmp_header*)icmp_packet_start;
-//    struct icmp_echo* echo_reply = (struct icmp_echo*)icmp_reply_header->payload;
-//    echo_reply->identifier       = echo->identifier;
-//    echo_reply->sequence_number  = echo->sequence_number;
-//    memcpy(echo_reply->data, echo->data, icmp_echo_data_length);
-//
-//    // compute checksum
-//    u16 checksum = _compute_checksum(icmp_reply_header, sizeof(struct icmp_header) + sizeof(struct icmp_echo) + icmp_echo_data_length);
-//
-//    // fixup the echo packet
-//    icmp_reply_header->checksum = htons(checksum);
-//    echo_reply->identifier      = htons(echo_reply->identifier);
-//    echo_reply->sequence_number = htons(echo_reply->sequence_number);
-//
-//    // send the packet
-//    icmp_send_packet(ndev, iphdr->source_address, packet_start, packet_size);
+static void _receive_echo_reply(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
+{
+    unused(iface);
+
+    // fix up the incoming header
+    struct icmp_echo* echo = (struct icmp_echo*)(packet + sizeof(struct icmp_header));
+    echo->identifier       = ntohs(echo->identifier);
+    echo->sequence_number  = ntohs(echo->sequence_number);
+
+    // determine the length of the echo data
+    u16 icmp_echo_data_length = packet_length - sizeof(struct icmp_header) - sizeof(struct icmp_echo);
+
+    // print debug message
+    char src[16];
+    char dest[16];
+    ipv4_format_address(src, iphdr->source_address);
+    ipv4_format_address(dest, iface->address.ipv4);
+    fprintf(stderr, "icmp: %s got reply from %s: identifier=0x%04X sequence=%d icmp_echo_data_length=%d\n", dest, src, echo->identifier, echo->sequence_number, icmp_echo_data_length);
 }
 
 void icmp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
@@ -188,8 +212,12 @@ void icmp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr,
     hdr->checksum = ntohs(hdr->checksum);
 
     switch(hdr->type) {
+    case ICMP_TYPE_ECHO_REPLY:
+        _receive_echo_reply(iface, iphdr, packet, packet_length);
+        break;
+
     case ICMP_TYPE_ECHO:
-        _handle_echo(iface, iphdr, packet, packet_length);
+        _receive_echo(iface, iphdr, packet, packet_length);
         break;
 
     default:

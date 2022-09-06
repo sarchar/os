@@ -383,7 +383,7 @@ static void _register_network_device(struct e1000_device* edev, u8 eth_index)
 
     // TODO TEMP create an IPv4 interface on this device
     struct net_address local_addr;
-    ipv4_parse_address_string(&local_addr, "172.21.160.20");
+    ipv4_parse_address_string(&local_addr, "192.168.53.20");
     struct net_interface* iface = ipv4_create_interface(&local_addr); // TODO will create #interface=ipv4:N
     net_device_register_interface(&edev->net_device, iface);
 }
@@ -576,9 +576,6 @@ static void _receive_packets(struct e1000_device* edev)
         _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_next);
         edev->rx_desc_next = (edev->rx_desc_next + 1) % edev->rx_desc_count;
     }
-
-    // update the tail to be 1 behind our read pointer
-    //_write_command(edev, E1000_REG_RXDESC_TAIL, (edev->rx_desc_next - 1) % edev->rx_desc_count);
 }
 
 static s64 _transmit_packet(struct e1000_device* edev, u8* data, u16 length)

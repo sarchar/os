@@ -23,6 +23,7 @@ add_custom_target(run
                                              -vga cirrus -monitor stdio -serial file:${CMAKE_BINARY_DIR}/output.log
                                              #-nographic
                                              -drive file=${CMAKE_BINARY_DIR}/os.iso,if=none,media=cdrom,format=raw,id=boot
+					     #-drive file=/home/cmason/archlinux-2022.09.03-x86_64.iso,if=none,media=cdrom,format=raw,id=boot
                                              #-drive file=${CMAKE_BINARY_DIR}/fs.qcow2,if=none,media=disk,format=qcow2,id=extra
                                              -drive file=${CMAKE_BINARY_DIR}/ext2.img,if=none,media=disk,format=raw,id=extra
                                              -device ahci,id=ahci
@@ -30,8 +31,8 @@ add_custom_target(run
                                              -device ide-hd,drive=extra,bus=ahci.1
                                              -usb
                                              -device usb-mouse
-					     #-netdev user,id=osnet,hostfwd=tcp::5555-:22
-					     -netdev tap,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper,id=osnet
+                                             #-netdev user,id=osnet,hostfwd=tcp::5555-:22
+                                             -netdev tap,br=br0,helper=/usr/lib/qemu/qemu-bridge-helper,id=osnet
                                              -device e1000,netdev=osnet
                                              #-device e1000e,netdev=osnet,romfile=${CMAKE_CURRENT_SOURCE_DIR}/efi-e1000e.rom
                                              -k en-us

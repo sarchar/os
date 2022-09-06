@@ -41,6 +41,18 @@ struct net_device* net_device_by_index(u16 netdev_index)
     return netdevs_tmp[netdev_index];
 }
 
+struct net_interface* net_device_get_interface_by_index(struct net_device* ndev, u8 net_protocol, u8 iface_index)
+{
+    struct net_interface* iface;
+    struct net_interface* next_iface;
+
+    HT_FOR_EACH(ndev->interfaces, iface, next_iface) {
+        if(iface->protocol == net_protocol && iface_index-- == 0) return iface;
+    }
+
+    return null;
+}
+
 void net_set_hardware_address(struct net_device* ndev, struct net_address* address)
 {
     ndev->hardware_address = *address;

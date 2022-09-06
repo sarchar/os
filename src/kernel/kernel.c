@@ -19,6 +19,8 @@
 #include "kernel.h"
 #include "multiboot2.h"
 #include "net/arp.h"
+#include "net/icmp.h"
+#include "net/ipv4.h"
 #include "net/net.h"
 #include "paging.h"
 #include "palloc.h"
@@ -510,18 +512,66 @@ static void run_command(char* cmdbuffer)
     } else if(strcmp(cmdbuffer, "pt") == 0) {
         paging_debug_table(get_cpu()->current_task->page_table);
     } else if(strcmp(cmdbuffer, "arp") == 0) {
-        //struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
-        //if(ndev == null) return;
+        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        if(ndev == null) return;
 
-        //u8 ipv4_addr[] = { 172, 21, 160, 1 };
-        //u64 buflen;
-        //u8* buf = arp_create_request(ndev, NET_PROTOCOL_IPv4, ipv4_addr, &buflen); // lookup IPv4 type
-        //if(buf == null) return;
+        struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+        if(iface == null) return;
 
-        //u8 dest_mac[] = { 0xff, 0xff, 0xff, 0xff, 0xff, 0xff };
-        //net_transmit_packet(ndev, dest_mac, 6, NET_PROTOCOL_ARP, buf, buflen); // transmit ARP packet
+        // skip whitespace or until end of string
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
 
-        //free(buf);
+        // if we have a parameter, look for it
+        if(*cmdptr == 0) {
+            fprintf(stderr, "no name specified\n");
+            return;
+        }
+
+        char* addr = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        // create an ARP request for the specified IP address
+        struct net_address lookup_address;
+        ipv4_parse_address_string(&lookup_address, addr);
+        arp_send_request(iface, &lookup_address);
+
+    } else if(strcmp(cmdbuffer, "ping") == 0) {
+        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        if(ndev == null) return;
+
+        struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+        if(iface == null) return;
+
+        // skip whitespace or until end of string
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
+
+        // if we have a parameter, look for it
+        if(*cmdptr == 0) {
+            fprintf(stderr, "no name specified\n");
+            return;
+        }
+
+        char* addr = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        // send 10 ping packets to the destination
+        struct net_address lookup_address;
+        ipv4_parse_address_string(&lookup_address, addr);
+
+        for(u16 seq = 0; seq < 10; seq++) {
+            icmp_send_echo(iface, &lookup_address, seq);
+            usleep(1000000);
+        }
     }
 }
 

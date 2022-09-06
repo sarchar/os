@@ -100,7 +100,10 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length);
 s64  net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length);
+
+//TODO These are temporary
 struct net_device* net_device_by_index(u16); //TODO this should be removed eventually and net_device_from_vnode(vfs_find("#netdev=index")) should be used
+struct net_interface* net_device_get_interface_by_index(struct net_device*, u8, u8);
 
 //TODO
 void net_set_address(struct net_address* addr, u8 net_protocol, u8* data, u8 data_length);
