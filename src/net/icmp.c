@@ -12,7 +12,17 @@
 
 enum ICMP_TYPE {
     ICMP_TYPE_ECHO_REPLY = 0,
+    ICMP_TYPE_UNREACHABLE = 3,
     ICMP_TYPE_ECHO = 8
+};
+
+enum ICMP_UNREACHABLE_CODES {
+    ICMP_UNREACHABLE_CODE_NET      = 0,
+    ICMP_UNREACHABLE_CODE_HOST     = 1,
+    ICMP_UNREACHABLE_CODE_PROTOCOL = 2,
+    ICMP_UNREACHABLE_CODE_PORT     = 3,
+    ICMP_UNREACHABLE_CODE_FRAG     = 4, // fragment needed and Don't Fragment set
+    ICMP_UNREACHABLE_CODE_ROUTE    = 5  // source route failed
 };
 
 struct icmp_header {
@@ -46,7 +56,7 @@ static u16 _compute_checksum(u8* data, u16 data_length)
     }
 
     if(data_length) {
-        u16 word = (u16)data[0] << 8;
+        u16 word = (u16)data[0] << 0;
         sum += word; // add the last byte extended with a 0
     }
 
@@ -92,7 +102,7 @@ static s64 _build_icmp_packet(struct net_interface* iface, u8* icmp_packet_start
     // copy payload over
     memcpy(hdr->payload, info->payload, info->payload_length);
 
-    // compute checksum and convert to network byte order
+    // compute checksum
     hdr->checksum = _compute_checksum(icmp_packet_start, icmp_packet_size);
 
     return sizeof(struct icmp_header) + info->payload_length;
@@ -218,6 +228,29 @@ void icmp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr,
 
     case ICMP_TYPE_ECHO:
         _receive_echo(iface, iphdr, packet, packet_length);
+        break;
+
+    case ICMP_TYPE_UNREACHABLE:
+        switch(hdr->code) {
+        case ICMP_UNREACHABLE_CODE_NET:
+            fprintf(stderr, "icmp: network unreachable\n");
+            break;
+        case ICMP_UNREACHABLE_CODE_HOST:
+            fprintf(stderr, "icmp: host unreachable\n");
+            break;
+        case ICMP_UNREACHABLE_CODE_PROTOCOL:
+            fprintf(stderr, "icmp: protocol unreachable\n");
+            break;
+        case ICMP_UNREACHABLE_CODE_PORT:
+            fprintf(stderr, "icmp: application port unreachable\n");
+            break;
+        case ICMP_UNREACHABLE_CODE_FRAG:
+            fprintf(stderr, "icmp: fragmentation required\n");
+            break;
+        case ICMP_UNREACHABLE_CODE_ROUTE:
+            fprintf(stderr, "icmp: no source route\n");
+            break;
+        }
         break;
 
     default:

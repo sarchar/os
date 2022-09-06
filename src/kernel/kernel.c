@@ -22,6 +22,7 @@
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
+#include "net/udp.h"
 #include "paging.h"
 #include "palloc.h"
 #include "pci.h"
@@ -572,6 +573,47 @@ static void run_command(char* cmdbuffer)
             icmp_send_echo(iface, &lookup_address, seq);
             usleep(1000000);
         }
+    } else if(strcmp(cmdbuffer, "udp") == 0) {
+        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        if(ndev == null) return;
+
+        struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+        if(iface == null) return;
+
+        // skip whitespace or until end of string
+        while((*cmdptr != 0) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
+
+        // if we have a parameter, look for it
+        if(*cmdptr == 0) {
+            fprintf(stderr, "no name specified\n");
+            return;
+        }
+
+        char* addr = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        // send a udp packet
+        struct net_address dest_address;
+        ipv4_parse_address_string(&dest_address, addr);
+
+        char* portstr = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        u16 port = atoi(portstr);
+        if(port == 0) port = 8080;
+
+        char payload[] = "hello!";
+        udp_send_packet(iface, &dest_address, 10000, port, (u8*)payload, strlen(payload) + 1);
     }
 }
 

@@ -9,6 +9,7 @@
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
+#include "net/udp.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include "string.h"
@@ -41,7 +42,7 @@ static u16 _ipv4_compute_checksum(u8* data, u16 data_length)
     }
 
     if(data_length) {
-        u16 word = (u16)data[0] << 8;
+        u16 word = (u16)data[0] << 0;
         sum += word; // add the last byte extended with a 0
     }
 
@@ -99,6 +100,7 @@ u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_addre
 
     u8 ipv4_protocol;
     if(payload_protocol == NET_PROTOCOL_ICMP) ipv4_protocol = IPv4_PROTOCOL_ICMP;
+    else if(payload_protocol == NET_PROTOCOL_UDP) ipv4_protocol = IPv4_PROTOCOL_UDP;
     else {
         assert(false, "unsupported protocol");
         return null;
@@ -229,15 +231,19 @@ static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* pack
     // determine payload
     u8* payload = packet + ((u16)hdr->header_length * 4);
     u16 payload_length = packet_length - ((u16)hdr->header_length * 4);
-    if(hdr->total_length != packet_length || payload_length >= packet_length) { // payload_length will overflow if hdr->header_length is invalid
-        fprintf(stderr, "ip: dropping packet 0x%04X due to invalid size\n", hdr->identification);
+    if(hdr->total_length > packet_length || payload_length >= packet_length) { // payload_length will overflow if hdr->header_length is invalid
+        fprintf(stderr, "ip: dropping packet 0x%04X due to invalid size (hdr->total_length=%d, packet_length=%d, payload_length=%d)\n", hdr->identification, hdr->total_length, packet_length, payload_length);
         return;
     }
 
-    //TODO hash table the hdr->protocol and call the handler that way
+    //TODO hash table the hdr->protocol and call the handler that way?
     switch(hdr->protocol) {
     case IPv4_PROTOCOL_ICMP:
         icmp_receive_packet(iface, hdr, payload, payload_length);
+        break;
+
+    case IPv4_PROTOCOL_UDP:
+        udp_receive_packet(iface, hdr, payload, payload_length);
         break;
 
     default:
