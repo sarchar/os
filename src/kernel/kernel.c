@@ -672,7 +672,11 @@ static void run_command(char* cmdbuffer)
         fprintf(stderr, "socket listening 0x%lX\n", net_lookup_socket(&sockinfo));
 
         // okay, listening socket is ready, wait for a socket
-        //struct net_socket* peersocket = net_accept_socket(sock);
+        struct net_socket* peersocket = socket->ops->accept(socket);
+
+        char buf[16];
+        ipv4_format_address(buf, peersocket->socket_info.source_address.ipv4);
+        fprintf(stderr, "got connection from %s:%d\n", buf, peersocket->socket_info.source_port);
     }
 }
 

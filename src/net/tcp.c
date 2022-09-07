@@ -3,6 +3,7 @@
 #include "kernel/cpu.h"
 #include "kernel/kalloc.h"
 #include "kernel/kernel.h"
+#include "kernel/task.h"
 #include "net/ethernet.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
@@ -36,6 +37,31 @@ struct tcp_header {
     u8  options[];
 } __packed;
 
+enum TCP_OPTIONS {
+    TCP_OPTION_END                  = 0,
+    TCP_OPTION_NOP                  = 1,
+    TCP_OPTION_MAXIMUM_SEGMENT_SIZE = 2,
+    TCP_OPTION_WINDOW_SCALE         = 3,
+    TCP_OPTION_SACK_PERMITTED       = 4,
+    TCP_OPTION_TIMESTAMPS           = 8,
+};
+
+enum TCP_OPTION_PRESENT_FLAGS {
+    TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE = 1 << 0,
+    TCP_OPTION_PRESENT_WINDOW_SCALE         = 1 << 1,
+    TCP_OPTION_PRESENT_SACK_PERMITTED       = 1 << 2,
+};
+
+struct tcp_header_options {
+    u16 maximum_segment_size;
+    u16 window_scale;
+
+    u8  unused0;
+    u8  nops;
+    u8  padding_bytes;
+    u8  present;
+};
+
 enum TCP_SOCKET_STATE {
     TCP_SOCKET_STATE_CLOSED        = 0,
     TCP_SOCKET_STATE_LISTEN        = 1,
@@ -68,23 +94,36 @@ struct tcp_build_packet_info {
 struct tcp_socket {
     struct net_socket net_socket;
 
-    u8  state;
+    // for incoming connections
+    struct tcp_socket* volatile pending_accept;
+    struct tcp_socket* pending_accept_tail;
+    struct ticketlock  lock;
+
+    u8  volatile state;
     u8  unused0;
     u16 listen_backlog;
-    u32 their_ack_number;
+    u16 pending_accept_index;
+    u16 unused1;
 
     u32 my_sequence_number;    // next outgoing SEQ number
     u32 their_sequence_number; // expected next incoming SEQ number
+
+    u16 their_maximum_segment_size;
+    u16 their_window_scale;
+    u32 their_ack_number;
 };
 
 static s64 _socket_listen(struct net_socket*, u16);
+static struct net_socket* _socket_accept(struct net_socket*);
 
 static s64 _send_segment(struct net_interface* iface, struct tcp_socket* socket, u8* payload, u16 payload_length, u16 flags);
-static s64 _receive_packet(struct net_interface* iface, struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length);
+static s64 _receive_segment(struct net_interface* iface, struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start);
+
+static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pending);
 
 static struct net_socket_ops tcp_socket_ops = {
     .listen  = &_socket_listen,
-    .accept  = null,
+    .accept  = &_socket_accept,
     .connect = null,
     .close   = null,
     .send    = null,
@@ -93,6 +132,8 @@ static struct net_socket_ops tcp_socket_ops = {
 
 struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
 {
+    declare_ticketlock(lock_init);
+
     assert(sockinfo->protocol == NET_PROTOCOL_TCP, "required TCP sockinfo");
 
     // right now only support IPv4. TODO IPv6
@@ -102,6 +143,7 @@ struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
     struct tcp_socket* sock = (struct tcp_socket*)kalloc(sizeof(struct tcp_socket)); // use kalloc for fast allocation
     zero(sock);
 
+    sock->lock            = lock_init;
     sock->state           = TCP_SOCKET_STATE_CLOSED;
     sock->net_socket.ops  = &tcp_socket_ops;
 
@@ -123,6 +165,130 @@ static s64 _socket_listen(struct net_socket* socket, u16 backlog)
     return 0;
 }
 
+void got_accept() { }
+
+static struct net_socket* _socket_accept(struct net_socket* socket)
+{
+    struct tcp_socket* tcpsocket = containerof(socket, struct tcp_socket, net_socket);
+
+    while(true) {
+        // wait for an incoming socket
+        while(tcpsocket->state == TCP_SOCKET_STATE_LISTEN && tcpsocket->pending_accept == null) { // our main socket could at some point be closed
+            task_yield(TASK_YIELD_VOLUNTARY); //TODO use events
+        }    
+
+        // break out if our socket is closed
+        if(tcpsocket->state != TCP_SOCKET_STATE_LISTEN) break;
+
+        // swap out the incoming socket for null and see if we got it
+        struct net_socket* incoming = (struct net_socket*)__xchgq((u64*)&tcpsocket->pending_accept, (u64)null);
+        struct tcp_socket* tcpincoming = containerof(incoming, struct tcp_socket, net_socket);
+        if(incoming == null) continue; // didn't get it, try again
+
+        got_accept();
+
+        // got it, so lock and update the pointers
+        acquire_lock(tcpsocket->lock);
+        tcpsocket->pending_accept = tcpincoming->pending_accept; // pending_accept acts as the 'next' pointer
+        if(tcpsocket->pending_accept_tail == tcpincoming) {
+            tcpsocket->pending_accept_tail = null;
+        }
+        __atomic_dec(&tcpsocket->pending_accept_index);
+        release_lock(tcpsocket->lock);
+
+        // check the status of the connection
+        switch(tcpincoming->state) {
+        case TCP_SOCKET_STATE_ESTABLISHED:
+            return &tcpincoming->net_socket;
+
+        default:
+            // TODO other states. for now, just sit on them
+            _add_pending_accept(tcpsocket, tcpincoming);
+            break;
+        }
+    }
+
+    //TODO errno = -EINVAL
+    return null;
+}
+
+static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pending)
+{
+    acquire_lock(owner->lock);
+    if(owner->pending_accept == null) {
+        pending->pending_accept = null;
+        owner->pending_accept = pending;
+        owner->pending_accept_tail = pending;
+    } else {
+        owner->pending_accept_tail->pending_accept = pending; // next pointer to the new pending connection
+        owner->pending_accept_tail = pending;
+    }
+    release_lock(owner->lock);
+}
+
+static s32 _parse_options(struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options)
+{
+    zero(options);
+
+    u16 option_offset = offsetof(struct tcp_header, options);
+    u16 payload_start = hdr->data_offset * 4;
+
+    u8 length;
+    u16 parameter;
+
+    // bail on invalid setup
+    if(payload_start > packet_length) return -EINVAL;
+
+    // until the end of options
+    while(option_offset < payload_start) {
+        u8 opt = ((u8*)hdr)[option_offset++];
+
+        switch(opt) {
+        case TCP_OPTION_END:
+            goto done;
+
+        case TCP_OPTION_NOP:
+            options->nops++;
+            break;
+
+        case TCP_OPTION_MAXIMUM_SEGMENT_SIZE:
+            length = ((u8*)hdr)[option_offset++];
+            if(length != 4) return -EINVAL;
+            parameter = *(u16*)((u8*)hdr + option_offset);
+            option_offset += 2;
+            options->maximum_segment_size = ntohs(parameter);
+            options->present |= TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE;
+            break;
+
+        case TCP_OPTION_WINDOW_SCALE:
+            length = ((u8*)hdr)[option_offset++];
+            if(length != 3) return -EINVAL;
+            parameter = *((u8*)hdr + option_offset);
+            option_offset += 1;
+            options->window_scale = parameter;
+            options->present |= TCP_OPTION_PRESENT_WINDOW_SCALE;
+            break;
+
+        case TCP_OPTION_SACK_PERMITTED:
+            length = ((u8*)hdr)[option_offset++];
+            if(length != 2) return -EINVAL;
+            options->present |= TCP_OPTION_PRESENT_SACK_PERMITTED;
+            break;
+
+        case TCP_OPTION_TIMESTAMPS:
+            //TODO
+            length = ((u8*)hdr)[option_offset++];
+            if(length != 10) return -EINVAL;
+            option_offset += 8;
+            break;
+        }
+    }
+
+done:
+    options->padding_bytes = payload_start - option_offset;
+    return payload_start;
+}
+
 void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
 {
     struct tcp_header* hdr = (struct tcp_header*)packet;
@@ -141,7 +307,12 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     hdr->checksum        = ntohs(hdr->checksum);
     hdr->urgent_pointer  = ntohs(hdr->urgent_pointer);
 
-    //TODO parse options: _packet_parse_options(hdr, &options);
+    struct tcp_header_options options;
+    s32 payload_start;
+    if((payload_start = _parse_options(hdr, packet_length, &options)) < 0) {
+        fprintf(stderr, "tcp: dropping packet due to invalid options\n");
+        return;
+    }
 
     char buf[16];
     char buf2[16];
@@ -190,6 +361,14 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
             goto done;
         }
 
+        u16 incoming_index = __atomic_xinc(&tcpsocket->pending_accept_index);
+        if(incoming_index >= tcpsocket->listen_backlog) {
+            // too many incoming connections, so we drop this one
+            __atomic_dec(&tcpsocket->pending_accept_index);
+            fprintf(stderr, "tcp: dropping due to too many incoming connections (%d > %d)\n", incoming_index, tcpsocket->listen_backlog);
+            goto done;
+        }
+
         // potential new socket formed to a listening socket, so create a new socket and handle the packet
         // the handling of the packet may not persist for very long
         ipv4_format_address(buf2, sockinfo.dest_address.ipv4);
@@ -200,26 +379,34 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
         sockinfo.source_port         = hdr->source_port;
         sockinfo.dest_address.ipv4   = iphdr->dest_address;
         struct net_socket* newsocket = net_create_socket(&sockinfo);
-        if(newsocket == null) goto done; // failed to allocate socket, so out of memory or something
+        if(newsocket == null) {
+            __atomic_dec(&tcpsocket->pending_accept_index);
+            goto done; // failed to allocate socket, so out of memory or something
+        }
+
+        // put new socket on the pending accept list, even if the connection is never established
+        _add_pending_accept(tcpsocket, containerof(newsocket, struct tcp_socket, net_socket));
 
         // deliver the packet to this socket
         tcpsocket = containerof(newsocket, struct tcp_socket, net_socket);
     }
 
-    _receive_packet(iface, tcpsocket, hdr, packet_length);
+    _receive_segment(iface, tcpsocket, hdr, packet_length, &options, (u16)(payload_start & 0xFFFF));
 
 done:
     return;
 }
 
-static s64 _receive_packet(struct net_interface* iface, struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length)
+static s64 _receive_segment(struct net_interface* iface, struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start)
 {
     s64 res = 0;
 
     //fprintf(stderr, "tcp: got packet on socket 0x%lX syn=%d ack=%d\n", socket, hdr->sync, hdr->ack);
 
     if(hdr->reset) {
+        //assert(false, "TODO handle reset");
         fprintf(stderr, "tcp: socket 0x%lX got RST..ignoring\n", socket);
+        //TODO close socket
         return 0;
     }
 
@@ -228,10 +415,29 @@ static s64 _receive_packet(struct net_interface* iface, struct tcp_socket* socke
         fprintf(stderr, "tcp: received ACK 0x%08X\n", hdr->ack_number);
     }
 
+    // If these options are sent on any packet other than SYN packets, it's invalid
+    if((options->present & (TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE | TCP_OPTION_PRESENT_WINDOW_SCALE)) != 0 && !hdr->sync) {
+        fprintf(stderr, "tcp: can only send maximum segment size with SYN packets\n");
+        //TODO close socket
+        return 0;
+    }
+
     switch(socket->state) {
     case TCP_SOCKET_STATE_CLOSED:
-        // the only packet in CLOSED state we care about is SYN=1,ACK=0
+        // the only packet in CLOSED state we care about is SYN=1,ACK=0. RST is taken care of above
+        // and any payload is ignored
         if(!hdr->sync || hdr->ack) goto done;
+
+        // check for valid segment sizes (must be at least 64, but 0 means unlimited)
+        if(options->present & TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE) {
+            if(options->maximum_segment_size != 0 && options->maximum_segment_size < 64) goto done;
+            socket->their_maximum_segment_size = options->maximum_segment_size;
+        }
+
+        // window scale is given as log-2
+        if(options->present & TCP_OPTION_PRESENT_WINDOW_SCALE) {
+            socket->their_window_scale = options->window_scale;
+        }
 
         // read the sync value (+1 for the sync sequence)
         socket->their_sequence_number = hdr->sequence_number + 1;
@@ -271,7 +477,7 @@ static s64 _receive_packet(struct net_interface* iface, struct tcp_socket* socke
 
     case TCP_SOCKET_STATE_ESTABLISHED:
         {
-            u16 payload_length = packet_length - hdr->data_offset * 4;
+            u16 payload_length = packet_length - payload_start;
             fprintf(stderr, "tcp: got data packet size %d\n", payload_length);
 
             // compute their next sequence number
@@ -282,7 +488,7 @@ static s64 _receive_packet(struct net_interface* iface, struct tcp_socket* socke
             // send an ACK
             if(seq_inc > 0) {
                 if(payload_length > 0) {
-                    _send_segment(iface, socket, (u8*)hdr + hdr->data_offset * 4, (hdr->sync) ? seq_inc - 1 : seq_inc, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
+                    _send_segment(iface, socket, (u8*)hdr + payload_start, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
                 } else {
                     _send_segment(iface, socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
                 }
@@ -372,14 +578,6 @@ static s64 _build_tcp_packet(struct net_interface* iface, u8* tcp_packet_start, 
     hdr->checksum    = 0;  // initialize checksum to 0
 
     // copy payload over
-    fprintf(stderr, "tcp: sending payload length = %d\n", info->payload_length);
-    if(info->payload_length > 0) {
-        for(u16 i = 0; i < info->payload_length; i += 16) {
-            for(u16 j = 0; j < 16 && (i+j) < info->payload_length; j++) {
-                fprintf(stderr, "%02X ", info->payload[i+j]);
-            }
-        }
-    }
     memcpy(tcp_packet_start + sizeof(struct tcp_header), info->payload, info->payload_length);
 
     // compute checksum and convert to network byte order

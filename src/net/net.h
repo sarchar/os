@@ -106,12 +106,12 @@ struct net_socket_info {
 
 struct net_socket;
 struct net_socket_ops {
-    s64    (*listen) (struct net_socket*, u16 backlog);
-    s64    (*accept) (struct net_socket*);
-    s64    (*connect)(struct net_socket*);
-    s64    (*close)  (struct net_socket*);
-    s64    (*send)   (struct net_socket*);
-    s64    (*receive)(struct net_socket*);
+    s64                (*listen) (struct net_socket*, u16 backlog);
+    struct net_socket* (*accept) (struct net_socket*);
+    s64                (*connect)(struct net_socket*);
+    s64                (*close)  (struct net_socket*);
+    s64                (*send)   (struct net_socket*);
+    s64                (*receive)(struct net_socket*);
 };
 
 struct net_socket {
