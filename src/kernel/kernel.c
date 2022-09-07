@@ -148,6 +148,20 @@ static void load_drivers()
     ps2keyboard_load();
     ahci_load();
     e1000_load();
+
+    // send an ARP packet for 192.168.53.1 since we use it all the time
+    {
+        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        if(ndev != null) {
+            struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+            if(iface != null) {
+                // create an ARP request for the specified IP address
+                struct net_address lookup_address;
+                ipv4_parse_address_string(&lookup_address, "192.168.53.1");
+                arp_send_request(iface, &lookup_address);
+            }
+        }
+    }
 }
 
 static char current_directory[256] = "/";
@@ -614,6 +628,51 @@ static void run_command(char* cmdbuffer)
 
         char payload[] = "hello!";
         udp_send_packet(iface, &dest_address, 10000, port, (u8*)payload, strlen(payload) + 1);
+    } else if(strcmp(cmdbuffer, "listen") == 0) {
+        //struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+        //if(ndev == null) return;
+
+        //struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+        //if(iface == null) return;
+
+        // determine port to listen on
+        char* portstr = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        u16 port = atoi(portstr);
+        if(port == 0) port = 8000;
+
+        // create a listening socket on port 23 (telnet)
+        struct net_socket_info sockinfo;
+        zero(&sockinfo);
+        sockinfo.protocol                = NET_PROTOCOL_TCP;
+        sockinfo.source_address.protocol = NET_PROTOCOL_IPv4;
+        sockinfo.dest_address.protocol   = NET_PROTOCOL_IPv4;
+        sockinfo.dest_address.ipv4       = 0; // listen on 0.0.0.0, iface->address; // use the interface address as our bind address
+        sockinfo.dest_port               = port;
+
+        struct net_socket* socket = net_create_socket(&sockinfo);
+        if(socket == null) {
+            fprintf(stderr, "could not create socket\n");
+            return;
+        }
+
+        // start listening on said socket
+        if(socket->ops->listen(socket, 10) < 0) {
+            fprintf(stderr, "could not listen on socket\n");
+            //net_destroy_socket(socket);
+            return;
+        }
+
+        fprintf(stderr, "socket listening 0x%lX\n", net_lookup_socket(&sockinfo));
+
+        // okay, listening socket is ready, wait for a socket
+        //struct net_socket* peersocket = net_accept_socket(sock);
     }
 }
 

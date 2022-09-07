@@ -130,10 +130,10 @@ static_assert(sizeof(struct e1000_rx_desc) == 16, "e1000_rx_desc is a fixed stru
 struct e1000_tx_desc {
     u64 volatile address;
     u16 volatile length;
-    u8  volatile cso;
+    u8  volatile checksum_offset;
     u8  volatile command;
     u8  volatile status;
-    u8  volatile css;
+    u8  volatile checksum_start;
     u16 volatile special;
 } __packed;
 
@@ -556,6 +556,8 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     if     (ethertype == ETHERTYPE_IPv4) net_protocol = NET_PROTOCOL_IPv4;
     else if(ethertype == ETHERTYPE_IPv6) net_protocol = NET_PROTOCOL_IPv6;
     else if(ethertype == ETHERTYPE_ARP)  net_protocol = NET_PROTOCOL_ARP;
+
+    //TODO drop packets not bound for our MAC address or broadcast
 
     net_receive_packet(&edev->net_device, net_protocol, &data[14], payload_size);
 }

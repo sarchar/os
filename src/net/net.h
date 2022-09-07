@@ -94,6 +94,33 @@ struct net_interface {
     MAKE_HASH_TABLE;
 };
 
+struct net_socket_info {
+    struct net_address source_address;
+    struct net_address dest_address;
+    u16    source_port;
+    u16    dest_port;
+    u8     protocol; // usually NET_PROTOCOL_TCP or NET_PROTOCOL_UDP
+    u8     unused0;
+    u16    unused1;
+};
+
+struct net_socket;
+struct net_socket_ops {
+    s64    (*listen) (struct net_socket*, u16 backlog);
+    s64    (*accept) (struct net_socket*);
+    s64    (*connect)(struct net_socket*);
+    s64    (*close)  (struct net_socket*);
+    s64    (*send)   (struct net_socket*);
+    s64    (*receive)(struct net_socket*);
+};
+
+struct net_socket {
+    struct net_socket_info socket_info;
+    struct net_socket_ops* ops;
+    // TODO send() and recv() function pointers?
+    MAKE_HASH_TABLE;
+};
+
 void net_init();
 
 void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address);
@@ -102,6 +129,9 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length);
 s64  net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length);
+
+struct net_socket* net_create_socket(struct net_socket_info*);
+struct net_socket* net_lookup_socket(struct net_socket_info*);
 
 //TODO These are temporary
 struct net_device* net_device_by_index(u16); //TODO this should be removed eventually and net_device_from_vnode(vfs_find("#netdev=index")) should be used

@@ -7,12 +7,16 @@
 #include "net/arp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
+#include "net/tcp.h"
 #include "stdio.h"
 #include "stdlib.h"
 
 static u16 netdev_next_index = 0;
 
 static struct net_device* netdevs_tmp[256] = { null, }; // TEMP TODO get rid of this and use vfs
+
+// global structure of all open sockets the kernel is aware of
+static struct net_socket* global_net_sockets = null;
 
 void net_init()
 {
@@ -112,5 +116,38 @@ void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u1
         fprintf(stderr, "net: unknown packet protocol 0x%02X\n", net_protocol);
         break;
     }
+}
+
+struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
+{
+    struct net_socket* tmp;
+    HT_FIND(global_net_sockets, *sockinfo, tmp);
+    if(tmp != null) return null;
+
+    switch(sockinfo->protocol) {
+    case NET_PROTOCOL_TCP:
+        // get the size required for the socket structure and allocate it here
+        tmp = tcp_create_socket(sockinfo);
+        break;
+
+    case NET_PROTOCOL_UDP:
+        //TODO
+        break;
+    }
+
+    if(tmp == null) return null;
+    
+    // add socket to global sockets
+    memcpy(&tmp->socket_info, sockinfo, sizeof(struct net_socket_info)); // copy over sockinfo so *_create_socket() doesn't have to
+    HT_ADD(global_net_sockets, socket_info, tmp);
+
+    return tmp;
+}
+
+struct net_socket* net_lookup_socket(struct net_socket_info* sockinfo)
+{
+    struct net_socket* res;
+    HT_FIND(global_net_sockets, *sockinfo, res);
+    return res;
 }
 

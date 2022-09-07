@@ -296,6 +296,7 @@ static void mutex_release(struct mutex* m)
     HT_FIND(m->blocked_tasks, next_ticket, bt);
 
     if(bt != null) {
+        // don't remove from the hash table here, that'll happen in mutex_acquire
         release_lock(m->internal_lock);
         task_unblock(bt->task);
     } else {

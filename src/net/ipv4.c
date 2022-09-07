@@ -9,6 +9,7 @@
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
+#include "net/tcp.h"
 #include "net/udp.h"
 #include "stdio.h"
 #include "stdlib.h"
@@ -100,6 +101,7 @@ u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_addre
 
     u8 ipv4_protocol;
     if(payload_protocol == NET_PROTOCOL_ICMP) ipv4_protocol = IPv4_PROTOCOL_ICMP;
+    else if(payload_protocol == NET_PROTOCOL_TCP) ipv4_protocol = IPv4_PROTOCOL_TCP;
     else if(payload_protocol == NET_PROTOCOL_UDP) ipv4_protocol = IPv4_PROTOCOL_UDP;
     else {
         assert(false, "unsupported protocol");
@@ -205,7 +207,7 @@ void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_l
     char buf1[16], buf2[16];
     ipv4_format_address(buf1, hdr->source_address);
     ipv4_format_address(buf2, hdr->dest_address);
-    //fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s\n", hdr->identification, hdr->protocol, buf1, buf2);
+    fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s size %d\n", hdr->identification, hdr->protocol, buf1, buf2, packet_length);
 
     // look up the net_interface that handles packets addressed to hdr->dest_address
     // if no interface is found, we can ignore the packet. otherwise, deliver the packet to that interface
@@ -214,13 +216,12 @@ void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_l
     search_address.protocol = NET_PROTOCOL_IPv4;
     search_address.ipv4 = hdr->dest_address;
 
-    // look up the device
+    // look up the device, else drop the packet if it's not bound for our interface on this device
     struct net_interface* iface = net_device_find_interface(ndev, &search_address);
     if(iface == null) return;
 
     assert(iface->protocol == NET_PROTOCOL_IPv4, "must be");
     iface->receive_packet(iface, packet, packet_length);
-
 }
 
 static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* packet, u16 packet_length)
@@ -230,8 +231,9 @@ static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* pack
 
     // determine payload
     u8* payload = packet + ((u16)hdr->header_length * 4);
-    u16 payload_length = packet_length - ((u16)hdr->header_length * 4);
-    if(hdr->total_length > packet_length || payload_length >= packet_length) { // payload_length will overflow if hdr->header_length is invalid
+    u16 min_length = min(hdr->total_length, packet_length);
+    u16 payload_length = min_length - ((u16)hdr->header_length * 4);
+    if(hdr->total_length > packet_length || payload_length >= min_length) { // payload_length will overflow if hdr->header_length is invalid
         fprintf(stderr, "ip: dropping packet 0x%04X due to invalid size (hdr->total_length=%d, packet_length=%d, payload_length=%d)\n", hdr->identification, hdr->total_length, packet_length, payload_length);
         return;
     }
@@ -240,6 +242,10 @@ static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* pack
     switch(hdr->protocol) {
     case IPv4_PROTOCOL_ICMP:
         icmp_receive_packet(iface, hdr, payload, payload_length);
+        break;
+
+    case IPv4_PROTOCOL_TCP:
+        tcp_receive_packet(iface, hdr, payload, payload_length);
         break;
 
     case IPv4_PROTOCOL_UDP:
