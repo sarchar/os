@@ -23,10 +23,9 @@ extern u64 _userland_data_end;
 
 extern u64 volatile global_ticks;
 
-
-extern u64 volatile global_ticks;
-
 #define PANIC(c)   kernel_panic(c)
 __noreturn void kernel_panic(u32 error); // hack to not include the color type
+
+__noreturn void kernel_do_work();
 
 #endif

@@ -135,7 +135,7 @@ static void _create_cpu(u8 cpu_index)
 
 extern struct mutex test_mutex;
 
-void ap_main(u8 cpu_index)
+__noreturn void ap_main(u8 cpu_index)
 {
     // from here until _ap_all_go is set, all other CPUs are in a spinlock so we have safe access to the entire system
     //fprintf(stderr, "ap%d: started\n", cpu_index);
@@ -161,8 +161,8 @@ void ap_main(u8 cpu_index)
     // enable the local apic timer (and thus preemptive multitasking)
     apic_enable_local_apic_timer();
 
-    // never return
-    task_idle_forever();
+    // go do kernel work and never return
+    kernel_do_work();
 }
 
 static void spinlock_acquire(struct spinlock* lock)
@@ -266,14 +266,19 @@ static void mutex_acquire(struct mutex* m)
     zero(bt);
     bt->user = __atomic_xadd(&m->lock.users, 1); // increment user count (we're waiting on a ticket)
     bt->task = get_cpu()->current_task;          // need this to unblock the task later
+    assert(get_cpu() != null, "must be in smp");
+    assert(bt->task != null, "must be in a task");
 
     // add this task to the blocked tasks hash table
     HT_ADD(m->blocked_tasks, user, bt);
     m->num_blocked_tasks++;
 
     // place the task into a BLOCKED state so that the scheduler doesn't try to run the task until mutex_release wakes it up
+    // but we have to prevent a race condition here, where we might be pre-empted before entering a mutex blocking state
+    u64 cpu_flags = __cli_saveflags();
     release_lock(m->internal_lock);
     task_yield(TASK_YIELD_MUTEX_BLOCK); // when the task wakes up, it means mutex_release believes we're the proper owner of the next ticket
+    __restoreflags(cpu_flags);
 
     // remove us from the hash table
     acquire_lock(m->internal_lock);

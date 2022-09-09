@@ -139,7 +139,7 @@ s64 arp_send_request(struct net_interface* iface, struct net_address* lookup_add
 
     // ARP is a toplevel layer and interfaces with the hardware device directly
     u16 packet_length;
-    u8* packet = ndev->wrap_packet(ndev, null, &broadcast_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info, &packet_length);
+    u8* packet = ndev->ops->wrap_packet(ndev, null, &broadcast_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info, &packet_length);
     if(packet == null) return errno;
 
     // Deliver the packet to the hardware
@@ -196,7 +196,7 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface_info, st
 
     // ARP is a toplevel layer and interfaces with the hardware device directly
     u16 packet_length;
-    u8* packet = ndev->wrap_packet(ndev, null, dest_hardware_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info, &packet_length);
+    u8* packet = ndev->ops->wrap_packet(ndev, null, dest_hardware_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info, &packet_length);
     if(packet == null) return errno;
 
     // Deliver the packet to the hardware

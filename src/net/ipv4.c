@@ -139,7 +139,7 @@ u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_addre
 
     if(err < 0) return null;
 
-    return iface->net_device->wrap_packet(iface->net_device, iface, &hw_dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info, packet_length);
+    return iface->net_device->ops->wrap_packet(iface->net_device, iface, &hw_dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info, packet_length);
 }
 
 void ipv4_parse_address_string(struct net_address* addr, char const* buf)

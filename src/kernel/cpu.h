@@ -164,6 +164,7 @@ struct cpu {
     struct task* current_task;
     struct task* exited_task; // list of tasks that have exited and need freeing
     struct task* blocked_task; // list of tasks that are waiting on events
+    struct task* volatile unblocked_task; // list of tasks that have been unblocked but need to be added to the current task queue
 
     // local APIC (or other) timer frequency
     u64 timer_frequency;

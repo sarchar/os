@@ -9,9 +9,11 @@
 #define stringify(x) #x
 #define stringify2(x) stringify(x)
 
+            //fprintf(stderr, "assertion failed at " __FILE__ ":" stringify2(__LINE__) ": %s\n", err); 
+extern char const* assert_error_message; // might want this once per cpu more
 #define assert(cond,err) do { \
         if(!(cond)) {           \
-            fprintf(stderr, "assertion failed at " __FILE__ ":" stringify2(__LINE__) ": %s\n", err); \
+            assert_error_message = err;         \
             kernel_panic(COLOR(128, 128, 128)); \
         }                                       \
     } while(false);

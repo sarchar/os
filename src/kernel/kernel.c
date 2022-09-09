@@ -33,6 +33,8 @@
 #include "terminal.h"
 #include "vmem.h"
 
+char const* assert_error_message = null;
+
 extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
 
@@ -769,6 +771,27 @@ void kernel_main(struct multiboot_info* multiboot_info)
     task_enqueue(&cpu->current_task, shell_task);
 
     // never exit
-    task_idle_forever();
+    kernel_do_work();
+}
+
+__noreturn void kernel_do_work()
+{
+    usleep(1000000);
+
+    // the workhorse of the kernel is here. we process high priority tasks
+    // network tx/rx, disk and other i/o requests, and user task switching
+    // the checks below are ordered such that they continue to run while there
+    // is work to do
+    while(true) {
+        //if(!priority_queue.empty()) { work = priority_queue.pop(); do_work(work); continue; }
+
+        if(net_do_work()) continue;
+
+        //if(io_do_work()) continue;
+
+        // if there's no more work to do, yield to any running tasks
+        //fprintf(stderr, "cpu%d: done with work\n", get_cpu()->cpu_index);
+        task_yield(TASK_YIELD_VOLUNTARY); // faster than __hlt since it doesn't wait for preempt
+    }
 }
 

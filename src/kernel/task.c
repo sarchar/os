@@ -153,7 +153,7 @@ void task_enqueue_for(u32 target_cpu_index, struct task* new_task)
 }
 
 // to enqueue, we put new_task at the end of the list
-void task_enqueue(struct task** task_queue, struct task* new_task)
+void task_enqueue(struct task* volatile* task_queue, struct task* new_task)
 {
     u64 cpu_flags = __cli_saveflags();
 
@@ -179,7 +179,7 @@ void task_enqueue(struct task** task_queue, struct task* new_task)
     __restoreflags(cpu_flags);
 }
 
-void task_dequeue(struct task** task_queue, struct task* task)
+void task_dequeue(struct task* volatile* task_queue, struct task* task)
 {
     u64 cpu_flags = __cli_saveflags();
 
@@ -243,14 +243,18 @@ void task_yield(enum TASK_YIELD_REASON reason)
 
     struct cpu* cpu = get_cpu();
     struct task* from_task = cpu->current_task;
-    assert(from_task != null, "can't happen");
+    assert(from_task != null || reason == TASK_YIELD_PREEMPT, "can't happen");
+
+    // we can actually get task_yield() from the timer interrupt, but it's possible we
+    // don't have task in that case. all other yields must be called with valid a current_task.
+    if(from_task == null) return;
 
     // set up the next state for the current task
     assert(from_task->state == TASK_STATE_RUNNING, "running task should have correct state");
     switch(reason) {
     case TASK_YIELD_PREEMPT:
     case TASK_YIELD_VOLUNTARY:
-        from_task->state = TASK_STATE_READY; // preserve EXITED state
+        from_task->state = TASK_STATE_READY;
         break;
     case TASK_YIELD_EXITED:
         from_task->state = TASK_STATE_EXITED;
@@ -258,6 +262,13 @@ void task_yield(enum TASK_YIELD_REASON reason)
     case TASK_YIELD_MUTEX_BLOCK:
         from_task->state = TASK_STATE_BLOCKED;
         break;
+    }
+
+    // it's now safe to transfer unblocked tasks to the running task pool
+    while(cpu->unblocked_task != null) {
+        struct task* unblocked_task = cpu->unblocked_task;
+        task_dequeue(&cpu->unblocked_task, unblocked_task);
+        task_enqueue(&cpu->current_task, unblocked_task);
     }
 
     // if the current task has exited, remove it from the running list (_select_next_task will never give us an EXITED task)
@@ -284,9 +295,27 @@ void task_yield(enum TASK_YIELD_REASON reason)
         to_task = _select_next_task(cpu->current_task->next);
     }
 
-    assert(to_task != null, "no processor should ever have nothing to do");
+    // when all tasks are blocked (there's always at least a kernel work thread on each cpu),
+    // then we may have a situation where to_task is null and we can't switch to any task
+    // so we have to enable interrupts so that IPIs can unblock tasks
+    if(to_task == null) { // will only happen when cpu->current_task set is empty
+        assert(cpu->current_task == null, "there must be no runnable tasks");
 
-    // we have a task, switch to it
+        u32 cpu_flags = __sti_saveflags(); // shadows parent cpu_flags
+        while((to_task = cpu->unblocked_task) == null) { // we wait here until a task becomes unblocked
+            // there's a change we get preempted here, but current_task will be null, so another yield will do nothing
+            __pause_barrier();
+        }
+        __restoreflags(cpu_flags);
+
+        // just move one unblocked task for now
+        task_dequeue(&cpu->unblocked_task, to_task);
+        task_enqueue(&cpu->current_task, to_task);
+        // ... and let to_task become the current task
+        assert(to_task->state == TASK_STATE_READY, "unblocked task must be in ready state");
+    }
+
+    // now have a task, switch to it
     cpu->current_task = to_task;
     cpu->current_task->state = TASK_STATE_RUNNING;
     _task_switch_to(from_task, to_task);
@@ -309,8 +338,11 @@ void task_unblock(struct task* task)
     if(task->cpu == cpu) { // easy case here, just requeue it in READY state
         u64 cpu_flags = __cli_saveflags();
         task_dequeue(&cpu->blocked_task, task);
+
+        // it's not safe to put unblocked tasks directly in the current queue, because
+        // the current queue could be empty and we may be waiting in task_wait_for_task()
         task->state = TASK_STATE_READY;
-        task_enqueue(&cpu->current_task, task);
+        task_enqueue(&cpu->unblocked_task, task);
         __restoreflags(cpu_flags);
     } else {
         // wake up the other cpu and tell it to add the task back to its queue
@@ -342,30 +374,26 @@ void __noreturn task_exit(s64 return_value, bool save_context)
     while(1) ;
 }
 
-// loop forever at low priority, freeing any tasks added to the exited queue
+// perform some task cleanup maintenence like freeing exited task structures
 // TODO use events to know when things have been added?
-__noreturn void task_idle_forever()
+void task_clean()
 {
     struct cpu* cpu = get_cpu();
 
-    while(true) {
-        //TODO wait on an event to be signaled. using an event essentially makes this task
-        //extremely low priority. we won't wake up until a task exits, and then we can safely
-        //free it from memory
-        while(cpu->exited_task != null) {
-            u64 cpu_regs = __cli_saveflags(); // disable preemption
-            struct task* task = cpu->exited_task;
-            task_dequeue(&cpu->exited_task, task);
-            __restoreflags(cpu_regs);
+    u64 cpu_flags = __cli_saveflags(); // disable preemption
+    while(cpu->exited_task != null) {
+        struct task* task = cpu->exited_task;
+        task_dequeue(&cpu->exited_task, task);
 
-            // print exit code
-            fprintf(stderr, "cpu%d: task %d exited (ret = %d)\n", cpu->cpu_index, task->task_id, task->return_value);
-            task_free(task); // safe now, because task != current_task
-        }
+        __restoreflags(cpu_flags); // can't have interrupts disabled during fprintf
 
-        // wait for something interesting to happen
-        // TODO wait on an event
-        __hlt();
+        // print exit code
+        fprintf(stderr, "cpu%d: task %d exited (ret = %d)\n", cpu->cpu_index, task->task_id, task->return_value);
+        task_free(task); // safe now, because task != current_task
+
+        cpu_flags = __cli_saveflags();
     }
+
+    __restoreflags(cpu_flags);
 }
 

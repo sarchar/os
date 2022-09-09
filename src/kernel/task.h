@@ -61,7 +61,7 @@ struct task {
     bool save_context;
     s8   priority;
     u16  padding1;
-    u32  padding3;
+    u32  padding2;
 
     // private vmem space
     intp vmem;
@@ -85,8 +85,8 @@ enum TASK_YIELD_REASON {
 
 void task_set_priority(s8);
 
-__noreturn void task_idle_forever();
 void task_yield(enum TASK_YIELD_REASON);
+void task_clean();
 
 // exit the current task
 __noreturn void task_exit(s64, bool);
@@ -94,8 +94,8 @@ __noreturn void task_exit(s64, bool);
 // notify that a task can be unblocked, this will often happen on a different cpu
 void task_unblock(struct task*);
 
-void task_enqueue(struct task**, struct task*);
+void task_enqueue(struct task* volatile*, struct task*);
 void task_enqueue_for(u32, struct task*);
-void task_dequeue(struct task**, struct task*);
+void task_dequeue(struct task* volatile*, struct task*);
 
 #endif

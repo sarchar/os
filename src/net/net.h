@@ -58,6 +58,13 @@ struct net_interface;
 typedef s64 (net_wrap_packet_callback)(struct net_interface* iface, u8*, void*);
 typedef u8* (net_device_wrap_packet_function)(struct net_device* ndev, struct net_interface* iface, struct net_address* dest, u8 net_protocol, u16 packet_size, net_wrap_packet_callback*, void*, u16*);
 typedef s64 (net_device_send_packet_function)(struct net_device* ndev, u8* packet, u16 packet_length);
+typedef u8* (net_device_receive_packet_function)(struct net_device* ndev, u8* net_protocol, u16* packet_length);
+
+struct net_device_ops {
+    net_device_wrap_packet_function*    wrap_packet;    // packet building
+    net_device_send_packet_function*    send_packet;    // actual transmission of packets
+    net_device_receive_packet_function* receive_packet; // receive packet (and parsing)
+};
 
 // There's a one-to-one mapping from net_device to hardware addresses. They're generally created by network drivers
 // but virtual network devices can exist.
@@ -71,8 +78,7 @@ struct net_device {
     u16 unused0;
     u32 unused1;
 
-    net_device_wrap_packet_function* wrap_packet;
-    net_device_send_packet_function* send_packet;
+    struct net_device_ops* ops;
 };
 
 typedef void (net_interface_receive_packet_function)(struct net_interface*, u8* packet_start, u16 packet_length);
@@ -122,8 +128,9 @@ struct net_socket {
 };
 
 void net_init();
+bool net_do_work();
 
-void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address);
+void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address, struct net_device_ops* ops);
 void net_device_register_interface(struct net_device* ndev, struct net_interface* iface);
 struct net_interface* net_device_find_interface(struct net_device* ndev, struct net_address* search_address);
 

@@ -182,21 +182,24 @@ void terminal_putc(u16 c)
 // usually only stepped by 1 after printing a character
 void terminal_step(u32 steps)
 {
-    while(steps-- != 0) {
-        current_terminal.cursor_x += 1;
-        if(current_terminal.cursor_x >= current_terminal.width) {
-            current_terminal.cursor_x = 0;
-            current_terminal.cursor_y += 1;
-            if(current_terminal.cursor_y >= current_terminal.height) {
-                current_terminal.cursor_y = current_terminal.height - 1;
-                terminal_scroll(1);
-            }
+    u32 nlines = 0;
+
+    current_terminal.cursor_x += steps;
+    while(current_terminal.cursor_x >= current_terminal.width) {
+        current_terminal.cursor_x -= current_terminal.width;
+        current_terminal.cursor_y += 1;
+        if(current_terminal.cursor_y >= current_terminal.height) {
+            current_terminal.cursor_y = current_terminal.height - 1;
+            nlines++;
         }
     }
+
+    terminal_scroll(nlines);
 }
 
 void terminal_scroll(u32 lines)
 {
+    if(lines == 0) return;
     current_terminal.window_y += lines;
     terminal_redraw();
 }

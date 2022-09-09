@@ -14,6 +14,7 @@
 #include "paging.h"
 #include "palloc.h"
 #include "pci.h"
+#include "smp.h"
 #include "stdio.h"
 #include "stdlib.h"
 #include "vmem.h"
@@ -156,17 +157,26 @@ struct e1000_device {
     u16  tx_desc_count;
     u16  rx_desc_next;
     u16  tx_desc_next;
+
+    struct spinlock rx_lock;
 };
 
 static void _initialize_e1000(struct pci_device_info* dev, u8);
 static void _enable_interrupts(struct e1000_device*);
 static void _disable_interrupts(struct e1000_device*);
 static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata);
-static void _receive_packets(struct e1000_device*);
-static u8* _net_wrap_e1000_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, 
-                                  u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata, 
-                                  u16* final_size);
-static s64  _net_send_e1000_packet(struct net_device*, u8*, u16);
+static u8*  _receive_packet(struct e1000_device*, u8*, u16*);
+static u8*  _net_wrap_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, 
+                             u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata, 
+                             u16* final_size);
+static u8*  _net_receive_packet(struct net_device*, u8*, u16*);
+static s64  _net_send_packet(struct net_device*, u8*, u16);
+
+static struct net_device_ops e1000_net_device_ops = {
+    .receive_packet = &_net_receive_packet,
+    .send_packet    = &_net_send_packet,
+    .wrap_packet    = &_net_wrap_packet
+};
 
 static bool _find_e1000_devices_cb(struct pci_device_info* dev, void* userinfo)
 {
@@ -189,21 +199,21 @@ static bool _find_e1000_devices_cb(struct pci_device_info* dev, void* userinfo)
 
 void e1000_load()
 {
-    struct _e1000_dev {
-        struct _e1000_dev* next;
+    struct found_devices {
+        struct found_devices* next;
         struct pci_device_info* dev;
-    }* e1000_devices = null;
+    }* found_devices = null;
 
-    pci_iterate_vendor_devices(0x8086, _find_e1000_devices_cb, &e1000_devices);
+    pci_iterate_vendor_devices(0x8086, _find_e1000_devices_cb, &found_devices);
 
-    u8 eth_index = 0;
-    while(e1000_devices) {
-        _initialize_e1000(e1000_devices->dev, eth_index);
+    u8 devindex = 0;
+    while(found_devices) {
+        _initialize_e1000(found_devices->dev, devindex);
 
-        struct _e1000_dev* next = e1000_devices->next;
-        kfree(e1000_devices);
-        e1000_devices = next;
-        eth_index++;
+        struct found_devices* next = found_devices->next;
+        kfree(found_devices);
+        found_devices = next;
+        devindex++;
     }
 }
 
@@ -246,7 +256,7 @@ static void _detect_eeprom(struct e1000_device* edev)
         //__pause(); // not necessary?
     }
 
-    fprintf(stderr, "e1000: EEPROM %sdetected\n", edev->has_eeprom ? "" : "not ");
+//    fprintf(stderr, "e1000: EEPROM %sdetected\n", edev->has_eeprom ? "" : "not ");
 }
 
 static s64 _read_mac_address(struct e1000_device* edev)
@@ -377,9 +387,7 @@ static void _register_network_device(struct e1000_device* edev, u8 eth_index)
     memcpy(hardware_address.mac, edev->mac, 6);
 
     // initialize the network device
-    net_init_device(&edev->net_device, "e1000", eth_index, &hardware_address); // will create vnode #device=net:N #driver=e1000:M
-    edev->net_device.send_packet = &_net_send_e1000_packet;
-    edev->net_device.wrap_packet = &_net_wrap_e1000_packet;
+    net_init_device(&edev->net_device, "e1000", eth_index, &hardware_address, &e1000_net_device_ops); // will create vnode #device=net:N #driver=e1000:M
 
     // TODO TEMP create an IPv4 interface on this device
     struct net_address local_addr;
@@ -390,6 +398,8 @@ static void _register_network_device(struct e1000_device* edev, u8 eth_index)
 
 static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 {
+    declare_spinlock(rx_lock_init);
+
     fprintf(stderr, "e1000: initializing device %04X:%04X (interrupt_line = %d)\n", pci_dev->config->vendor_id, pci_dev->config->device_id, pci_dev->config->h0.interrupt_line);
     struct e1000_device* edev = (struct e1000_device*)malloc(sizeof(struct e1000_device));
     zero(edev);
@@ -397,6 +407,7 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
     edev->pci_device = pci_dev;
     edev->bar0_mmio  = pci_device_is_bar_mmio(pci_dev, 0);
     edev->bar0       = pci_device_map_bar(pci_dev, 0);
+    edev->rx_lock    = rx_lock_init;
     fprintf(stderr, "e1000: bar0 (type = %s) at addr 0x%lX\n", edev->bar0_mmio ? "mmio" : "io", edev->bar0);
     _detect_eeprom(edev);
     _read_mac_address(edev);
@@ -448,18 +459,6 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 
     // trigger a link change interrupt
     //_write_command(edev, E1000_REG_INTERRUPT_CAUSE_SET, E1000_IFLAG_LINK_STATUS_CHANGE);
-
-    //!// TEMP send a packet
-    //!// the buffer below is an ICMP ping packet from 192.168.1.32 to 192.168.1.64
-    //!s64 e1000_transmit_packet(struct e1000_device* edev, u8* dest_mac, u16 ethertype, intp data, u16 length);
-    //!u8 buf[] = {
-    //!        0x45, 0x00, 0x00, 0x3C, 0x82, 0x47, 0x00, 0x00, 0x20, 0x01, 0x94, 0xC9, 0xC0, 0xA8, 0x01, 0x20, 
-    //!        0xC0, 0xA8, 0x01, 0x40, 0x08, 0x00, 0x48, 0x5C, 0x01, 0x00, 0x04, 0x00, 0x61, 0x62, 0x63, 0x64, 
-    //!        0x65, 0x66, 0x67, 0x68, 0x69, 0x6A, 0x6B, 0x6C, 0x6D, 0x6E, 0x6F, 0x70, 0x71, 0x72, 0x73, 0x74, 
-    //!        0x75, 0x76, 0x77, 0x61, 0x62, 0x63, 0x64, 0x65, 0x66, 0x67, 0x68, 0x69
-    //!};
-    //!u8 dest[6] = { 0x00, 0x15, 0x5d, 0x89, 0xad, 0x11 };
-    //!e1000_transmit_packet(edev, dest, ETHERTYPE_IPv4, (intp)buf, sizeof(buf));
 }
 
 static void _enable_interrupts(struct e1000_device* edev)
@@ -491,7 +490,7 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
 
     if(cause & E1000_IFLAG_RX_TIMER_INT_RING_0) {
         // packet received
-        _receive_packets(edev);
+        //TODO notify packets instead of //_receive_packets(edev); ?
         cause &= ~E1000_IFLAG_RX_TIMER_INT_RING_0;
     }
 
@@ -518,16 +517,16 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
     }
 }
 
-static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc)
+static u8* _parse_rx_desc(struct e1000_rx_desc* desc, u8* net_protocol, u16* packet_length)
 {
     // safety check for bogus packets
     if(desc->length > (PAGE_SIZE >> 1)) {
         fprintf(stderr, "e1000: invalid packet of size %d found, dropping\n", desc->length);
-        return;
+        return null;
     }
 
-    u8* data = (u8*)desc->address;
-    u16 ethertype = ntohs(*(u16*)&data[12]);
+    u8* data         = (u8*)desc->address;
+    u16 ethertype    = ntohs(*(u16*)&data[12]);
     u16 payload_size = desc->length - 14 - 4; // 14 bytes for header, 4 bytes for FCS (ethernet CRC)
     u32 ethernet_crc = ntohl(*(u32*)&data[desc->length - 4]);
 
@@ -541,43 +540,47 @@ static void _handle_packet(struct e1000_device* edev, struct e1000_rx_desc* desc
     //fprintf(stderr, "        payload size    = %d\n", payload_size);
     //fprintf(stderr, "        ethernet crc    = 0x%08X%s\n", ethernet_crc, (desc->status & E1000_RXDESC_STATUS_FLAG_IGNORE_CHECKSUM) ? " (ignored)" : "");
 
-    //if(ethertype == ETHERTYPE_ARP) {
-    //    fprintf(stderr, "        data            =\n");
-    //    for(u32 i = 0; i < desc->length; i++) {
-    //        fprintf(stderr, "%02X ", data[i]);
-    //    }
-    //}
-
     // drop this packet if it's too large
-    if(payload_size > 1500) return;
+    if(payload_size > 1500) return null;
 
     //TODO CRCs?
-    u8 net_protocol = NET_PROTOCOL_UNSUPPORTED;
-    if     (ethertype == ETHERTYPE_IPv4) net_protocol = NET_PROTOCOL_IPv4;
-    else if(ethertype == ETHERTYPE_IPv6) net_protocol = NET_PROTOCOL_IPv6;
-    else if(ethertype == ETHERTYPE_ARP)  net_protocol = NET_PROTOCOL_ARP;
+    unused(ethernet_crc);
+    switch(ethertype) {
+    case ETHERTYPE_IPv4: *net_protocol = NET_PROTOCOL_IPv4;        break;
+    case ETHERTYPE_IPv6: *net_protocol = NET_PROTOCOL_IPv6;        break;
+    case ETHERTYPE_ARP : *net_protocol = NET_PROTOCOL_ARP;         break;
+    default:             *net_protocol = NET_PROTOCOL_UNSUPPORTED; break;
+    }
 
     //TODO drop packets not bound for our MAC address or broadcast
 
-    net_receive_packet(&edev->net_device, net_protocol, &data[14], payload_size);
+    *packet_length = payload_size;
+    return &data[14];
 }
 
-static void _receive_packets(struct e1000_device* edev)
+static u8* _receive_packet(struct e1000_device* edev, u8* net_protocol, u16* packet_length)
 {
     struct e1000_rx_desc* desc;
+    u8* ret = null;
 
-    while(((desc = &edev->rx_desc[edev->rx_desc_next])->status & E1000_RXTXDESC_STATUS_FLAG_DONE) != 0) {
-        //fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
-        assert(desc->status & E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET, "multi-frame packets not supported atm. EOP must be set on all packets");
+    acquire_lock(edev->rx_lock);
 
-        // process the packet before updating the tail pointer. this allows the packet to be copied before memory is reused
-        _handle_packet(edev, desc);
+    if(((desc = &edev->rx_desc[edev->rx_desc_next])->status & E1000_RXTXDESC_STATUS_FLAG_DONE) == 0) goto done;
 
-        // tell the hardware the packet is processed
-        desc->status = 0;  // clear FLAG_DONE especially
-        _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_next);
-        edev->rx_desc_next = (edev->rx_desc_next + 1) % edev->rx_desc_count;
-    }
+    //fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
+    assert(desc->status & E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET, "multi-frame packets not supported atm. EOP must be set on all packets");
+
+    // process the packet before updating the tail pointer. this allows the packet to be copied before memory is reused
+    ret = _parse_rx_desc(desc, net_protocol, packet_length);
+
+    // tell the hardware the packet is processed
+    desc->status = 0;  // clear FLAG_DONE especially
+    _write_command(edev, E1000_REG_RXDESC_TAIL, edev->rx_desc_next);
+    edev->rx_desc_next = (edev->rx_desc_next + 1) % edev->rx_desc_count;
+
+done:
+    release_lock(edev->rx_lock);
+    return ret;
 }
 
 static s64 _transmit_packet(struct e1000_device* edev, u8* data, u16 length)
@@ -610,18 +613,22 @@ static s64 _transmit_packet(struct e1000_device* edev, u8* data, u16 length)
     return length;
 }
 
-static s64 _net_send_e1000_packet(struct net_device* ndev, u8* packet, u16 packet_length)
+static u8* _net_receive_packet(struct net_device* ndev, u8* net_protocol, u16* packet_length)
 {
-    //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
-    struct e1000_device* edev = (struct e1000_device*)((intp)ndev - offsetof(struct e1000_device, net_device));
+    struct e1000_device* edev = containerof(ndev, struct e1000_device, net_device);
+    return _receive_packet(edev, net_protocol, packet_length);
+}
+
+static s64 _net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length)
+{
+    struct e1000_device* edev = containerof(ndev, struct e1000_device, net_device);
     return _transmit_packet(edev, packet, packet_length);
 }
 
 // TODO maybe there should be an ethernet layer outside of the e1000 driver
-static u8* _net_wrap_e1000_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata, u16* packet_size)
+static u8* _net_wrap_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata, u16* packet_size)
 {
-    //struct e1000_device* edev = container_of(struct e1000_device, net_device, ndev);
-    struct e1000_device* edev = (struct e1000_device*)((intp)ndev - offsetof(struct e1000_device, net_device));
+    struct e1000_device* edev = containerof(ndev, struct e1000_device, net_device);
 
     // validate the destination address
     if(dest_address->protocol != NET_PROTOCOL_ETHERNET) {

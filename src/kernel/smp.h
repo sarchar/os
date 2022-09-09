@@ -68,12 +68,12 @@ struct mutex {
 
 extern struct lock_functions mutexlock_functions;
 
-#define MUTEX_INITIALIZER {                    \
-        .lock = TICKETLOCK_INITIALIZER,        \
-        .internal_lock = SPINLOCK_INITIALIZER, \
-        .blocked_tasks = null,                 \
-        .num_blocked_tasks = 0,                \
-        ._f = &mutexlock_functions,            \
+#define MUTEX_INITIALIZER {                           \
+        .lock              = TICKETLOCK_INITIALIZER,  \
+        .internal_lock     = SPINLOCK_INITIALIZER,    \
+        .blocked_tasks     = null,                    \
+        .num_blocked_tasks = 0,                       \
+        ._f                = &mutexlock_functions,    \
     }
 
 #define declare_mutex(n) struct mutex n = MUTEX_INITIALIZER

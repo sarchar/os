@@ -22,13 +22,47 @@ void net_init()
 {
 }
 
+static bool net_do_rx_work()
+{
+    bool res = false;
+
+    // TODO get notification from interfaces that there's data on the line
+    u16 num_devs = netdev_next_index;
+    for(u16 i = 0; i < num_devs; i++) {
+        struct net_device* ndev = netdevs_tmp[i];
+        if(ndev == null) continue;
+
+        u8 net_protocol;
+        u16 packet_length;
+        u8* packet;
+        while((packet = ndev->ops->receive_packet(ndev, &net_protocol, &packet_length)) != null) { //TODO limit the # of packets we acquire per call to net_do_rx_work()?
+            net_receive_packet(ndev, net_protocol, packet, packet_length);
+            res = true;
+        }
+    }
+
+    return res;
+}
+
+static bool net_do_tx_work()
+{
+    return false;
+}
+
+// return true if we "did work"
+bool net_do_work()
+{
+    return net_do_rx_work() || net_do_tx_work();
+}
+
 // will create vnode #device=net:N #driver=driver_name:M
-void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address)
+void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address, struct net_device_ops* ops)
 {
     zero(ndev);
 
     ndev->hardware_address = *hardware_address;
     ndev->index            = __atomic_xinc(&netdev_next_index);
+    ndev->ops              = ops;
 
     char buf[256];
     sprintf(buf, "#device=net:%d #driver=%s:%d", ndev->index, driver_name, driver_index);
@@ -92,8 +126,8 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
 
 s64 net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 {
-    if(ndev->send_packet == null) return -ENOTSUP;
-    return ndev->send_packet(ndev, packet, packet_length);
+    if(ndev->ops->send_packet == null) return -ENOTSUP;
+    return ndev->ops->send_packet(ndev, packet, packet_length);
 }
 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)
