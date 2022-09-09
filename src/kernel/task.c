@@ -246,7 +246,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
     assert(from_task != null || reason == TASK_YIELD_PREEMPT, "can't happen");
 
     // we can actually get task_yield() from the timer interrupt, but it's possible we
-    // don't have task in that case. all other yields must be called with valid a current_task.
+    // don't have a task in that case. all other yields must be called with valid a current_task.
     if(from_task == null) return;
 
     // set up the next state for the current task

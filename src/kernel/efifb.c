@@ -9,6 +9,7 @@
 #include "multiboot2.h"
 #include "paging.h"
 #include "terminal.h"
+#include "string.h"
 
 struct efifb {
     u32* framebuffer;
@@ -54,7 +55,7 @@ void efifb_init()
     efifb_clear(COLOR(0, 0, 0));
     
     // now that there's a working framebuffer, refresh the terminal to it
-    terminal_redraw();
+    terminal_redraw(0);
     
     // draw an 8x8 square in the corner to indicate that we made it this far
     for(u32 y = 0; y < 8; y++) {
@@ -115,3 +116,9 @@ void efifb_clear(color clear_color)
     }
 }
 
+// scroll the entire screen up by y pixels
+void efifb_scroll(u32 y) 
+{
+    u8* fb = (u8*)global_efifb.framebuffer;
+    memcpy(fb, &fb[y * global_efifb.pitch], (global_efifb.height - y) * global_efifb.pitch);
+}

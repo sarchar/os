@@ -200,15 +200,31 @@ void terminal_step(u32 steps)
 void terminal_scroll(u32 lines)
 {
     if(lines == 0) return;
+
+    u64 cpu_flags = __cli_saveflags();
+
     current_terminal.window_y += lines;
-    terminal_redraw();
+
+    // issue a simple scroll in the efi
+    if(lines < current_terminal.height) {
+        efifb_scroll(lines * terminal_font->charsize);
+
+        // and draw the final n lines
+        terminal_redraw(current_terminal.height - lines);
+    } else {
+        // completely new screen
+        efifb_clear(COLOR(0, 0, 0));
+        terminal_redraw(0);
+    }
+
+    __restoreflags(cpu_flags);
 }
 
-void terminal_redraw()
+void terminal_redraw(u32 sy)
 {
     u64 cpu_flags = __cli_saveflags();
 
-    for(u32 y = 0; y < current_terminal.height; y++) {
+    for(u32 y = sy; y < current_terminal.height; y++) {
         for(u32 x = 0; x < current_terminal.width; x++) {
             u8 c = current_terminal.buffer[TERMINAL_VIRTUAL_Y(y) * current_terminal.width + x];
             terminal_setc(c, x, y);

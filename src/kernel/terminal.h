@@ -6,6 +6,6 @@ void terminal_setc(u16 c, u32 cx, u32 cy);
 void terminal_putc(u16 c);
 void terminal_step(u32 steps);
 void terminal_scroll(u32 lines);
-void terminal_redraw();
+void terminal_redraw(u32);
 
 #endif

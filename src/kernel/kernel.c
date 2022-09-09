@@ -104,9 +104,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
     paging_init();     // unmaps a large portion of lowmem
 
     // a few modules have to map new memory
-    efifb_map();       // the EFI framebuffer needs virtual mapping, also re-enables the screen
-    terminal_redraw(); // remapping efifb may have missed some putpixel calls
-    apic_map();        // the APIC needs memory mapping
+    efifb_map();        // the EFI framebuffer needs virtual mapping, also re-enables the screen
+    terminal_redraw(0); // remapping efifb may have missed some putpixel calls
+    apic_map();         // the APIC needs memory mapping
 
     // add high memory blocks to palloc 
     palloc_init_highmem();
