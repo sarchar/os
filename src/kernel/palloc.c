@@ -54,9 +54,10 @@ static inline bool palloc_togglebit(struct free_page* base, u8 order, u8* nb)
         if(base_addr < regions[i].start || (base_addr + block_size) >= (regions[i].start + regions[i].size)) continue;
 
         // base_addr is in this region, determine the bitmap block index
-        // since region start could be an odd page, we'll clear that bit to make sure
-        // the index calculation is correct
-        u64 index = (base_addr - (regions[i].start & ~PAGE_SIZE)) >> (order + 1 + PAGE_SHIFT);
+        // since region start could start in the middle of the left buddy, align down to get the
+        // the index calculation correct
+        u64 aligned_region_start = regions[i].start & ~((1 << (order + 1 + PAGE_SHIFT)) - 1);
+        u64 index = (base_addr - aligned_region_start) >> (order + 1 + PAGE_SHIFT);
 
         // flip the bit
         regions[i].maps[order][index >> 3] ^= 1 << (index & 7);
@@ -117,7 +118,7 @@ static void _initialize_region(struct region* r, intp region_start, u64 region_s
         }
         free_page_head[order]->next = fp;
 
-#if PALLOC_VERBOSE > 3
+#if PALLOC_VERBOSE > 4
         fprintf(stderr, "palloc: adding block at order=%d address=$%lX size=%llu next=$%lX\n", order, (intp)region_start, region_size, (intp)fp->next);
 #endif
 
@@ -255,8 +256,8 @@ intp palloc_claim(u8 n) // allocate 2^n pages
     free_page_head[order]->next = left->next;
     if(free_page_head[order]->next != null) free_page_head[order]->next->prev = null;
 
-#if PALLOC_VERBOSE > 2
-    fprintf(stderr, "palloc: removed block $%lX at order %d\n", (intp)left, order);
+#if PALLOC_VERBOSE > 1
+    fprintf(stderr, "palloc: removed block $%lX at order %d (new free_page_head[order]->next = 0x%lX)\n", (intp)left, order, free_page_head[order]->next);
 #endif
 
     // split blocks all the way down to the requested size, if necessary
@@ -265,15 +266,17 @@ intp palloc_claim(u8 n) // allocate 2^n pages
     
         // split 'fp' into two block_size/2 blocks
         struct free_page* right = (struct free_page*)((u8*)left + (block_size >> 1));
-
-#if PALLOC_VERBOSE > 2
-        fprintf(stderr, "palloc: splitting block order %d address=$%lX right=$%lX\n", order, (intp)left, (intp)right);
-#endif
+        assert(((intp)left ^ (1 << ((order - 1) + PAGE_SHIFT))) == (intp)right, "verifying buddy address");
 
         // immediately toggle the bit out of the order the block comes from, before any splits
-        palloc_togglebit(left, order, null);
+        u8 bit;
+        palloc_togglebit(left, order, &bit);
 
-        assert(((intp)left ^ (1 << ((order - 1) + PAGE_SHIFT))) == (intp)right, "verifying buddy address");
+#if PALLOC_VERBOSE > 2
+        fprintf(stderr, "palloc: splitting block order %d left=$%lX right=$%lX (new bit = $%02X)\n", order, (intp)left, (intp)right, bit);
+#else
+        unused(bit);
+#endif
 
         // add the right node to the free page list at the lower order. the bitmap bit will be 
         // toggled below/next time through the loop
@@ -287,7 +290,16 @@ intp palloc_claim(u8 n) // allocate 2^n pages
     }
 
     // toggle the left bit
-    palloc_togglebit(left, order, null);
+    u8 bit;
+    bool buddy_valid = palloc_togglebit(left, order, &bit);
+
+#if PALLOC_VERBOSE > 1
+    fprintf(stderr, "palloc: marked block $%lX order %d used (new bit = $%02X) buddy_valid=%d\n", left, order, bit, (u8)buddy_valid);
+#else
+    unused(bit);
+    unused(buddy_valid);
+#endif
+
 
     // release lock
     release_lock(palloc_lock);
@@ -325,8 +337,7 @@ void palloc_abandon(intp base, u8 n)
         fprintf(stderr, "palloc: marking block $%lX order %d free (new bit = $%02X) buddy_valid=%d\n", base, order, bit, (u8)buddy_valid);
 #endif
 
-        // a released block with no buddy must stay at this level, otherwise
-        // try combining to larger blocks
+        // a released block with no buddy must stay at this level, otherwise try combining to larger blocks
         if(buddy_valid && (bit == 0) && order < PALLOC_MAX_ORDER - 1) {
 #if PALLOC_VERBOSE > 2
             fprintf(stderr, "palloc: combining blocks base=$%lX and buddy=$%lX into order %d\n", base, buddy_addr, order + 1);
