@@ -333,7 +333,7 @@ DEFINE_INTERRUPT_HANDLER(0x81, interrupt_syscall)
         // terminate the program now
         // TODO need some sort of "crash"ing the program concept, like segmentation faults in linux.
         // TODO maybe task_abort(reason). Yeah, I kinda like that.
-        task_exit(-EINVAL, false);
+        task_exit(-EINVAL);
     }
 
     __restoreflags(cpu_flags);

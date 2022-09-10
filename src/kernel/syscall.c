@@ -25,7 +25,7 @@ s64 syscall_do(u64 no, u64 arg0, u64 arg1, u64 arg2, u64 arg3, u64 arg4, u64 arg
 
 static __noreturn void _exit(u64 arg0)
 {
-    task_exit(arg0, false);
+    task_exit(arg0);
 }
 
 static s64 _usleep(u64 us)

@@ -38,6 +38,7 @@ char const* assert_error_message = null;
 extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
 
+static s64 echo_server(struct task*);
 static bool volatile exit_shell = false;
 
 __noreturn void kernel_panic(u32 error)
@@ -649,36 +650,11 @@ static void run_command(char* cmdbuffer)
         u16 port = atoi(portstr);
         if(port == 0) port = 8000;
 
-        // create a listening socket on port 23 (telnet)
-        struct net_socket_info sockinfo;
-        zero(&sockinfo);
-        sockinfo.protocol                = NET_PROTOCOL_TCP;
-        sockinfo.source_address.protocol = NET_PROTOCOL_IPv4;
-        sockinfo.dest_address.protocol   = NET_PROTOCOL_IPv4;
-        sockinfo.dest_address.ipv4       = 0; // listen on 0.0.0.0, iface->address; // use the interface address as our bind address
-        sockinfo.dest_port               = port;
+        // start the echo server
+        struct task* echo_server_task = task_create(echo_server, (intp)port, false);
+        struct cpu* cpu = get_cpu();
+        task_enqueue(&cpu->current_task, echo_server_task);
 
-        struct net_socket* socket = net_create_socket(&sockinfo);
-        if(socket == null) {
-            fprintf(stderr, "could not create socket\n");
-            return;
-        }
-
-        // start listening on said socket
-        if(socket->ops->listen(socket, 10) < 0) {
-            fprintf(stderr, "could not listen on socket\n");
-            //net_destroy_socket(socket);
-            return;
-        }
-
-        fprintf(stderr, "socket listening 0x%lX\n", net_lookup_socket(&sockinfo));
-
-        // okay, listening socket is ready, wait for a socket
-        struct net_socket* peersocket = socket->ops->accept(socket);
-
-        char buf[16];
-        ipv4_format_address(buf, peersocket->socket_info.source_address.ipv4);
-        fprintf(stderr, "got connection from %s:%d\n", buf, peersocket->socket_info.source_port);
     }
 }
 
@@ -758,6 +734,42 @@ static s64 shell(struct task* task)
 
     fprintf(stderr, "\n...exiting kernel shell...\n");
     return 0;
+}
+
+static s64 echo_server(struct task* task)
+{
+    // create a listening socket on port 23 (telnet)
+    struct net_socket_info sockinfo;
+    zero(&sockinfo);
+    sockinfo.protocol                = NET_PROTOCOL_TCP;
+    sockinfo.source_address.protocol = NET_PROTOCOL_IPv4;
+    sockinfo.dest_address.protocol   = NET_PROTOCOL_IPv4;
+    sockinfo.dest_address.ipv4       = 0; // listen on 0.0.0.0, iface->address; // use the interface address as our bind address
+    sockinfo.dest_port               = (u16)task->userdata;
+
+    struct net_socket* socket = net_create_socket(&sockinfo);
+    if(socket == null) {
+        fprintf(stderr, "could not create socket\n");
+        return -1;
+    }
+
+    // start listening on said socket
+    if(socket->ops->listen(socket, 10) < 0) {
+        fprintf(stderr, "could not listen on socket\n");
+        //net_destroy_socket(socket);
+        return -1;
+    }
+
+    fprintf(stderr, "socket listening 0x%lX\n", net_lookup_socket(&sockinfo));
+
+    // okay, listening socket is ready, wait for a socket
+    while(true) {
+        struct net_socket* peersocket = socket->ops->accept(socket);
+
+        char buf[16];
+        ipv4_format_address(buf, peersocket->socket_info.source_address.ipv4);
+        fprintf(stderr, "got connection from %s:%d\n", buf, peersocket->socket_info.source_port);
+    }
 }
 
 void kernel_main(struct multiboot_info* multiboot_info) 

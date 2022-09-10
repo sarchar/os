@@ -323,7 +323,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     fprintf(stderr, "        syn=%d ack=%d rst=%d fin=%d push=%d urgent=%d data_offset=%d checksum=0x%04X\n",
             hdr->sync, hdr->ack, hdr->reset, hdr->finish, hdr->push, hdr->urgent, hdr->data_offset, hdr->checksum);
 
-    // The 4-tuple (source_address, source_port, (dest_address, dest_port) defines a socket 
+    // The 4-tuple (source_address, source_port, dest_address, dest_port) defines a socket 
     // Look it up first, and take action on whether the socket exists or is new.
     struct net_socket_info sockinfo = {
         .protocol           = NET_PROTOCOL_TCP,

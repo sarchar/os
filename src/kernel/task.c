@@ -63,7 +63,7 @@ static __noreturn void _task_entry_kernel()
     __sti();
 
     // jump to the main function, and if it returns call task_exit
-    task_exit(task->entry(task), true);
+    task_exit(task->entry(task));
 }
 
 struct task* task_create(task_entry_point_function* entry, intp userdata, bool is_user)
@@ -116,7 +116,7 @@ intp task_allocate_stack(intp vmem, u64* stack_size, bool is_user)
 {
     intp ret = palloc_claim(TASK_STACK_SIZE);
 
-    // physical addresses are identity mapped, so we can safely clear the stack here
+    // palloc addresses are identity mapped, so we can safely clear the stack here
     memset64((void*)ret, 0, (1ULL << (TASK_STACK_SIZE + PAGE_SHIFT - 3)));
 
     // map the stack into virtual memory
@@ -271,39 +271,43 @@ void task_yield(enum TASK_YIELD_REASON reason)
         task_enqueue(&cpu->current_task, unblocked_task);
     }
 
-    // if the current task has exited, remove it from the running list (_select_next_task will never give us an EXITED task)
+    // if the current task has exited or otherwise can't continue running, remove it from the running list
     struct task* to_task;
-    if(from_task->state == TASK_STATE_EXITED) {
+    switch(from_task->state) {
+    case TASK_STATE_EXITED:
         task_dequeue(&cpu->current_task, from_task);
-        //fprintf(stderr, "task: putting task %d into exited queue\n", from_task->task_id);
 
         // when a task exits, we must have it to be freed later. if it is freed now, the stack *that we're currently using*
         // will be released to palloc, and very likely get destroyed. thus, all processors must have a cleanup task that occassionally runs
         // see task_idle_forever()
         task_enqueue(&cpu->exited_task, from_task);
 
-        // select the next task starting with the current task
+        // select the next task starting with the next task
         to_task = _select_next_task(cpu->current_task);
-    } else if(from_task->state == TASK_STATE_BLOCKED) { // no need to keep iterating over this task if its blocked, so move it to a different queue
+        break;
+
+    case TASK_STATE_BLOCKED: // move blocked tasks to the blocked task wait list
         task_dequeue(&cpu->current_task, from_task);
-//        fprintf(stderr, "task: putting task %d into blocked queue\n", from_task->task_id);
         task_enqueue(&cpu->blocked_task, from_task);
+
         // select next task as normal
         to_task = _select_next_task(cpu->current_task);
-    } else {
-        // select the next task starting with the next
+        break;
+
+    default: // the current task can continue running, so we select starting at the next task
         to_task = _select_next_task(cpu->current_task->next);
+        break;
     }
 
     // when all tasks are blocked (there's always at least a kernel work thread on each cpu),
     // then we may have a situation where to_task is null and we can't switch to any task
     // so we have to enable interrupts so that IPIs can unblock tasks
     if(to_task == null) { // will only happen when cpu->current_task set is empty
-        assert(cpu->current_task == null, "there must be no runnable tasks");
+        assert(cpu->current_task == null, "there must be no runnable tasks for this to happen");
 
         u32 cpu_flags = __sti_saveflags(); // shadows parent cpu_flags
         while((to_task = cpu->unblocked_task) == null) { // we wait here until a task becomes unblocked
-            // there's a change we get preempted here, but current_task will be null, so another yield will do nothing
+            // there's a chance we get preempted here, but current_task will be null, where task_yield() will do nothing
             __pause_barrier();
         }
         __restoreflags(cpu_flags);
@@ -323,7 +327,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
     goto resume_task;
     
 resume_task:
-    // at this point our task has just been resumed, restore interrupt flag and return
+    // at this point our task has just been resumed, restore cpu flags and return
     __restoreflags(cpu_flags);
 }
 
@@ -335,7 +339,7 @@ void task_unblock(struct task* task)
 
     struct cpu* cpu = get_cpu();
 
-    if(task->cpu == cpu) { // easy case here, just requeue it in READY state
+    if(task->cpu == cpu) { // when we get called on the correct cpu, place the task in the unblocked queue
         u64 cpu_flags = __cli_saveflags();
         task_dequeue(&cpu->blocked_task, task);
 
@@ -351,7 +355,7 @@ void task_unblock(struct task* task)
     } 
 }
 
-void __noreturn task_exit(s64 return_value, bool save_context)
+__noreturn void task_exit(s64 return_value)
 {
     // disable interrupts
     __cli();
@@ -363,7 +367,6 @@ void __noreturn task_exit(s64 return_value, bool save_context)
 
     // set the return value and let task_yield() remove the task from the current list
     task->return_value = return_value;
-    task->save_context = save_context;
 
     // don't have to restore irqs here since task_yield will never return (our process
     // has been removed from the task list, and some other task will enable interrupts

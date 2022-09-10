@@ -58,7 +58,7 @@ struct task {
 
     u64  return_value;
 
-    bool save_context;
+    u8   padding0;
     s8   priority;
     u16  padding1;
     u32  padding2;
@@ -89,7 +89,7 @@ void task_yield(enum TASK_YIELD_REASON);
 void task_clean();
 
 // exit the current task
-__noreturn void task_exit(s64, bool);
+__noreturn void task_exit(s64);
 
 // notify that a task can be unblocked, this will often happen on a different cpu
 void task_unblock(struct task*);
