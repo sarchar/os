@@ -119,6 +119,7 @@ void efifb_clear(color clear_color)
 // scroll the entire screen up by y pixels
 void efifb_scroll(u32 y) 
 {
+    if(global_efifb.disabled) return;
     u8* fb = (u8*)global_efifb.framebuffer;
     memcpy(fb, &fb[y * global_efifb.pitch], (global_efifb.height - y) * global_efifb.pitch);
 }
