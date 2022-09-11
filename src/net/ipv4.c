@@ -52,21 +52,22 @@ static u16 _ipv4_compute_checksum(u8* data, u16 data_length)
 }
 
 struct ipv4_build_packet_info {
-    struct net_address*       dest_address;
-    u16                       identification;
-    u8                        ipv4_protocol;
-    net_wrap_packet_callback* build_payload;
-    void*                     payload_userdata;
+    struct net_address*          dest_address;
+    u16                          identification;
+    u8                           ipv4_protocol;
+    net_wrap_packet_callback*    build_payload;
+    void*                        payload_userdata;
 };
 
-static s64 _build_ipv4_packet(struct net_interface* iface, u8* ipv4_packet_start, void* userdata)
+static s64 _build_ipv4_packet(struct net_send_queue_entry* entry, u8* ipv4_packet_start, void* userdata)
 {
+    struct net_interface* iface = entry->net_interface;
     struct ipv4_header* hdr = (struct ipv4_header*)ipv4_packet_start;
     struct ipv4_build_packet_info* info = (struct ipv4_build_packet_info*)userdata;
 
     // some layers need the payload built in order to compute things like checksum, but ipv4 doesn't.
     // however, to stay somewhat consistent across the code, we'll build the packets inner layers first
-    s64 payload_length = info->build_payload(iface, ipv4_packet_start + sizeof(struct ipv4_header), info->payload_userdata);
+    s64 payload_length = info->build_payload(entry, ipv4_packet_start + sizeof(struct ipv4_header), info->payload_userdata);
     if(payload_length < 0) return payload_length;
     u64 total_length = payload_length + sizeof(struct ipv4_header);
 
@@ -93,10 +94,11 @@ static s64 _build_ipv4_packet(struct net_interface* iface, u8* ipv4_packet_start
     return total_length;
 }
 
-u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_address, u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata, u16* packet_length)
+s64 ipv4_wrap_packet(struct net_send_queue_entry* sq_entry, struct net_address* dest_address, u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata)
 {
     static u16 identification = 0;
 
+    struct net_interface* iface = sq_entry->net_interface;
     assert(iface->protocol == NET_PROTOCOL_IPv4, "can only call ipv4_wrap_packet on IPv4 network interfaces");
 
     u8 ipv4_protocol;
@@ -105,7 +107,7 @@ u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_addre
     else if(payload_protocol == NET_PROTOCOL_UDP) ipv4_protocol = IPv4_PROTOCOL_UDP;
     else {
         assert(false, "unsupported protocol");
-        return null;
+        return -ENOTSUP;
     }
 
     struct ipv4_build_packet_info info = {
@@ -137,9 +139,9 @@ u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_addre
         }
     }
 
-    if(err < 0) return null;
+    if(err < 0) return err;
 
-    return iface->net_device->ops->wrap_packet(iface->net_device, iface, &hw_dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info, packet_length);
+    return iface->net_device->ops->wrap_packet(iface->net_device, sq_entry, &hw_dest, NET_PROTOCOL_IPv4, packet_size, &_build_ipv4_packet, &info);
 }
 
 void ipv4_parse_address_string(struct net_address* addr, char const* buf)

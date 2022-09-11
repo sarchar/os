@@ -49,9 +49,7 @@ void ipv4_format_address(char* buf, u32 address);
 void ipv4_parse_address_string(struct net_address* addr, char const*);
 void net_set_address(struct net_address* addr, u8 net_protocol, u8* data, u8 data_length);
 
-//u8* ipv4_create_packet(u32 dest_address, u8 ipv4_protocol, u16 payload_size, u8* payload_start, u8* packet_size);
-u8* ipv4_wrap_packet(struct net_interface* iface, struct net_address* dest_address, 
-                     u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_packet, void* userdata, 
-                     u16* packet_length);
+s64 ipv4_wrap_packet(struct net_send_queue_entry*, struct net_address* dest_address, 
+                     u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_packet, void* userdata);
 
 #endif

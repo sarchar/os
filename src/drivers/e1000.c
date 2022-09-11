@@ -166,9 +166,8 @@ static void _enable_interrupts(struct e1000_device*);
 static void _disable_interrupts(struct e1000_device*);
 static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata);
 static u8*  _receive_packet(struct e1000_device*, u8*, u16*);
-static u8*  _net_wrap_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, 
-                             u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata, 
-                             u16* final_size);
+static s64  _net_wrap_packet(struct net_device* ndev, struct net_send_queue_entry* entry, struct net_address* dest_address, 
+                             u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata);
 static u8*  _net_receive_packet(struct net_device*, u8*, u16*);
 static s64  _net_send_packet(struct net_device*, u8*, u16);
 
@@ -626,42 +625,37 @@ static s64 _net_send_packet(struct net_device* ndev, u8* packet, u16 packet_leng
 }
 
 // TODO maybe there should be an ethernet layer outside of the e1000 driver
-static u8* _net_wrap_packet(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata, u16* packet_size)
+static s64 _net_wrap_packet(struct net_device* ndev, struct net_send_queue_entry* entry, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata)
 {
     struct e1000_device* edev = containerof(ndev, struct e1000_device, net_device);
 
     // validate the destination address
-    if(dest_address->protocol != NET_PROTOCOL_ETHERNET) {
-        errno = -EINVAL;
-        return null;
-    }
+    if(dest_address->protocol != NET_PROTOCOL_ETHERNET) return -EINVAL;
 
-    // lowest layer (hardware) is responsible for allocating packet storage -- TODO do something with the tx ring buffer!
-    *packet_size = payload_size + 14;
-    u8* buf = (u8*)malloc(*packet_size);
-
-    // build the inner layers first
-    if(build_payload(iface, buf + 14, userdata) < 0) return null;
-
-    // then the rest of the ethernet frame, first destination mac address
-    memcpy(&buf[0], dest_address->mac, 6);
-
-    // source mac address
-    memcpy(&buf[6], edev->mac, 6);
-
-    // set the ethertype
+    // validate the content protocol
     u16 ethertype;
     if     (net_protocol == NET_PROTOCOL_IPv4) ethertype = ETHERTYPE_IPv4;
     else if(net_protocol == NET_PROTOCOL_IPv6) ethertype = ETHERTYPE_IPv6;
     else if(net_protocol == NET_PROTOCOL_ARP)  ethertype = ETHERTYPE_ARP;
-    else {
-        errno = -EINVAL;
-        free(buf);
-        return null;
-    }
+    else return -EINVAL;
 
-    *(u16*)&buf[12] = htons(ethertype);
+    // lowest layer (hardware) is responsible for allocating packet storage -- TODO do something with the tx ring buffer!
+    entry->packet_length = payload_size + 14;
+    entry->packet_start = (u8*)malloc(entry->packet_length);
 
-    return buf;
+    // build the inner layers first
+    s64 ret;
+    if((ret = build_payload(entry, entry->packet_start + 14, userdata)) < 0) return ret;
+
+    // then the rest of the ethernet frame, first destination mac address
+    memcpy(&entry->packet_start[0], dest_address->mac, 6);
+
+    // second, source mac address
+    memcpy(&entry->packet_start[6], edev->mac, 6);
+
+    // third, the ethertype
+    *(u16*)&entry->packet_start[12] = htons(ethertype);
+
+    return entry->packet_length;
 }
 

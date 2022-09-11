@@ -64,10 +64,8 @@ struct udp_build_packet_info {
     u16 payload_length;
 };
 
-static s64 _build_udp_packet(struct net_interface* iface, u8* udp_packet_start, void* userdata)
+static s64 _build_udp_packet(struct net_send_queue_entry* entry, u8* udp_packet_start, void* userdata)
 {
-    unused(iface);
-
     struct udp_header* hdr = (struct udp_header*)udp_packet_start;
     struct udp_build_packet_info* info = (struct udp_build_packet_info*)userdata;
     u16 udp_packet_size = sizeof(struct udp_header) + info->payload_length;
@@ -82,11 +80,12 @@ static s64 _build_udp_packet(struct net_interface* iface, u8* udp_packet_start, 
     memcpy(hdr->payload, info->payload, info->payload_length);
 
     // compute checksum and convert to network byte order
-    hdr->checksum = _compute_checksum(iface->address.ipv4, info->dest_address, udp_packet_start, udp_packet_size);
+    hdr->checksum = _compute_checksum(entry->net_interface->address.ipv4, info->dest_address, udp_packet_start, udp_packet_size);
 
     return udp_packet_size;
 }
 
+// TODO convert to use a udp_socket, similar to tcp_socket
 s64 udp_send_packet(struct net_interface* iface, struct net_address* dest_address, u16 source_port, u16 dest_port, u8* udp_payload, u16 udp_payload_length)
 {
     u16 udp_packet_size = sizeof(struct udp_header) + udp_payload_length;
@@ -99,11 +98,18 @@ s64 udp_send_packet(struct net_interface* iface, struct net_address* dest_addres
         .payload_length = udp_payload_length
     };
 
-    u16 packet_length;
-    u8* packet_start = iface->wrap_packet(iface, dest_address, NET_PROTOCOL_UDP, udp_packet_size, &_build_udp_packet, &info, &packet_length);
-    if(packet_start == null) return errno;
+    // ask the network interface for a tx queue slot
+    struct net_send_queue_entry* entry;
+    s64 ret = net_request_send_queue_entry(iface, null, &entry);
+    if(ret < 0) return ret;
 
-    return net_send_packet(iface->net_device, packet_start, packet_length);
+    // build a packet with the given info
+    if((ret = entry->net_interface->wrap_packet(entry, dest_address, NET_PROTOCOL_UDP, udp_packet_size, &_build_udp_packet, &info)) < 0) return ret;
+
+    // packet is ready for transmission, queue it in the network layer
+    net_ready_send_queue_entry(entry);
+
+    return 0;
 }
 
 void udp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)

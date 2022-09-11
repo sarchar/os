@@ -86,9 +86,9 @@ struct icmp_build_packet_info {
     u8  code;
 };
 
-static s64 _build_icmp_packet(struct net_interface* iface, u8* icmp_packet_start, void* userdata)
+static s64 _build_icmp_packet(struct net_send_queue_entry* entry, u8* icmp_packet_start, void* userdata)
 {
-    unused(iface);
+    unused(entry);
 
     struct icmp_header* hdr = (struct icmp_header*)icmp_packet_start;
     struct icmp_build_packet_info* info = (struct icmp_build_packet_info*)userdata;
@@ -121,11 +121,18 @@ s64 icmp_send_packet(struct net_interface* iface, struct net_address* dest_addre
         .payload_length = icmp_payload_length
     };
 
-    u16 packet_length;
-    u8* packet_start = iface->wrap_packet(iface, dest_address, NET_PROTOCOL_ICMP, icmp_packet_size, &_build_icmp_packet, &info, &packet_length);
-    if(packet_start == null) return errno;
+    // ask the network interface for a tx queue slot
+    struct net_send_queue_entry* entry;
+    s64 ret = net_request_send_queue_entry(iface, null, &entry);
+    if(ret < 0) return ret;
 
-    return net_send_packet(iface->net_device, packet_start, packet_length);
+    // build a packet with the given info
+    if((ret = entry->net_interface->wrap_packet(entry, dest_address, NET_PROTOCOL_ICMP, icmp_packet_size, &_build_icmp_packet, &info)) < 0) return ret;
+
+    // packet is ready for transmission, queue it in the network layer
+    net_ready_send_queue_entry(entry);
+
+    return 0;
 }
 
 s64 icmp_send_echo(struct net_interface* iface, struct net_address* dest_address, u16 sequence_number)

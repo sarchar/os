@@ -1,5 +1,6 @@
 #include "kernel/common.h"
 
+#include "errno.h"
 #include "kernel/cpu.h"
 #include "kernel/kalloc.h"
 #include "kernel/kernel.h"
@@ -86,9 +87,11 @@ enum TCP_BUILD_PACKET_FLAGS {
 
 struct tcp_build_packet_info {
     struct tcp_socket* socket;
+    struct net_interface* net_interface;
     u8*    payload;
     u16    payload_length;
     u16    flags;
+    u32    sequence_number;
 };
 
 struct tcp_socket {
@@ -97,29 +100,39 @@ struct tcp_socket {
     // for incoming connections
     struct tcp_socket* volatile pending_accept;
     struct tcp_socket* pending_accept_tail;
-    struct ticketlock  lock;
+    struct ticketlock  accept_lock;
 
-    u8  volatile state;
-    u8  unused0;
-    u16 listen_backlog;
-    u16 pending_accept_index;
-    u16 unused1;
+    struct ticketlock              send_queue_lock;
+    struct tcp_build_packet_info** send_queue;
+    u32    send_queue_head;
+    u32    send_queue_tail;
+    u32    send_queue_size;
+    u32    unused0;
 
-    u32 my_sequence_number;    // next outgoing SEQ number
-    u32 their_sequence_number; // expected next incoming SEQ number
+    u8     volatile state;
+    u8     unused1;
+    u16    listen_backlog;
+    u16    pending_accept_index;
+    u16    unused2;
 
-    u16 their_maximum_segment_size;
-    u16 their_window_scale;
-    u32 their_ack_number;
+    u32    my_sequence_number;    // next outgoing SEQ number
+    u32    their_sequence_number; // expected next incoming SEQ number
+
+    u16    their_maximum_segment_size;
+    u16    their_window_scale;
+    u32    their_ack_number;
 };
 
 static s64 _socket_listen(struct net_socket*, u16);
 static struct net_socket* _socket_accept(struct net_socket*);
+static s64 _socket_update(struct net_socket* socket);
 
-static s64 _send_segment(struct net_interface* iface, struct tcp_socket* socket, u8* payload, u16 payload_length, u16 flags);
+static s64 _queue_segment(struct net_interface* iface, struct tcp_socket* socket, u8* payload, u16 payload_length, u16 flags);
 static s64 _receive_segment(struct net_interface* iface, struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start);
 
 static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pending);
+
+static s64 _process_send_queue(struct tcp_socket* socket);
 
 static struct net_socket_ops tcp_socket_ops = {
     .listen  = &_socket_listen,
@@ -127,7 +140,8 @@ static struct net_socket_ops tcp_socket_ops = {
     .connect = null,
     .close   = null,
     .send    = null,
-    .receive = null
+    .receive = null,
+    .update  = &_socket_update,
 };
 
 struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
@@ -140,14 +154,30 @@ struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
     if(sockinfo->source_address.protocol != NET_PROTOCOL_IPv4 ||
        sockinfo->dest_address.protocol != NET_PROTOCOL_IPv4) return null;
 
-    struct tcp_socket* sock = (struct tcp_socket*)kalloc(sizeof(struct tcp_socket)); // use kalloc for fast allocation
-    zero(sock);
+    struct tcp_socket* socket = (struct tcp_socket*)kalloc(sizeof(struct tcp_socket)); // use kalloc for fast allocation
+    zero(socket);
 
-    sock->lock            = lock_init;
-    sock->state           = TCP_SOCKET_STATE_CLOSED;
-    sock->net_socket.ops  = &tcp_socket_ops;
+    socket->accept_lock     = lock_init;
+    socket->send_queue_lock = lock_init;
+    socket->state           = TCP_SOCKET_STATE_CLOSED;
+    socket->net_socket.ops  = &tcp_socket_ops;
 
-    return &sock->net_socket;
+    return &socket->net_socket;
+}
+
+void tcp_destroy_socket(struct tcp_socket* socket)
+{
+    fprintf(stderr, "TODO: tcp_destroy_socket(0x%lX)\n", socket);
+}
+
+static s64 _allocate_send_queue(struct tcp_socket* socket)
+{
+    socket->send_queue_size = 32;
+    socket->send_queue      = (struct tcp_build_packet_info**)malloc(sizeof(struct tcp_build_packet_info*) * socket->send_queue_size);
+    if(socket->send_queue == null) return -ENOMEM;
+    socket->send_queue_tail = 0;
+    socket->send_queue_head = 0;
+    return 0;
 }
 
 static s64 _socket_listen(struct net_socket* socket, u16 backlog)
@@ -164,8 +194,6 @@ static s64 _socket_listen(struct net_socket* socket, u16 backlog)
 
     return 0;
 }
-
-void got_accept() { }
 
 static struct net_socket* _socket_accept(struct net_socket* socket)
 {
@@ -185,16 +213,14 @@ static struct net_socket* _socket_accept(struct net_socket* socket)
         struct tcp_socket* tcpincoming = containerof(incoming, struct tcp_socket, net_socket);
         if(incoming == null) continue; // didn't get it, try again
 
-        got_accept();
-
         // got it, so lock and update the pointers
-        acquire_lock(tcpsocket->lock);
+        acquire_lock(tcpsocket->accept_lock);
         tcpsocket->pending_accept = tcpincoming->pending_accept; // pending_accept acts as the 'next' pointer
         if(tcpsocket->pending_accept_tail == tcpincoming) {
             tcpsocket->pending_accept_tail = null;
         }
         __atomic_dec(&tcpsocket->pending_accept_index);
-        release_lock(tcpsocket->lock);
+        release_lock(tcpsocket->accept_lock);
 
         // check the status of the connection
         switch(tcpincoming->state) {
@@ -212,9 +238,31 @@ static struct net_socket* _socket_accept(struct net_socket* socket)
     return null;
 }
 
+void got_here() { }
+
+// called when there's work to be done on the socket
+static s64 _socket_update(struct net_socket* socket)
+{
+    struct tcp_socket* tcpsocket = containerof(socket, struct tcp_socket, net_socket);
+    //fprintf(stderr, "_socket_update: cpu %d\n", get_cpu()->cpu_index);
+    if(get_cpu()->cpu_index != 0) {
+        net_notify_socket(socket);
+        return 0;
+    }
+
+    got_here();
+
+    s64 ret;
+    if((ret = _process_send_queue(tcpsocket)) < 0) return ret;
+
+    // TODO notify the network layer if there's still work left on this socket
+
+    return 0;
+}
+
 static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pending)
 {
-    acquire_lock(owner->lock);
+    acquire_lock(owner->accept_lock);
     if(owner->pending_accept == null) {
         pending->pending_accept = null;
         owner->pending_accept = pending;
@@ -223,7 +271,7 @@ static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pen
         owner->pending_accept_tail->pending_accept = pending; // next pointer to the new pending connection
         owner->pending_accept_tail = pending;
     }
-    release_lock(owner->lock);
+    release_lock(owner->accept_lock);
 }
 
 static s32 _parse_options(struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options)
@@ -384,11 +432,14 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
             goto done; // failed to allocate socket, so out of memory or something
         }
 
-        // put new socket on the pending accept list, even if the connection is never established
+        // put new socket on the pending accept list, even if the connection is never fully established
         _add_pending_accept(tcpsocket, containerof(newsocket, struct tcp_socket, net_socket));
 
         // deliver the packet to this socket
         tcpsocket = containerof(newsocket, struct tcp_socket, net_socket);
+
+        // allocate a send queue for the new socket
+        _allocate_send_queue(tcpsocket);
     }
 
     _receive_segment(iface, tcpsocket, hdr, packet_length, &options, (u16)(payload_start & 0xFFFF));
@@ -426,7 +477,10 @@ static s64 _receive_segment(struct net_interface* iface, struct tcp_socket* sock
     case TCP_SOCKET_STATE_CLOSED:
         // the only packet in CLOSED state we care about is SYN=1,ACK=0. RST is taken care of above
         // and any payload is ignored
-        if(!hdr->sync || hdr->ack) goto done;
+        if(!hdr->sync || hdr->ack) {
+            tcp_destroy_socket(socket);
+            goto done;
+        }
 
         // check for valid segment sizes (must be at least 64, but 0 means unlimited)
         if(options->present & TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE) {
@@ -447,7 +501,7 @@ static s64 _receive_segment(struct net_interface* iface, struct tcp_socket* sock
         socket->my_sequence_number = ~((hdr->sequence_number >> 16) | ((hdr->sequence_number & 0xFFFF) << 16));
 
         // send SYN-ACK
-        if((res = _send_segment(iface, socket, null, 0, TCP_BUILD_PACKET_FLAG_SYNC | TCP_BUILD_PACKET_FLAG_ACK)) < 0) {
+        if((res = _queue_segment(iface, socket, null, 0, TCP_BUILD_PACKET_FLAG_SYNC | TCP_BUILD_PACKET_FLAG_ACK)) < 0) {
             // internal error, we need to error out
             // TODO close the net_socket?
             goto done;
@@ -488,9 +542,9 @@ static s64 _receive_segment(struct net_interface* iface, struct tcp_socket* sock
             // send an ACK
             if(seq_inc > 0) {
                 if(payload_length > 0) {
-                    _send_segment(iface, socket, (u8*)hdr + payload_start, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
+                    _queue_segment(iface, socket, (u8*)hdr + payload_start, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
                 } else {
-                    _send_segment(iface, socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
+                    _queue_segment(iface, socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
                 }
             }
         }
@@ -542,10 +596,9 @@ static u16 _compute_checksum(u32 source_address, u32 dest_address, u8* data, u16
     return ~sum;
 }
 
-static s64 _build_tcp_packet(struct net_interface* iface, u8* tcp_packet_start, void* userdata)
+static s64 _build_tcp_packet(struct net_send_queue_entry* entry, u8* tcp_packet_start, void* userdata)
 {
-    unused(iface);
-
+    unused(entry);
 
     struct tcp_header* hdr             = (struct tcp_header*)tcp_packet_start;
     struct tcp_build_packet_info* info = (struct tcp_build_packet_info*)userdata;
@@ -557,7 +610,7 @@ static s64 _build_tcp_packet(struct net_interface* iface, u8* tcp_packet_start, 
     zero(hdr);
 
     // setup header
-    hdr->sequence_number = htonl(socket->my_sequence_number);
+    hdr->sequence_number = htonl(info->sequence_number);
     if(info->flags & TCP_BUILD_PACKET_FLAG_ACK) {
         hdr->ack_number = htonl(socket->their_sequence_number);
         hdr->ack        = 1;
@@ -587,29 +640,78 @@ static s64 _build_tcp_packet(struct net_interface* iface, u8* tcp_packet_start, 
     return tcp_packet_size;
 }
 
-static s64 _send_segment(struct net_interface* iface, struct tcp_socket* socket, u8* payload, u16 payload_length, u16 flags)
+static s64 _queue_segment(struct net_interface* iface, struct tcp_socket* socket, u8* payload, u16 payload_length, u16 flags)
 {
-    u16 tcp_packet_size = sizeof(struct tcp_header) + payload_length;
+    // we can't build the packet here since it may need to be retransmitted with different a ACK, among other
+    // flags that may change during retransmission
+    struct tcp_build_packet_info* info = (struct tcp_build_packet_info*)kalloc(sizeof(struct tcp_build_packet_info));
+    info->socket          = socket;
+    info->payload         = payload;
+    info->payload_length  = payload_length;
+    info->sequence_number = socket->my_sequence_number;
+    info->flags           = flags;
+    info->net_interface   = iface;
 
-    struct tcp_build_packet_info info = { 
-        .socket         = socket,
-        .payload        = payload, 
-        .payload_length = payload_length,
-        .flags          = flags
-    };
-
-    u16 packet_length;
-    u8* packet_start = iface->wrap_packet(iface, &socket->net_socket.socket_info.source_address, NET_PROTOCOL_TCP, tcp_packet_size, &_build_tcp_packet, &info, &packet_length);
-    if(packet_start == null) return errno;
-
-    // if we get here, the packet is ready and we need to update our sequence numbers
+    // update my sequence number
     u32 seq_inc = payload_length;
     if(flags & TCP_BUILD_PACKET_FLAG_SYNC) seq_inc++;
     //TODO probably FINISH needs seq_inc too
-
     socket->my_sequence_number += seq_inc;
 
-    return net_send_packet(iface->net_device, packet_start, packet_length); // TODO net_queue_packet so that it can be retransmitted?
+    fprintf(stderr, "tcp: queuing segment length %d SYN=%d,ACK=%d,PUSH=%d\n", payload_length, (flags & TCP_BUILD_PACKET_FLAG_SYNC) ? 1 : 0, 
+            (flags & TCP_BUILD_PACKET_FLAG_ACK) ? 1 : 0, (flags & TCP_BUILD_PACKET_FLAG_PUSH) ? 1 : 0);
+
+    // stick info into the tx queue
+    acquire_lock(socket->send_queue_lock);
+    u32 slot = socket->send_queue_tail;
+    if(((slot + 1) % socket->send_queue_size) == socket->send_queue_head) {
+        // we're blocked, we can't add data to the send queue so we either need to yield or drop the data
+        assert(false, "TODO send queue is full. handle this case properly"); // TODO
+        kfree(info, sizeof(struct tcp_build_packet_info));
+        return -EAGAIN;
+    }
+    socket->send_queue[slot] = info;
+    socket->send_queue_tail = (socket->send_queue_tail + 1) % socket->send_queue_size; // only increment after send_queue[slot] is valid
+    release_lock(socket->send_queue_lock);
+
+    // tell the network layer this socket has work to do
+    net_notify_socket(&socket->net_socket);
+
+    return 0;
+}
+
+// TODO respect the peer's recv window
+static s64 _process_send_queue(struct tcp_socket* socket)
+{
+    s64 ret;
+
+    // loop over the send queue and build as many packets as the network interface will allow
+    while(socket->send_queue_head != socket->send_queue_tail) {
+        // grab the next packet info to build
+        struct tcp_build_packet_info* info = socket->send_queue[socket->send_queue_head];
+
+        // ask the network interface for a tx queue slot
+        struct net_send_queue_entry* entry;
+        ret = net_request_send_queue_entry(info->net_interface, &socket->net_socket, &entry);
+        if(ret == -EAGAIN) return 0; // safe, we will try again later
+        else if(ret < 0) return ret; // return other errors
+
+        // build a packet with the given info
+        u16 tcp_packet_size = sizeof(struct tcp_header) + info->payload_length;
+        if((ret = entry->net_interface->wrap_packet(entry, &socket->net_socket.socket_info.source_address, NET_PROTOCOL_TCP, tcp_packet_size, &_build_tcp_packet, info)) < 0) return ret;
+
+        // packet is ready for transmission, queue it in the network layer
+        net_ready_send_queue_entry(entry);
+
+        // packet was delivered to the network layer, and so it should get sent soon. we can mark it 
+        // as having been sent. we don't need a lock on send_queue since only a single thread will update
+        // a socket at a time
+        socket->send_queue_head = (socket->send_queue_head + 1) % socket->send_queue_size;
+    }
+
+    release_lock(socket->send_queue_lock);
+
+    return 0;
 }
 
 

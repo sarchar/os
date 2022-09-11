@@ -3,7 +3,10 @@
 #include "cpu.h"
 #include "errno.h"
 #include "kernel/cpu.h"
+#include "kernel/kalloc.h"
 #include "kernel/kernel.h"
+#include "kernel/paging.h"
+#include "kernel/palloc.h"
 #include "net/arp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
@@ -18,8 +21,23 @@ static struct net_device* netdevs_tmp[256] = { null, }; // TEMP TODO get rid of 
 // global structure of all open sockets the kernel is aware of
 static struct net_socket* global_net_sockets = null;
 
+// list of "notified" sockets, that have work pending
+static struct net_socket* notified_net_sockets = null;
+static declare_spinlock(notify_socket_lock);
+
+// the global send queue
+#define SEND_QUEUE_PAGE_ORDER 1 // 8192 bytes / 8 = 1024 entries
+static struct net_send_queue_entry** send_queue;
+static u32    send_queue_size;
+static u32    send_queue_head;
+static u32    send_queue_tail;
+static declare_spinlock(send_queue_lock);
+
 void net_init()
 {
+    send_queue_size = (1 << (PAGE_SHIFT + SEND_QUEUE_PAGE_ORDER)) / sizeof(struct net_send_queue_entry*);
+    send_queue = (struct net_send_queue_entry**)palloc_claim(SEND_QUEUE_PAGE_ORDER);
+    send_queue_head = send_queue_tail = 0;
 }
 
 static bool net_do_rx_work()
@@ -46,13 +64,93 @@ static bool net_do_rx_work()
 
 static bool net_do_tx_work()
 {
-    return false;
+    u32 c = 0;
+
+    // need a lock here since multiple threads are calling net_do_tx_work
+    acquire_lock(send_queue_lock);
+    while(send_queue_head != send_queue_tail) {
+        // free all packets that have been sent that are the beginning of the list
+        if(send_queue[send_queue_head]->sent) {
+            struct net_send_queue_entry* entry = send_queue[send_queue_head];
+            free(entry->packet_start);
+            kfree(entry, sizeof(struct net_send_queue_entry));
+            send_queue_head = (send_queue_head + 1) % send_queue_size;
+            continue;
+        }
+
+        // find first not-sent ready packet, which might not be at the beginning of the list
+        u32 ri = send_queue_head;
+        while(ri != send_queue_tail && (!send_queue[ri]->ready || send_queue[ri]->sent)) {
+            ri = (ri + 1) % send_queue_size;
+        }
+
+        // if there's no not-sent ready packets, we're done
+        if(ri == send_queue_tail) break;
+
+        // have a valid queue entry 
+        struct net_send_queue_entry* entry = send_queue[ri];
+        bool can_free = false;
+        if(ri == send_queue_head) { // best case
+            send_queue_head = (send_queue_head + 1) % send_queue_size;
+            can_free = true;
+        }
+
+        // we can send this packet now, and release the lock to let other threads send packets too
+        entry->sent = true;
+        release_lock(send_queue_lock); 
+
+        struct net_device* ndev = entry->net_interface->net_device;
+        if(ndev->ops->send_packet != null) {
+            s64 ret = ndev->ops->send_packet(ndev, entry->packet_start, entry->packet_length);
+            if(ret < 0) goto done_nolock;
+        }
+
+        if(can_free) {
+            free(entry->packet_start);
+            kfree(entry, sizeof(struct net_send_queue_entry));
+        }
+
+        acquire_lock(send_queue_lock);
+    }
+
+    release_lock(send_queue_lock);
+done_nolock:
+    return c > 0;
+}
+
+static bool net_do_notify_sockets()
+{
+    u32 c = 0;
+    while(notified_net_sockets != null) { // check if any socket exists with work to do
+        // grab the socket, maybe another cpu will get it first
+        acquire_lock(notify_socket_lock);
+        struct net_socket* notify_socket = notified_net_sockets;
+        if(notify_socket == null) {
+            release_lock(notify_socket_lock);
+            continue;
+        }
+
+        // save to remove the item from the list here
+        if(notify_socket->next == notify_socket) {
+            notified_net_sockets = null;
+        } else {
+            notified_net_sockets = notify_socket->next;
+            notified_net_sockets->prev = notify_socket->prev;
+        }
+        release_lock(notify_socket_lock);
+
+        notify_socket->next = notify_socket->prev = null;
+        notify_socket->ops->update(notify_socket);
+        c++;
+    }
+
+    return c > 0;
 }
 
 // return true if we "did work"
 bool net_do_work()
 {
-    return net_do_rx_work() || net_do_tx_work();
+    return net_do_rx_work() || net_do_tx_work() || net_do_notify_sockets();
 }
 
 // will create vnode #device=net:N #driver=driver_name:M
@@ -126,6 +224,7 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
 
 s64 net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length)
 {
+    fprintf(stderr, "net_send_packet: don't use me any more!\n");
     if(ndev->ops->send_packet == null) return -ENOTSUP;
     return ndev->ops->send_packet(ndev, packet, packet_length);
 }
@@ -183,5 +282,61 @@ struct net_socket* net_lookup_socket(struct net_socket_info* sockinfo)
     struct net_socket* res;
     HT_FIND(global_net_sockets, *sockinfo, res);
     return res;
+}
+
+void net_notify_socket(struct net_socket* socket)
+{
+    acquire_lock(notify_socket_lock);
+
+    if(notified_net_sockets == null) {
+        socket->next = socket->prev = socket;
+        notified_net_sockets = socket;
+    } else {
+        // insert it at the end of the queue
+        notified_net_sockets->prev->next = socket;
+        socket->prev = notified_net_sockets->prev;
+        socket->next = notified_net_sockets;
+        notified_net_sockets->prev = socket;
+    }
+
+    release_lock(notify_socket_lock);
+}
+
+s64 net_request_send_queue_entry(struct net_interface* iface, struct net_socket* socket, struct net_send_queue_entry** ret)
+{
+    // can we even send on this device?
+    if(iface->net_device->ops->send_packet == null) return -ENOTSUP;
+
+    // look for a slot in the send queue
+    acquire_lock(send_queue_lock);
+    u32 slot = send_queue_tail;
+    if(((slot + 1) % send_queue_size) == send_queue_head) {
+        release_lock(send_queue_lock);
+        return -EAGAIN;
+    }
+
+    // allocate memory for the entry (don't like that we hold the lock here, but whatever, this should be fast)
+    *ret = (struct net_send_queue_entry*)kalloc(sizeof(struct net_send_queue_entry));
+    if(*ret == null) {
+        release_lock(send_queue_lock);
+        return -ENOMEM;
+    }
+
+    struct net_send_queue_entry* entry = *ret;
+    zero(entry);
+    send_queue[slot] = entry;
+    send_queue_tail = (send_queue_tail + 1) % send_queue_size;
+
+    release_lock(send_queue_lock);
+
+    entry->net_interface = iface;
+    entry->net_socket    = socket;
+
+    return 0;
+}
+
+void net_ready_send_queue_entry(struct net_send_queue_entry* entry)
+{
+    entry->ready = true;
 }
 

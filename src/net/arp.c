@@ -50,11 +50,11 @@ struct arp_table_entry {
 static struct arp_table_entry* global_arp_table = null;
 static declare_ticketlock(global_arp_table_lock);
 
-static s64 _build_arp_packet(struct net_interface* iface, u8* packet, void* userdata)
+static s64 _build_arp_packet(struct net_send_queue_entry* entry, u8* arp_packet_start, void* userdata)
 {
-    unused(iface);
+    unused(entry);
 
-    struct arp_packet* arp = (struct arp_packet*)packet;
+    struct arp_packet* arp = (struct arp_packet*)arp_packet_start;
     struct arp_build_packet_info* info = (struct arp_build_packet_info*)userdata;
 
     // copy over protocol type, address sizes, and opcode and adjust endianness
@@ -137,26 +137,30 @@ s64 arp_send_request(struct net_interface* iface, struct net_address* lookup_add
     broadcast_address.protocol   = NET_PROTOCOL_ETHERNET;
     memset(broadcast_address.mac, 0xFF, 6);
 
-    // ARP is a toplevel layer and interfaces with the hardware device directly
-    u16 packet_length;
-    u8* packet = ndev->ops->wrap_packet(ndev, null, &broadcast_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info, &packet_length);
-    if(packet == null) return errno;
+    // ask the network interface for a tx queue slot
+    struct net_send_queue_entry* entry;
+    s64 ret = net_request_send_queue_entry(iface, null, &entry);
+    if(ret < 0) return ret;
 
-    // Deliver the packet to the hardware
-    s64 r = net_send_packet(ndev, packet, packet_length);
-    free(packet);
-    return r;
+    // ARP is a toplevel layer and interfaces with the hardware device directly
+    ret = ndev->ops->wrap_packet(ndev, entry, &broadcast_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info);
+    if(ret < 0) return ret;
+
+    // packet is ready for transmission, queue it in the network layer
+    net_ready_send_queue_entry(entry);
+
+    return ret;
 }
 
 
-// Create an ARP packet from iface_info and deliver it over ndev
-s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface_info, struct net_address* dest_hardware_address, struct net_address* dest_protocol_address)
+// Create an ARP packet from iface and deliver it over ndev
+s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface, struct net_address* dest_hardware_address, struct net_address* dest_protocol_address)
 {
     struct arp_build_packet_info info;
     info.arp.opcode = ARP_OPCODE_REPLY;
 
     // get the network device the iface is attached to
-    struct net_device* iface_ndev = iface_info->net_device;
+    struct net_device* iface_ndev = iface->net_device;
 
     // setup the hardware type and address size
     if(iface_ndev->hardware_address.protocol == NET_PROTOCOL_ETHERNET) {
@@ -167,14 +171,14 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface_info, st
     }
 
     // setup the protocol type and size
-    if(iface_info->protocol == NET_PROTOCOL_IPv4) {
+    if(iface->protocol == NET_PROTOCOL_IPv4) {
         info.arp.protocol_type = ETHERTYPE_IPv4;
         info.arp.protocol_address_length = 4;
 
         char buf[16];
         ipv4_format_address(buf, dest_protocol_address->ipv4);
         fprintf(stderr, "arp: creating reply packet to %s\n", buf);
-    } else if(iface_info->protocol == NET_PROTOCOL_IPv6) {
+    } else if(iface->protocol == NET_PROTOCOL_IPv6) {
         info.arp.protocol_type = ETHERTYPE_IPv6;
         info.arp.protocol_address_length = 6;
 
@@ -188,21 +192,25 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface_info, st
     info.source_hardware_address = ndev->hardware_address.mac;
     info.dest_hardware_address   = dest_hardware_address->mac;
 
-    u32 _source_protocol_address = htonl(iface_info->address.ipv4);
+    u32 _source_protocol_address = htonl(iface->address.ipv4);
     u32 _dest_protocol_address   = htonl(dest_protocol_address->ipv4);
 
     info.source_protocol_address = (u8*)&_source_protocol_address;
     info.dest_protocol_address   = (u8*)&_dest_protocol_address;
 
-    // ARP is a toplevel layer and interfaces with the hardware device directly
-    u16 packet_length;
-    u8* packet = ndev->ops->wrap_packet(ndev, null, dest_hardware_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info, &packet_length);
-    if(packet == null) return errno;
+    // ask the network interface for a tx queue slot
+    struct net_send_queue_entry* entry;
+    s64 ret = net_request_send_queue_entry(iface, null, &entry);
+    if(ret < 0) return ret;
 
-    // Deliver the packet to the hardware
-    s64 r = net_send_packet(ndev, packet, packet_length);
-    free(packet);
-    return r;
+    // ARP is a toplevel layer and interfaces with the hardware device directly
+    ret = ndev->ops->wrap_packet(ndev, entry, dest_hardware_address, NET_PROTOCOL_ARP, arp_packet_size, &_build_arp_packet, &info);
+    if(ret < 0) return ret;
+
+    // packet is ready for transmission, queue it in the network layer
+    net_ready_send_queue_entry(entry);
+
+    return 0;
 }
 
 void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length)
