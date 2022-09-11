@@ -736,6 +736,27 @@ static s64 shell(struct task* task)
     return 0;
 }
 
+static s64 echo_server_per_socket(struct task* task)
+{
+    struct net_socket* socket = (struct net_socket*)task->userdata;
+
+    char buf[512];
+    char ip[16];
+    ipv4_format_address(ip, socket->socket_info.source_address.ipv4);
+    s64 s = (s64)snprintf(buf, 512, "Welcome to my echo server, %s:%d\n", ip, socket->socket_info.source_port);
+    net_socket_send(socket, (u8*)buf, s);
+
+    while(true) {
+        s = net_socket_receive(socket, (u8*)buf, sizeof(buf));
+        if(s < 0) break;
+        net_socket_send(socket, (u8*)"Echo: ", 6);
+        net_socket_send(socket, (u8*)buf, s);
+    }
+
+    net_socket_close(socket);
+    return s;
+}
+
 static s64 echo_server(struct task* task)
 {
     // create a listening socket on port 23 (telnet)
@@ -754,7 +775,7 @@ static s64 echo_server(struct task* task)
     }
 
     // start listening on said socket
-    if(socket->ops->listen(socket, 10) < 0) {
+    if(net_socket_listen(socket, 10) < 0) {
         fprintf(stderr, "could not listen on socket\n");
         //net_destroy_socket(socket);
         return -1;
@@ -764,11 +785,14 @@ static s64 echo_server(struct task* task)
 
     // okay, listening socket is ready, wait for a socket
     while(true) {
-        struct net_socket* peersocket = socket->ops->accept(socket);
+        struct net_socket* peersocket = net_socket_accept(socket);
 
         char buf[16];
         ipv4_format_address(buf, peersocket->socket_info.source_address.ipv4);
-        fprintf(stderr, "got connection from %s:%d\n", buf, peersocket->socket_info.source_port);
+        fprintf(stderr, "starting echo connection with %s:%d\n", buf, peersocket->socket_info.source_port);
+
+        struct task* peer_echo_task = task_create(echo_server_per_socket, (intp)peersocket, false);
+        task_enqueue(&get_cpu()->current_task, peer_echo_task);
     }
 }
 

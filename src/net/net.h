@@ -53,7 +53,7 @@ struct net_address {
     };
 };
 
-struct net_send_queue_entry {
+struct net_send_packet_queue_entry {
     struct net_interface* net_interface;
     struct net_socket*    net_socket;
     u8*    packet_start;
@@ -65,8 +65,8 @@ struct net_send_queue_entry {
 
 struct net_device;
 struct net_interface;
-typedef s64 (net_wrap_packet_callback)(struct net_send_queue_entry* entry, u8*, void*);
-typedef s64 (net_device_wrap_packet_function)(struct net_device* ndev, struct net_send_queue_entry* entry, struct net_address* dest, u8 net_protocol, u16 packet_size, net_wrap_packet_callback*, void*);
+typedef s64 (net_wrap_packet_callback)(struct net_send_packet_queue_entry* entry, u8*, void*);
+typedef s64 (net_device_wrap_packet_function)(struct net_device* ndev, struct net_send_packet_queue_entry* entry, struct net_address* dest, u8 net_protocol, u16 packet_size, net_wrap_packet_callback*, void*);
 typedef s64 (net_device_send_packet_function)(struct net_device* ndev, u8* packet, u16 packet_length);
 typedef u8* (net_device_receive_packet_function)(struct net_device* ndev, u8* net_protocol, u16* packet_length);
 
@@ -92,7 +92,7 @@ struct net_device {
 };
 
 typedef void (net_interface_receive_packet_function)(struct net_interface*, u8* packet_start, u16 packet_length);
-typedef s64  (net_interface_wrap_packet_function)(struct net_send_queue_entry*, struct net_address* dest_address, 
+typedef s64  (net_interface_wrap_packet_function)(struct net_send_packet_queue_entry*, struct net_address* dest_address, 
                                                   u8 net_protocol, u16 payload_size, net_wrap_packet_callback*, void*);
 
 // Base class for network interfaces, like IPv4/6, that can be assigned to network devices.
@@ -126,8 +126,8 @@ struct net_socket_ops {
     struct net_socket* (*accept) (struct net_socket*);
     s64                (*connect)(struct net_socket*);
     s64                (*close)  (struct net_socket*);
-    s64                (*send)   (struct net_socket*);
-    s64                (*receive)(struct net_socket*);
+    s64                (*send)   (struct net_socket*, u8*, u64);
+    s64                (*receive)(struct net_socket*, u8*, u64);
     s64                (*update) (struct net_socket*);
 };
 
@@ -153,12 +153,21 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
 void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length);
 s64  net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length);
 
-s64 net_request_send_queue_entry(struct net_interface*, struct net_socket*, struct net_send_queue_entry**);
-void net_ready_send_queue_entry(struct net_send_queue_entry*);
+s64  net_request_send_packet_queue_entry(struct net_interface*, struct net_socket*, struct net_send_packet_queue_entry**);
+void net_ready_send_packet_queue_entry(struct net_send_packet_queue_entry*);
 
 struct net_socket* net_create_socket(struct net_socket_info*);
+void               net_destroy_socket(struct net_socket*);
 struct net_socket* net_lookup_socket(struct net_socket_info*);
 void net_notify_socket(struct net_socket*);
+
+// interface/wrappers to net_socket_ops
+s64                net_socket_listen (struct net_socket*, u16 backlog);
+struct net_socket* net_socket_accept (struct net_socket*);
+s64                net_socket_connect(struct net_socket*);
+s64                net_socket_close  (struct net_socket*);
+s64                net_socket_send   (struct net_socket*, u8*, u64);
+s64                net_socket_receive(struct net_socket*, u8*, u16);
 
 //TODO These are temporary
 struct net_device* net_device_by_index(u16); //TODO this should be removed eventually and net_device_from_vnode(vfs_find("#netdev=index")) should be used

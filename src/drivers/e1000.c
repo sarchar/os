@@ -166,7 +166,7 @@ static void _enable_interrupts(struct e1000_device*);
 static void _disable_interrupts(struct e1000_device*);
 static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata);
 static u8*  _receive_packet(struct e1000_device*, u8*, u16*);
-static s64  _net_wrap_packet(struct net_device* ndev, struct net_send_queue_entry* entry, struct net_address* dest_address, 
+static s64  _net_wrap_packet(struct net_device* ndev, struct net_send_packet_queue_entry* entry, struct net_address* dest_address, 
                              u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata);
 static u8*  _net_receive_packet(struct net_device*, u8*, u16*);
 static s64  _net_send_packet(struct net_device*, u8*, u16);
@@ -625,7 +625,7 @@ static s64 _net_send_packet(struct net_device* ndev, u8* packet, u16 packet_leng
 }
 
 // TODO maybe there should be an ethernet layer outside of the e1000 driver
-static s64 _net_wrap_packet(struct net_device* ndev, struct net_send_queue_entry* entry, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata)
+static s64 _net_wrap_packet(struct net_device* ndev, struct net_send_packet_queue_entry* entry, struct net_address* dest_address, u8 net_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata)
 {
     struct e1000_device* edev = containerof(ndev, struct e1000_device, net_device);
 

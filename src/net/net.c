@@ -27,7 +27,7 @@ static declare_spinlock(notify_socket_lock);
 
 // the global send queue
 #define SEND_QUEUE_PAGE_ORDER 1 // 8192 bytes / 8 = 1024 entries
-static struct net_send_queue_entry** send_queue;
+static struct net_send_packet_queue_entry** send_queue;
 static u32    send_queue_size;
 static u32    send_queue_head;
 static u32    send_queue_tail;
@@ -35,8 +35,8 @@ static declare_spinlock(send_queue_lock);
 
 void net_init()
 {
-    send_queue_size = (1 << (PAGE_SHIFT + SEND_QUEUE_PAGE_ORDER)) / sizeof(struct net_send_queue_entry*);
-    send_queue = (struct net_send_queue_entry**)palloc_claim(SEND_QUEUE_PAGE_ORDER);
+    send_queue_size = (1 << (PAGE_SHIFT + SEND_QUEUE_PAGE_ORDER)) / sizeof(struct net_send_packet_queue_entry*);
+    send_queue = (struct net_send_packet_queue_entry**)palloc_claim(SEND_QUEUE_PAGE_ORDER);
     send_queue_head = send_queue_tail = 0;
 }
 
@@ -71,9 +71,9 @@ static bool net_do_tx_work()
     while(send_queue_head != send_queue_tail) {
         // free all packets that have been sent that are the beginning of the list
         if(send_queue[send_queue_head]->sent) {
-            struct net_send_queue_entry* entry = send_queue[send_queue_head];
+            struct net_send_packet_queue_entry* entry = send_queue[send_queue_head];
             free(entry->packet_start);
-            kfree(entry, sizeof(struct net_send_queue_entry));
+            kfree(entry, sizeof(struct net_send_packet_queue_entry));
             send_queue_head = (send_queue_head + 1) % send_queue_size;
             continue;
         }
@@ -88,7 +88,7 @@ static bool net_do_tx_work()
         if(ri == send_queue_tail) break;
 
         // have a valid queue entry 
-        struct net_send_queue_entry* entry = send_queue[ri];
+        struct net_send_packet_queue_entry* entry = send_queue[ri];
         bool can_free = false;
         if(ri == send_queue_head) { // best case
             send_queue_head = (send_queue_head + 1) % send_queue_size;
@@ -107,7 +107,7 @@ static bool net_do_tx_work()
 
         if(can_free) {
             free(entry->packet_start);
-            kfree(entry, sizeof(struct net_send_queue_entry));
+            kfree(entry, sizeof(struct net_send_packet_queue_entry));
         }
 
         acquire_lock(send_queue_lock);
@@ -277,6 +277,25 @@ struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
     return tmp;
 }
 
+void net_destroy_socket(struct net_socket* socket)
+{
+    struct net_socket* tmp;
+    HT_FIND(global_net_sockets, socket->socket_info, tmp);
+    assert(tmp != null, "all sockets should be in global_net_sockets");
+    HT_DELETE(global_net_sockets, tmp);
+
+    switch(socket->socket_info.protocol) {
+    case NET_PROTOCOL_TCP:
+        // get the size required for the socket structure and allocate it here
+        tcp_destroy_socket(socket);
+        break;
+
+    case NET_PROTOCOL_UDP:
+        //TODO
+        break;
+    }
+}
+
 struct net_socket* net_lookup_socket(struct net_socket_info* sockinfo)
 {
     struct net_socket* res;
@@ -302,7 +321,38 @@ void net_notify_socket(struct net_socket* socket)
     release_lock(notify_socket_lock);
 }
 
-s64 net_request_send_queue_entry(struct net_interface* iface, struct net_socket* socket, struct net_send_queue_entry** ret)
+// interface/wrappers to net_socket_ops
+s64 net_socket_listen(struct net_socket* socket, u16 backlog)
+{
+    return socket->ops->listen(socket, backlog);
+}
+
+struct net_socket* net_socket_accept (struct net_socket* socket)
+{
+    return socket->ops->accept(socket);
+}
+
+s64 net_socket_connect(struct net_socket* socket)
+{
+    return socket->ops->connect(socket);
+}
+
+s64 net_socket_close(struct net_socket* socket)
+{
+    return socket->ops->close(socket);
+}
+
+s64 net_socket_send(struct net_socket* socket, u8* buf, u64 size)
+{
+    return socket->ops->send(socket, buf, size);
+}
+
+s64 net_socket_receive(struct net_socket* socket, u8* buf, u16 size)
+{
+    return socket->ops->receive(socket, buf, size);
+}
+
+s64 net_request_send_packet_queue_entry(struct net_interface* iface, struct net_socket* socket, struct net_send_packet_queue_entry** ret)
 {
     // can we even send on this device?
     if(iface->net_device->ops->send_packet == null) return -ENOTSUP;
@@ -316,13 +366,13 @@ s64 net_request_send_queue_entry(struct net_interface* iface, struct net_socket*
     }
 
     // allocate memory for the entry (don't like that we hold the lock here, but whatever, this should be fast)
-    *ret = (struct net_send_queue_entry*)kalloc(sizeof(struct net_send_queue_entry));
+    *ret = (struct net_send_packet_queue_entry*)kalloc(sizeof(struct net_send_packet_queue_entry));
     if(*ret == null) {
         release_lock(send_queue_lock);
         return -ENOMEM;
     }
 
-    struct net_send_queue_entry* entry = *ret;
+    struct net_send_packet_queue_entry* entry = *ret;
     zero(entry);
     send_queue[slot] = entry;
     send_queue_tail = (send_queue_tail + 1) % send_queue_size;
@@ -335,7 +385,7 @@ s64 net_request_send_queue_entry(struct net_interface* iface, struct net_socket*
     return 0;
 }
 
-void net_ready_send_queue_entry(struct net_send_queue_entry* entry)
+void net_ready_send_packet_queue_entry(struct net_send_packet_queue_entry* entry)
 {
     entry->ready = true;
 }

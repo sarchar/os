@@ -50,7 +50,7 @@ struct arp_table_entry {
 static struct arp_table_entry* global_arp_table = null;
 static declare_ticketlock(global_arp_table_lock);
 
-static s64 _build_arp_packet(struct net_send_queue_entry* entry, u8* arp_packet_start, void* userdata)
+static s64 _build_arp_packet(struct net_send_packet_queue_entry* entry, u8* arp_packet_start, void* userdata)
 {
     unused(entry);
 
@@ -138,8 +138,8 @@ s64 arp_send_request(struct net_interface* iface, struct net_address* lookup_add
     memset(broadcast_address.mac, 0xFF, 6);
 
     // ask the network interface for a tx queue slot
-    struct net_send_queue_entry* entry;
-    s64 ret = net_request_send_queue_entry(iface, null, &entry);
+    struct net_send_packet_queue_entry* entry;
+    s64 ret = net_request_send_packet_queue_entry(iface, null, &entry);
     if(ret < 0) return ret;
 
     // ARP is a toplevel layer and interfaces with the hardware device directly
@@ -147,7 +147,7 @@ s64 arp_send_request(struct net_interface* iface, struct net_address* lookup_add
     if(ret < 0) return ret;
 
     // packet is ready for transmission, queue it in the network layer
-    net_ready_send_queue_entry(entry);
+    net_ready_send_packet_queue_entry(entry);
 
     return ret;
 }
@@ -199,8 +199,8 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface, struct 
     info.dest_protocol_address   = (u8*)&_dest_protocol_address;
 
     // ask the network interface for a tx queue slot
-    struct net_send_queue_entry* entry;
-    s64 ret = net_request_send_queue_entry(iface, null, &entry);
+    struct net_send_packet_queue_entry* entry;
+    s64 ret = net_request_send_packet_queue_entry(iface, null, &entry);
     if(ret < 0) return ret;
 
     // ARP is a toplevel layer and interfaces with the hardware device directly
@@ -208,7 +208,7 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface, struct 
     if(ret < 0) return ret;
 
     // packet is ready for transmission, queue it in the network layer
-    net_ready_send_queue_entry(entry);
+    net_ready_send_packet_queue_entry(entry);
 
     return 0;
 }

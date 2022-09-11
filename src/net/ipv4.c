@@ -59,7 +59,7 @@ struct ipv4_build_packet_info {
     void*                        payload_userdata;
 };
 
-static s64 _build_ipv4_packet(struct net_send_queue_entry* entry, u8* ipv4_packet_start, void* userdata)
+static s64 _build_ipv4_packet(struct net_send_packet_queue_entry* entry, u8* ipv4_packet_start, void* userdata)
 {
     struct net_interface* iface = entry->net_interface;
     struct ipv4_header* hdr = (struct ipv4_header*)ipv4_packet_start;
@@ -94,7 +94,7 @@ static s64 _build_ipv4_packet(struct net_send_queue_entry* entry, u8* ipv4_packe
     return total_length;
 }
 
-s64 ipv4_wrap_packet(struct net_send_queue_entry* sq_entry, struct net_address* dest_address, u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata)
+s64 ipv4_wrap_packet(struct net_send_packet_queue_entry* sq_entry, struct net_address* dest_address, u8 payload_protocol, u16 payload_size, net_wrap_packet_callback* build_payload, void* userdata)
 {
     static u16 identification = 0;
 
