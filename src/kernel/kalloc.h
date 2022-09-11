@@ -4,6 +4,6 @@
 void kalloc_init();
 
 void* kalloc(u32 size);
-void  kfree(void* ptr);
+void  kfree(void* ptr, u32 size);
 
 #endif

@@ -211,7 +211,7 @@ void e1000_load()
         _initialize_e1000(found_devices->dev, devindex);
 
         struct found_devices* next = found_devices->next;
-        kfree(found_devices);
+        kfree(found_devices, sizeof(struct found_devices));
         found_devices = next;
         devindex++;
     }

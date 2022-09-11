@@ -253,8 +253,8 @@ s64 ext2_write_inode(struct inode* inode)
 
 void ext2_free_inode(struct inode* inode)
 {
-    if(inode->ext2_inode != null) kfree(inode->ext2_inode);
-    kfree(inode);
+    if(inode->ext2_inode != null) kfree(inode->ext2_inode, EXT2_INODE_SIZE);
+    kfree(inode, sizeof(struct inode));
 }
 
 u64 ext2_block_size()
@@ -438,6 +438,9 @@ s64 ext2_open(struct filesystem_callbacks* fscbs)
 struct ext2_dirent* ext2_dirent_iter_next(struct ext2_dirent_iter* iter)
 {
     struct ext2_inode* ext2_inode = iter->dir->ext2_inode;
+
+    //fprintf(stderr, "ext2_dirent_iter_next: iter=0x%lX, iter->dir=0x%lX, iter->dir->ext2_inode=0x%lX\n",
+    //        iter, iter->dir, iter->dir->ext2_inode);
 
     // return false when we elapse the entire directory
     if(iter->offset >= ext2_inode->i_size) return null;
@@ -713,8 +716,7 @@ s64 ext2_create_file(struct inode* dir, char* filename, struct inode** file_inod
 
     // add inode to the directory
     if(ext2_add_directory_entry(dir, filename, inode) < 0) {
-        kfree(ext2_inode);
-        kfree(inode);
+        ext2_free_inode(inode);
         return -1;
     }
 
@@ -745,22 +747,19 @@ s64 ext2_create_directory(struct inode* dir, char* dirname, struct inode** newdi
 
     // add '.' to this new directory
     if(ext2_add_directory_entry(inode, ".", inode) < 0) {
-        kfree(ext2_inode);
-        kfree(inode);
+        ext2_free_inode(inode);
         return -1;
     }
 
     // add '..' to this new directory (increasing the parent directory link count)
     if(ext2_add_directory_entry(inode, "..", dir) < 0) {
-        kfree(ext2_inode);
-        kfree(inode);
+        ext2_free_inode(inode);
         return -1;
     }
 
     // add inode to the parent directory
     if(ext2_add_directory_entry(dir, dirname, inode) < 0) {
-        kfree(ext2_inode);
-        kfree(inode);
+        ext2_free_inode(inode);
         return -1;
     }
 

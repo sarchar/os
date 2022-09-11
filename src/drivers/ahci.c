@@ -683,7 +683,7 @@ static struct ahci_device_port* _try_initialize_port(u8 port_index, u32 ncmds)
     if(!_stop_port_processing(hba_port)) {
         vmem_unmap_page(VMEM_KERNEL, virt_addr);
         palloc_abandon(phys_page, 0);
-        kfree(aport);
+        kfree(aport, sizeof(struct ahci_device_port));
         return null;
     }
 
@@ -892,7 +892,7 @@ static void _deactivate_port(u8 port_index)
     palloc_abandon(aport->command_list_phys_address, 0); // command_list_phys_address is always at the start of the allocated page
 
     // free the ahci_device_port node
-    kfree(aport);
+    kfree(aport, sizeof(struct ahci_device_port));
 
     // clear the pointer in ahci_device_ports
     ahci_device_ports[port_index] = null;

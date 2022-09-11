@@ -55,7 +55,7 @@ static struct page_table* _allocate_page_table()
 
 static void _free_page_table(struct page_table* pt)
 {
-    kfree(pt);
+    kfree(pt, sizeof(struct page_table));
 }
 
 static void _map_kernel()

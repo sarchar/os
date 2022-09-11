@@ -107,14 +107,16 @@ intp vmem_map_pages(intp _vmem, intp phys, u64 npages, u32 flags)
             // increment the base address, easy
             iter->base += wanted_size;
             iter->length -= wanted_size;
+            break;
         } else if(iter->length == wanted_size) {
             // remove the node
             RB_TREE_REMOVE(vmem->free_areas, iter);
-            kfree(iter);
+            kfree(iter, sizeof(struct vmem_node));
+            break;
         }
 
-        // done either way
-        break;
+        // region too small, go onto the next
+        continue;
     }
     release_lock(vmem->lock);
 
@@ -173,7 +175,7 @@ intp vmem_unmap_pages(intp _vmem, intp virt, u64 npages)
             lookup.length = result->base;
 
             // free old memory
-            kfree(result2);
+            kfree(result2, sizeof(struct vmem_node));
         }
 
         // we just extended downward as much as possible, so there's no more free regions to merge
