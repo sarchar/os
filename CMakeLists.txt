@@ -9,15 +9,17 @@ SET(CMAKE_SYSTEM_NAME Generic)
 SET(CMAKE_SYSTEM_PROCESOR x86)
 
 
-# Configure assembler
-SET(CMAKE_ASM_COMPILE_OBJECT "nasm -felf64 <SOURCE> -o <OBJECT>")
-
-# Configure C compiler
+# Configure compiler and assembler
 #SET(CMAKE_C_COMPILER x86_64-elf-gcc)
 SET(CMAKE_C_COMPILER_WORKS TRUE)
 SET(CMAKE_CXX_COMPILER_WORKS TRUE)
-#SET(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -O2 -Wall -Wextra -mcmodel=large -mno-red-zone -falign-functions=16" CACHE STRING "" FORCE)
-SET(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -g3 -Wall -Wextra -mcmodel=large -mno-red-zone -falign-functions=16" CACHE STRING "" FORCE)
+if(CMAKE_BUILD_TYPE STREQUAL "Debug")
+    SET(CMAKE_ASM_COMPILE_OBJECT "nasm -felf64 <SOURCE> -o <OBJECT> -g -DDEBUG")
+    SET(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -g3 -Wall -Wextra -mcmodel=large -mno-red-zone -falign-functions=16" CACHE STRING "" FORCE)
+else()
+    SET(CMAKE_C_FLAGS "-std=gnu11 -ffreestanding -O2 -Wall -Wextra -mcmodel=large -mno-red-zone -falign-functions=16" CACHE STRING "" FORCE)
+    SET(CMAKE_ASM_COMPILE_OBJECT "nasm -felf64 <SOURCE> -o <OBJECT>")
+endif()
 
 # Prevent -rdynamic from being passed to the linker
 set(CMAKE_SHARED_LIBRARY_LINK_C_FLAGS "-z max-page-size=0x1000")

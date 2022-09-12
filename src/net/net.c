@@ -2,6 +2,7 @@
 
 #include "cpu.h"
 #include "errno.h"
+#include "kernel/buffer.h"
 #include "kernel/cpu.h"
 #include "kernel/kalloc.h"
 #include "kernel/kernel.h"
@@ -131,11 +132,12 @@ static bool net_do_notify_sockets()
         }
 
         // save to remove the item from the list here
-        if(notify_socket->next == notify_socket) {
+        if(notify_socket == notify_socket->next) {
             notified_net_sockets = null;
         } else {
             notified_net_sockets = notify_socket->next;
             notified_net_sockets->prev = notify_socket->prev;
+            notified_net_sockets->prev->next = notified_net_sockets;
         }
         release_lock(notify_socket_lock);
 
@@ -342,12 +344,12 @@ s64 net_socket_close(struct net_socket* socket)
     return socket->ops->close(socket);
 }
 
-s64 net_socket_send(struct net_socket* socket, u8* buf, u64 size)
+s64 net_socket_send(struct net_socket* socket, struct buffer* buf)
 {
-    return socket->ops->send(socket, buf, size);
+    return socket->ops->send(socket, buf);
 }
 
-s64 net_socket_receive(struct net_socket* socket, u8* buf, u16 size)
+s64 net_socket_receive(struct net_socket* socket, struct buffer* buf, u16 size)
 {
     return socket->ops->receive(socket, buf, size);
 }

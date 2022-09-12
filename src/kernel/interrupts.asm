@@ -12,20 +12,19 @@ _interrupt_handler_common:
     ;   - fault/trap address in rsi (arg1)
     ;   - optionally, the error code in rcx (arg3)
     ;   - the C code function handle this interrupt in rax
-    ;   - and 6 registers have been saved already: rbp, rax, rcx, rdx, rdi, rsi
+    ;   - and 5 registers have been saved already: rax, rcx, rdx, rdi, rsi
 
     ; first, check if GSBase needs to be swapped by checking if the code segment is selected to be the second entry in the GDT (= offset 8)
     ; with 6 registers pushed onto stack the before _interrupt_handler_common, there will be a pc and cs before that
     ; see https://wiki.osdev.org/SWAPGS
-    ;   rsp+7*8: cs
-    ;   rsp+6*8: rip
-    ;   rsp+5*8: rbp
+    ;   rsp+6*8: cs
+    ;   rsp+5*8: rip
     ;   rsp+4*8: rax
     ;   rsp+3*8: rcx
     ;   rsp+2*8: rdx
     ;   rsp+1*8: rdi
     ;   rsp+0*8: rsi
-    cmp word [rsp+7*8], 0x08
+    cmp word [rsp+6*8], 0x08
     je .s1
     swapgs
 .s1:
@@ -44,9 +43,23 @@ _interrupt_handler_common:
     ; everything is pushed onto the stack, so rdx (arg2) needs a pointer to that structure
     mov rdx, rsp
 
+    ; set up the base pointer so that gdb can accurately print backtraces
+%ifdef DEBUG
+    mov r15, [rsp+14*8]  ; get return address
+    push r15
+    push rbp
+    mov rbp, rsp
+%endif
+
     cld                  ; C code following the SysV ABI requires DF to be clear on function entry
     call rax             ; Call the C function handler
     call _send_lapic_eoi ; end of interrupt
+
+    ; we have to fix up the stack for the backtraces
+%ifdef DEBUG
+    pop rbp ; restore old base pointer
+    pop r15 ; restore rip (temp, unused)
+%endif
 
     ; restore all the saved registers
     pop r15
@@ -65,7 +78,7 @@ _interrupt_handler_common:
     pop rdx
     pop rcx
     pop rax
-    pop rbp
+    ;pop rbp
 
     ; check cs here
     cmp word [rsp+1*8], 0x08 ; only rip on the stack now

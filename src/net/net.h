@@ -3,6 +3,8 @@
 
 #include "hashtable.h"
 
+struct buffer;
+
 // network [short] to host short
 __always_inline u16 ntohs(u16 v)
 {
@@ -126,8 +128,8 @@ struct net_socket_ops {
     struct net_socket* (*accept) (struct net_socket*);
     s64                (*connect)(struct net_socket*);
     s64                (*close)  (struct net_socket*);
-    s64                (*send)   (struct net_socket*, u8*, u64);
-    s64                (*receive)(struct net_socket*, u8*, u64);
+    s64                (*send)   (struct net_socket*, struct buffer*);
+    s64                (*receive)(struct net_socket*, struct buffer*, u64);
     s64                (*update) (struct net_socket*);
 };
 
@@ -166,8 +168,8 @@ s64                net_socket_listen (struct net_socket*, u16 backlog);
 struct net_socket* net_socket_accept (struct net_socket*);
 s64                net_socket_connect(struct net_socket*);
 s64                net_socket_close  (struct net_socket*);
-s64                net_socket_send   (struct net_socket*, u8*, u64);
-s64                net_socket_receive(struct net_socket*, u8*, u16);
+s64                net_socket_send   (struct net_socket*, struct buffer*);
+s64                net_socket_receive(struct net_socket*, struct buffer*, u16);
 
 //TODO These are temporary
 struct net_device* net_device_by_index(u16); //TODO this should be removed eventually and net_device_from_vnode(vfs_find("#netdev=index")) should be used

@@ -94,7 +94,7 @@ intp vmem_map_pages(intp _vmem, intp phys, u64 npages, u32 flags)
 {
     struct vmem* vmem = (struct vmem*)(_vmem == 0 ? kernel_vmem : (void*)_vmem);
 
-    intp virtual_address;
+    intp virtual_address = 0;
     u64 wanted_size = npages << PAGE_SHIFT;
 
     // loop over free areas looking for a large enough node

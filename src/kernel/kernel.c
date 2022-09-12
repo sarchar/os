@@ -6,6 +6,7 @@
 #include "acpi.h"
 #include "apic.h"
 #include "bootmem.h"
+#include "buffer.h"
 #include "cpu.h"
 #include "drivers/ahci.h"
 #include "drivers/e1000.h"
@@ -740,17 +741,28 @@ static s64 echo_server_per_socket(struct task* task)
 {
     struct net_socket* socket = (struct net_socket*)task->userdata;
 
-    char buf[512];
+    char cbuf[512];
     char ip[16];
     ipv4_format_address(ip, socket->socket_info.source_address.ipv4);
-    s64 s = (s64)snprintf(buf, 512, "Welcome to my echo server, %s:%d\n", ip, socket->socket_info.source_port);
-    net_socket_send(socket, (u8*)buf, s);
+    s64 s = (s64)snprintf(cbuf, 512, "Welcome to my echo server, %s:%d\n", ip, socket->socket_info.source_port);
 
+    struct buffer* buf;
+    buf = buffer_create((u64)s);
+    buffer_write(buf, (u8*)cbuf, (u64)s);
+    net_socket_send(socket, buf);
+
+    struct buffer* readbuf = buffer_create(countof(cbuf));
     while(true) {
-        s = net_socket_receive(socket, (u8*)buf, sizeof(buf));
-        if(s < 0) break;
-        net_socket_send(socket, (u8*)"Echo: ", 6);
-        net_socket_send(socket, (u8*)buf, s);
+//        s = net_socket_receive(socket, readbuf, countof(cbuf));
+//        if(s < 0) break;
+//        s = (s64)buffer_read(readbuf, (u8*)cbuf, countof(cbuf));
+//
+        buf = buffer_create((u64)s + 7);
+        buffer_write(buf, (u8*)"Echo: ", 6);
+//        buffer_write(buf, (u8*)cbuf, (u64)s);
+        buffer_write(buf, (u8*)"\n", 1);
+        net_socket_send(socket, buf);
+        task_yield(TASK_YIELD_VOLUNTARY);
     }
 
     net_socket_close(socket);
@@ -812,8 +824,6 @@ void kernel_main(struct multiboot_info* multiboot_info)
 
 __noreturn void kernel_do_work()
 {
-    usleep(1000000);
-
     // the workhorse of the kernel is here. we process high priority tasks
     // network tx/rx, disk and other i/o requests, and user task switching
     // the checks below are ordered such that they continue to run while there

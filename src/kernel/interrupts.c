@@ -211,15 +211,13 @@ extern void _interrupt_handler_common(void);
         ".global " #name "\n"                      \
         ".align 128\n"                              \
         #name ":\n"                                \
-        "\t" "push %rbp\n"                         /* save rbp */                                            \
-        "\t" "mov %rsp, %rbp\n"                    /* set rbp to base of stack frame */                      \
         "\t" "push %rax\n"                         /* save rax */                                            \
         "\t" "push %rcx\n"                         /* save rcx */                                            \
         "\t" "push %rdx\n"                         /* save rdx */                                            \
         "\t" "push %rdi\n"                         /* save rdi */                                            \
         "\t" "push %rsi\n"                         /* save rsi */                                            \
         "\t" "mov $" #v ", %rdi\n"                 /* place vector number into rdi (arg0) */                 \
-        "\t" "mov 48(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
+        "\t" "mov 40(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
         "\t" "movabs $_" #name ", %rax\n"          /* load the actual irq handler address into rax */        \
         "\t" "jmp _interrupt_handler_common\n"     /* jump to common handler, which will setup rdx (arg2) */ \
     );                                             \
@@ -231,15 +229,13 @@ extern void _interrupt_handler_common(void);
         ".global " #name "\n"                      \
         ".align 128\n"                             \
         #name ":\n"                                \
-        "\t" "push %rbp\n"                         /* save rbp */                                            \
-        "\t" "mov %rsp, %rbp\n"                    /* set rbp to base of stack frame */                      \
         "\t" "xchg %rax,0(%rsp)\n"                 /* save rax by swapping the error code with it */         \
         "\t" "push %rcx\n"                         /* save rcx */                                            \
         "\t" "push %rdx\n"                         /* save rdx */                                            \
         "\t" "push %rdi\n"                         /* save rdi */                                            \
         "\t" "push %rsi\n"                         /* save rsi */                                            \
         "\t" "mov $" #v ", %rdi\n"                 /* place vector number into rdi (arg0) */                 \
-        "\t" "mov 48(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
+        "\t" "mov 40(%rsp), %rsi\n"                /* copy the return rip (fault addr) into rsi (arg1) */    \
         "\t" "mov %rax, %rcx\n"                    /* move the cpu error code into rcx (arg3) */             \
         "\t" "movabs $_" #name ", %rax\n"          /* load the actual irq handler address into rax */        \
         "\t" "jmp _interrupt_handler_common\n"     /* jump to common handler, which will setup rdx (arg2) */ \
