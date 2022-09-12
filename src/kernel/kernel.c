@@ -7,6 +7,7 @@
 #include "apic.h"
 #include "bootmem.h"
 #include "buffer.h"
+#include "cmos.h"
 #include "cpu.h"
 #include "drivers/ahci.h"
 #include "drivers/e1000.h"
@@ -32,6 +33,7 @@
 #include "stdio.h"
 #include "task.h"
 #include "terminal.h"
+#include "time.h"
 #include "vmem.h"
 
 char const* assert_error_message = null;
@@ -83,6 +85,9 @@ static void initialize_kernel(struct multiboot_info* multiboot_info)
 
     // parse the ACPI tables. we need it to enable interrupts
     acpi_init();
+
+    // init CMOS/NMI and RTC
+    cmos_init();
 
     // immediately setup and enable interrupts
     interrupts_init();
@@ -257,53 +262,12 @@ static void run_command(char* cmdbuffer)
         ahci_dump_registers();
     } else if(strcmp(cmdbuffer, "exit") == 0) {
         exit_shell = true;
-    } else if(strcmp(cmdbuffer, "rd") == 0) {
-        while((cmdptr < end) && (*cmdptr == ' ' || *cmdptr == '\t')) cmdptr++;
-        if(*cmdptr == 0) return;
-
-        char* start = cmdptr;
-
-        cmdptr = strchr(cmdptr, ' ');
-        if(cmdptr != null) {
-            *cmdptr++ = '\0';
-        } else {
-            cmdptr = end;
-        }
-
-        u32 port_index = atoi(start);
-
-        if(cmdptr >= end) return;
-        while(*cmdptr == ' ' || *cmdptr == '\t') cmdptr++;
-        if(*cmdptr == 0) return;
-
-        u32 start_lba = atoi(cmdptr);
-
-        // allocate 512 bytes
-        intp dest = (intp)malloc(512);
-
-        // read from device
-        if(!ahci_read_device_sectors(port_index, start_lba, 1, dest)) return;
-
-        fprintf(stderr, "kernel: port %d received:\n", port_index);
-        for(u32 offs = 0; offs < 512; offs += 16) {
-            fprintf(stderr, "    %04X: ", offs);
-            for(u32 i = 0; i < 16; i++) {
-                fprintf(stderr, "%02X ", ((u8 volatile*)dest)[offs+i]);
-            }
-            fprintf(stderr, "- ");
-            for(u32 i = 0; i < 16; i++) {
-                u8 c = ((u8 volatile*)dest)[offs+i];
-                if(c >= 0x20 && c <= 0x7f) {
-                    fprintf(stderr, "%c", c);
-                } else {
-                    fprintf(stderr, ".");
-                }
-            }
-            fprintf(stderr, "\n");
-        }
-
-        // free data
-        free((void*)dest);
+    } else if(strcmp(cmdbuffer, "date") == 0) {
+        struct cmos_time cmostime;
+        cmos_read_rtc(&cmostime);
+        fprintf(stderr, "%02d:%02d:%02d %02d%02d:%02d:%02d (flags=0x%02X)\n",
+                cmostime.hours, cmostime.minutes, cmostime.seconds, cmostime.century, cmostime.year, cmostime.month, cmostime.day, cmostime.flags);
+        fprintf(stderr, "time(NULL) = %d\n", time(null));
     } else if(strcmp(cmdbuffer, "cd") == 0) {
         struct inode* dir;
 
@@ -714,9 +678,9 @@ static s64 shell(struct task* task)
     };
 
     if(ext2_open(&ext2_fs) < 0) {
-        fprintf(stderr, "root device ahci@%d is not an ext2 filesystem\n", root_device);
+        fprintf(stderr, "root device <#device:ahci #ahci:%d> is not an ext2 filesystem\n", root_device);
     } else {
-        fprintf(stderr, "root device ahci@%d found\n", root_device);
+        fprintf(stderr, "root device <#device:ahci #ahci:%d> found\n", root_device);
     }
 
     fprintf(stderr, "kernel shell ready...\n\n");
