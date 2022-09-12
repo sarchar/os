@@ -12,7 +12,8 @@ enum TASK_STATE {
 };
 
 enum TASK_FLAGS {
-    TASK_FLAG_USER = (1 << 0),
+    TASK_FLAG_USER            = 1 << 0,
+    TASK_FLAG_NOT_PREEMPTABLE = 1 << 1,
 };
 
 struct page_table;
@@ -84,6 +85,7 @@ enum TASK_YIELD_REASON {
 };
 
 void task_set_priority(s8);
+void task_set_preemtable(struct task*, bool);
 
 void task_yield(enum TASK_YIELD_REASON);
 void task_clean();

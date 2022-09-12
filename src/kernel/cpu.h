@@ -40,7 +40,7 @@ static inline u64 __saveflags()
 static inline void __restoreflags(u64 flags)
 {
     asm volatile ("push %0\n"
-                  "\tpopfq" : : "rm"(flags) : "memory", "cc");
+                  "\tpopfq" : : "rm"(flags) : "memory", "cc"); // cc = condition code, or the processor flags register
 }
 
 enum MSRS {

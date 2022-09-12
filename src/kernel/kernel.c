@@ -701,7 +701,6 @@ bool read_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_secto
 
 static s64 shell(struct task* task)
 {
-    //unused(task);
     fprintf(stderr, "shell started with task id = %d\n", task->task_id);
 
     ps2keyboard_hook_ascii(&handle_keypress, null);
@@ -715,16 +714,13 @@ static s64 shell(struct task* task)
     };
 
     if(ext2_open(&ext2_fs) < 0) {
-        __cli();
         fprintf(stderr, "root device ahci@%d is not an ext2 filesystem\n", root_device);
     } else {
-        __cli();
         fprintf(stderr, "root device ahci@%d found\n", root_device);
     }
 
     fprintf(stderr, "kernel shell ready...\n\n");
     fprintf(stderr, "%s:> ", current_directory);
-    __sti();
 
     // update drivers forever (they should just use kernel tasks in the future)
     exit_shell = false;
@@ -761,7 +757,11 @@ static s64 echo_server_per_socket(struct task* task)
         buffer_write(buf, (u8*)"Echo: ", 6);
 //        buffer_write(buf, (u8*)cbuf, (u64)s);
         buffer_write(buf, (u8*)"\n", 1);
-        net_socket_send(socket, buf);
+        if(net_socket_send(socket, buf) < 0) {
+            buffer_destroy(buf);
+            task_exit(-1);
+        }
+
         task_yield(TASK_YIELD_VOLUNTARY);
     }
 
@@ -824,6 +824,8 @@ void kernel_main(struct multiboot_info* multiboot_info)
 
 __noreturn void kernel_do_work()
 {
+    task_set_preemtable(get_cpu()->current_task, false);
+
     // the workhorse of the kernel is here. we process high priority tasks
     // network tx/rx, disk and other i/o requests, and user task switching
     // the checks below are ordered such that they continue to run while there

@@ -145,6 +145,12 @@ void task_set_priority(s8 priority)
     get_cpu()->current_task->priority = priority;
 }
 
+void task_set_preemtable(struct task* task, bool preemptable)
+{
+    if(preemptable) task->flags &= ~TASK_FLAG_NOT_PREEMPTABLE;
+    else            task->flags |= TASK_FLAG_NOT_PREEMPTABLE;
+}
+
 void task_enqueue_for(u32 target_cpu_index, struct task* new_task)
 {
     // wake up the other cpu and tell it to add the task to its running queue
@@ -247,12 +253,30 @@ void task_yield(enum TASK_YIELD_REASON reason)
 
     // we can actually get task_yield() from the timer interrupt, but it's possible we
     // don't have a task in that case. all other yields must be called with valid a current_task.
-    if(from_task == null) return;
+    if(from_task == null) {
+        __restoreflags(cpu_flags);
+        return;
+    }
+
+    // update the runtime on this task
+    if(cpu->current_task != null) {
+        u64 gt = global_ticks;
+        cpu->current_task->runtime += (gt - cpu->current_task->last_global_ticks);
+        cpu->current_task->last_global_ticks = gt;
+    }
 
     // set up the next state for the current task
     assert(from_task->state == TASK_STATE_RUNNING, "running task should have correct state");
     switch(reason) {
     case TASK_YIELD_PREEMPT:
+        // some tasks have disabled preemption
+        if((from_task->flags & TASK_FLAG_NOT_PREEMPTABLE) != 0) {
+            // we can just return from here, and the yielding code continues as normal
+            __restoreflags(cpu_flags);
+            return;
+        }
+        // otherwise, we fall through and yield as if it was voluntary
+        // ...
     case TASK_YIELD_VOLUNTARY:
         from_task->state = TASK_STATE_READY;
         break;
@@ -357,9 +381,6 @@ void task_unblock(struct task* task)
 
 __noreturn void task_exit(s64 return_value)
 {
-    // disable interrupts
-    __cli();
-
     //fprintf(stderr, "task: exit called on task %d\n", get_cpu()->current_task->task_id);
 
     struct cpu* cpu = get_cpu();

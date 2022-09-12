@@ -781,8 +781,8 @@ static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16
     u32 slot = socket->send_segment_queue_tail;
     if(((slot + 1) % socket->send_segment_queue_size) == socket->send_segment_queue_head) {
         // we're blocked, we can't add data to the send queue so we either need to yield or drop the data
-        assert(false, "TODO send queue is full. handle this case properly"); // TODO
-        if(payload != null) free(payload);
+        fprintf(stderr, "tcp: TODO send queue is full. handle this case properly"); // TODO
+        if(payload_buffer != null) free(payload_buffer);
         kfree(info, sizeof(struct tcp_build_packet_info));
         return -EAGAIN;
     }

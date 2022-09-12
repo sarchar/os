@@ -145,7 +145,6 @@ static void _local_apic_timer_interrupt(struct interrupt_stack_registers* regs, 
     unused(pc);
     unused(userdata);
 
-    //__cli();
     extern bool volatile _ap_all_stop;
     if(_ap_all_stop) {
         __cli(); // with interrupts disabled, __hlt will never return (except by NMI, etc)
@@ -154,17 +153,6 @@ static void _local_apic_timer_interrupt(struct interrupt_stack_registers* regs, 
 
     struct cpu* cpu = get_cpu();
     cpu->ticks++;
-
-    // if no tasks are running, can't do any task switching
-    if(cpu->current_task == null) return;
-
-    // first add up runtime on current task
-    u64 gt = global_ticks;
-    cpu->current_task->runtime += (gt - cpu->current_task->last_global_ticks);
-    cpu->current_task->last_global_ticks = gt;
-
-    // if there's no other task other than the current one, keep running
-    if(cpu->current_task->next == cpu->current_task) return;
 
     // before switching tasks, send EOI first
     _send_lapic_eoi();
