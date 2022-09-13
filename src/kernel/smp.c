@@ -199,6 +199,8 @@ struct lock_functions spinlock_functions = {
     .release = (void(*)(intp))&spinlock_release,
     .trylock = (bool(*)(intp))&spinlock_trylock,
     .canlock = (bool(*)(intp))&spinlock_canlock,
+    .wait    = null,
+    .notify  = null,
 };
 
 static void ticketlock_acquire(struct ticketlock* tkt)
@@ -241,89 +243,30 @@ struct lock_functions ticketlock_functions = {
     .release = (void(*)(intp))&ticketlock_release,
     .trylock = (bool(*)(intp))&ticketlock_trylock,
     .canlock = (bool(*)(intp))&ticketlock_canlock,
-};
-
-struct mutex_blocked_task {
-    MAKE_HASH_TABLE;
-    u32 user;
-    u32 unused1;
-    struct task* task;
+    .wait    = null,
+    .notify  = null,
 };
 
 static void mutex_acquire(struct mutex* m)
 {
-    // try locking the ticketlock
-    acquire_lock(m->internal_lock);
-    if(try_lock(m->lock)) { // if we get the ticketlock, then we're golden and can continue
-        release_lock(m->internal_lock);
-        return;
-    }
-
-    // otherwise, we need to block this thread. create a new blocked task structure on the stack,
-    // and since this stack stays valid for the duration of the blocked task, we can reference the structure safely
-    // in mutex_release
-    struct mutex_blocked_task* bt = (struct mutex_blocked_task*)__builtin_alloca(sizeof(struct mutex_blocked_task));
-    zero(bt);
-    bt->user = __atomic_xadd(&m->lock.users, 1); // increment user count (we're waiting on a ticket)
-    bt->task = get_cpu()->current_task;          // need this to unblock the task later
-    assert(get_cpu() != null, "must be in smp");
-    assert(bt->task != null, "must be in a task");
-
-    // add this task to the blocked tasks hash table
-    HT_ADD(m->blocked_tasks, user, bt);
-    m->num_blocked_tasks++;
-
-    // place the task into a BLOCKED state so that the scheduler doesn't try to run the task until mutex_release wakes it up
-    // but we have to prevent a race condition here, where we might be pre-empted before entering a mutex blocking state
-    u64 cpu_flags = __cli_saveflags();
-    release_lock(m->internal_lock);
-    task_yield(TASK_YIELD_MUTEX_BLOCK); // when the task wakes up, it means mutex_release believes we're the proper owner of the next ticket
-    __restoreflags(cpu_flags);
-
-    // remove us from the hash table
-    acquire_lock(m->internal_lock);
-    assert(m->lock.ticket == bt->user, "why did we wake up if the ticket doesn't match??");
-    HT_DELETE(m->blocked_tasks, bt);
-    m->num_blocked_tasks--;
-    release_lock(m->internal_lock);
+    wait_condition(m->unlock); // mutex condition signals start at 1, so this returns immediately on the first call
+                               // subsequent calls block on the wait condition
+    return;
 }
 
 static void mutex_release(struct mutex* m)
 {
-    acquire_lock(m->internal_lock); // lock the internal lock first, so that we can unblock some tasks before any other acquire happens
-    release_lock(m->lock); // increments lock.ticket
-
-    __barrier();
-    u32 next_ticket = m->lock.ticket;
-
-    // if lock.ticket exists in the blocked queue
-    struct mutex_blocked_task* bt = null;
-    HT_FIND(m->blocked_tasks, next_ticket, bt);
-
-    if(bt != null) {
-        // don't remove from the hash table here, that'll happen in mutex_acquire
-        release_lock(m->internal_lock);
-        task_unblock(bt->task);
-    } else {
-        // no task found
-        release_lock(m->internal_lock);
-    }
+    notify_condition(m->unlock);
 }
 
 static bool mutex_trylock(struct mutex* m)
 {
-    acquire_lock(m->internal_lock);
-    bool res = try_lock(m->lock);
-    release_lock(m->internal_lock);
-    return res;
+    return try_lock(m->unlock);
 }
 
 static bool mutex_canlock(struct mutex* m)
 {
-    acquire_lock(m->internal_lock);
-    bool res = can_lock(m->lock);
-    release_lock(m->internal_lock);
-    return res;
+    return can_lock(m->unlock);
 }
 
 struct lock_functions mutexlock_functions = {
@@ -331,5 +274,122 @@ struct lock_functions mutexlock_functions = {
     .release = (void(*)(intp))&mutex_release,
     .trylock = (bool(*)(intp))&mutex_trylock,
     .canlock = (bool(*)(intp))&mutex_canlock,
+    .wait    = null,
+    .notify  = null,
+};
+
+struct condition_blocked_task {
+    //TODO MAKE_CIRCULAR_LIST;
+    struct task* task;
+    struct condition_blocked_task* prev;
+    struct condition_blocked_task* next;
+};
+
+void condition_wait(struct condition* cond)
+{
+    // try locking the ticketlock, this means multiple waiters will be served in order
+    acquire_lock(cond->internal_lock);
+
+    // increment the waiter index
+    u32 me = __atomic_xinc(&cond->waiters);
+
+    // if there are enough signals pending for us, we can safely return
+    __barrier();
+    if(me < cond->signals) {
+        release_lock(cond->internal_lock);
+        return;
+    }
+
+    // otherwise, we need to block this task. create a new blocked task structure on the stack,
+    // and since this stack stays valid for the duration of the blocked task, we can reference the structure safely
+    // in condition_notify
+    // TODO: this will probably not be good if waiting tasks are killed or exit somehow
+    assert(get_cpu() != null && get_cpu()->current_task, "must be in smp");
+
+    struct condition_blocked_task* bt = (struct condition_blocked_task*)__builtin_alloca(sizeof(struct condition_blocked_task));
+    zero(bt);
+    bt->task = get_cpu()->current_task;
+
+    // add bt to blocked tasks
+    if(cond->blocked_tasks == null) {
+        bt->next = bt->prev = bt;
+        cond->blocked_tasks = bt;
+    } else {
+        cond->blocked_tasks->prev->next = bt;
+        bt->prev = cond->blocked_tasks->prev;
+        bt->next = cond->blocked_tasks;
+        cond->blocked_tasks->prev = bt;
+    }
+
+    // prevent preemption between now and the call to task_yield
+    u64 cpu_flags = __cli_saveflags();
+    release_lock(cond->internal_lock);
+
+    // place the task into a BLOCKED state so that the scheduler doesn't try to run the task until condition_notify wakes it up
+    task_yield(TASK_YIELD_WAIT_CONDITION); // when the task wakes up, it means condition_notify has increased the signal count
+    assert(me < cond->signals, "must be true");
+    __restoreflags(cpu_flags);
+}
+
+void condition_notify(struct condition* cond)
+{
+    acquire_lock(cond->internal_lock);
+    __atomic_inc(&cond->signals);
+
+    // since we have internal_lock, condition_wait can't modify cond->blocked_tasks
+    // so if there are no blocked tasks, we can safely return
+    if(cond->blocked_tasks == null) { // no waiting tasks, return
+        release_lock(cond->internal_lock);
+        return;
+    }
+
+    // since we have a blocked task, we need to wake it up
+    // remove the head of the list
+    struct condition_blocked_task* bt = cond->blocked_tasks;
+    if(bt->next == bt) cond->blocked_tasks = null;
+    else {
+        cond->blocked_tasks = bt->next;
+        cond->blocked_tasks->prev = bt->prev;
+        cond->blocked_tasks->prev->next = cond->blocked_tasks;
+    }
+
+    // safe to release the condition lock now
+    release_lock(cond->internal_lock);
+
+    // we don't have to verify that task->state has became BLOCKED before calling task_unblock:
+    // if the blocked task is on *this* cpu, task_yield would have been called without a race condition
+    // if the blocked task was on another cpu, it may not have entered task_yield yet, but 
+    // it's interrupts must be disabled (due to the __cli_saveflags above), and so an IPI
+    // won't be received until task_yield has executed
+    task_unblock(bt->task); // IPI for non-local tasks
+}
+
+static bool condition_trylock(struct condition* cond)
+{
+    bool res = false;
+    acquire_lock(cond->internal_lock);
+
+    __barrier();
+    if(cond->waiters < cond->signals) {
+        __atomic_inc(&cond->waiters);
+        res = true;
+    }
+
+    release_lock(cond->internal_lock);
+    return res;
+}
+
+static bool condition_canlock(struct condition* cond)
+{
+    return cond->waiters < cond->signals;
+}
+
+struct lock_functions conditionlock_functions = {
+    .acquire = null,
+    .release = null,
+    .trylock = (bool(*)(intp))&condition_trylock,
+    .canlock = (bool(*)(intp))&condition_canlock,
+    .wait    = (void(*)(intp))&condition_wait,
+    .notify  = (void(*)(intp))&condition_notify,
 };
 

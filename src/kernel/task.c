@@ -283,7 +283,7 @@ void task_yield(enum TASK_YIELD_REASON reason)
     case TASK_YIELD_EXITED:
         from_task->state = TASK_STATE_EXITED;
         break;
-    case TASK_YIELD_MUTEX_BLOCK:
+    case TASK_YIELD_WAIT_CONDITION:
         from_task->state = TASK_STATE_BLOCKED;
         break;
     }

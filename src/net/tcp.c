@@ -132,6 +132,8 @@ struct tcp_socket {
     u16    their_maximum_segment_size;
     u16    their_window_scale;
     u32    their_ack_number;
+
+    struct condition receive_ready;
 };
 
 static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16 max_payload_length, u16 flags);
@@ -165,6 +167,7 @@ static struct net_socket_ops tcp_socket_ops = {
 struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
 {
     declare_ticketlock(lock_init);
+    declare_condition(condition_init);
 
     assert(sockinfo->protocol == NET_PROTOCOL_TCP, "required TCP sockinfo");
 
@@ -178,6 +181,7 @@ struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
     socket->accept_lock             = lock_init;
     socket->send_buffers_lock       = lock_init;
     socket->send_segment_queue_lock = lock_init;
+    socket->receive_ready           = condition_init;
 
     socket->state                   = TCP_SOCKET_STATE_CLOSED;
     socket->net_socket.ops          = &tcp_socket_ops;
@@ -286,9 +290,19 @@ static s64 _socket_receive(struct net_socket* net_socket, struct buffer* buf, u6
 {
     // receive should try and read `size` bytes, but can return early if we receive a PUSH
     //fprintf(stderr, "TODO: tcp receive socket 0x%lX buf 0x%lX size %lu/%lu\n", socket, buf, size, buffer_remaining_write(buf));
+    struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
+
+    // try to read up until size or until a PUSH is encountered
+//    acquire_lock(socket->receive_lock);
+    fprintf(stderr, "socket 0x%lX waiting on receive_ready condition\n");
+    wait_condition(socket->receive_ready);
+    fprintf(stderr, "socket 0x%lX woke up from receive_ready condition\n");
+
     unused(net_socket);
     unused(buf);
     unused(size);
+
+//    release_lock(socket->receive_lock);
     return 0;
 }
 
@@ -632,10 +646,11 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
             if(seq_inc > 0) {
                 if(payload_length > 0) {
                     //TODO this is TEMP anyway, so just allocate a buffer, write to it, queue it, and free it
-                    struct buffer* sendbuf = buffer_create(payload_length);
-                    buffer_write(sendbuf, (u8*)hdr + payload_start, payload_length);
-                        _queue_segment(socket, sendbuf, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
-                    buffer_destroy(sendbuf);
+                    //!struct buffer* sendbuf = buffer_create(payload_length);
+                    //!buffer_write(sendbuf, (u8*)hdr + payload_start, payload_length);
+                    //!    _queue_segment(socket, sendbuf, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
+                    //!buffer_destroy(sendbuf);
+                    notify_condition(socket->receive_ready);
                 } else {
                     _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
                 }

@@ -713,7 +713,7 @@ static s64 echo_server_per_socket(struct task* task)
 
     struct buffer* readbuf = buffer_create(countof(cbuf));
     while(true) {
-//        s = net_socket_receive(socket, readbuf, countof(cbuf));
+        s = net_socket_receive(socket, readbuf, countof(cbuf));
 //        if(s < 0) break;
 //        s = (s64)buffer_read(readbuf, (u8*)cbuf, countof(cbuf));
 //
