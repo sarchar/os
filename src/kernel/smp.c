@@ -2,6 +2,7 @@
 
 #include "apic.h"
 #include "cpu.h"
+#include "deque.h"
 #include "gdt.h"
 #include "hashtable.h"
 #include "hpet.h"
@@ -278,11 +279,16 @@ struct lock_functions mutexlock_functions = {
     .notify  = null,
 };
 
+#define USE_DEQUE
 struct condition_blocked_task {
     //TODO MAKE_CIRCULAR_LIST;
     struct task* task;
+#ifdef USE_DEQUE
+    MAKE_DEQUE;
+#else
     struct condition_blocked_task* prev;
     struct condition_blocked_task* next;
+#endif
 };
 
 void condition_wait(struct condition* cond)
@@ -311,6 +317,9 @@ void condition_wait(struct condition* cond)
     bt->task = get_cpu()->current_task;
 
     // add bt to blocked tasks
+#ifdef USE_DEQUE
+    DEQUE_PUSH_BACK(cond->blocked_tasks, bt);
+#else
     if(cond->blocked_tasks == null) {
         bt->next = bt->prev = bt;
         cond->blocked_tasks = bt;
@@ -320,6 +329,7 @@ void condition_wait(struct condition* cond)
         bt->next = cond->blocked_tasks;
         cond->blocked_tasks->prev = bt;
     }
+#endif
 
     // prevent preemption between now and the call to task_yield
     u64 cpu_flags = __cli_saveflags();
@@ -338,20 +348,25 @@ void condition_notify(struct condition* cond)
 
     // since we have internal_lock, condition_wait can't modify cond->blocked_tasks
     // so if there are no blocked tasks, we can safely return
-    if(cond->blocked_tasks == null) { // no waiting tasks, return
+    struct condition_blocked_task* bt = cond->blocked_tasks;
+#ifdef USE_DEQUE
+    DEQUE_POP_FRONT(cond->blocked_tasks, bt);
+#endif
+    if(bt == null) { // no waiting tasks, return
         release_lock(cond->internal_lock);
         return;
     }
 
+#ifndef USE_DEQUE
     // since we have a blocked task, we need to wake it up
     // remove the head of the list
-    struct condition_blocked_task* bt = cond->blocked_tasks;
     if(bt->next == bt) cond->blocked_tasks = null;
     else {
         cond->blocked_tasks = bt->next;
         cond->blocked_tasks->prev = bt->prev;
         cond->blocked_tasks->prev->next = cond->blocked_tasks;
     }
+#endif
 
     // safe to release the condition lock now
     release_lock(cond->internal_lock);

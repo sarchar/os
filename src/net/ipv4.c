@@ -209,7 +209,7 @@ void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_l
     char buf1[16], buf2[16];
     ipv4_format_address(buf1, hdr->source_address);
     ipv4_format_address(buf2, hdr->dest_address);
-    fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s size %d\n", hdr->identification, hdr->protocol, buf1, buf2, packet_length);
+    //fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s size %d\n", hdr->identification, hdr->protocol, buf1, buf2, packet_length);
 
     // look up the net_interface that handles packets addressed to hdr->dest_address
     // if no interface is found, we can ignore the packet. otherwise, deliver the packet to that interface

@@ -321,7 +321,10 @@ static s64 _socket_update(struct net_socket* net_socket)
 
     if((ret = _process_send_segment_queue(socket)) < 0) return ret;
 
-    // TODO notify the network layer if there's still work left on this socket
+    // notify the network layer if there's still work left on this socket
+    if(socket->send_buffers != null || socket->send_segment_queue_head != socket->send_segment_queue_tail) {
+        net_notify_socket(net_socket);
+    }
 
     return 0;
 }
@@ -433,7 +436,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     char buf2[16];
     ipv4_format_address(buf, iphdr->source_address);
     ipv4_format_address(buf2, iphdr->dest_address);
-    fprintf(stderr, "tcp: got source=%s:%d dest=%s:%d seq_number=%lu ack_number=%d window=%d urgent_pointer=%d\n",
+    fprintf(stderr, "tcp: got source=%s:%d dest=%s:%d seq_number=%lu ack_number=%lu window=%d urgent_pointer=%d\n",
             buf, hdr->source_port, buf2, hdr->dest_port, hdr->sequence_number, hdr->ack_number, hdr->window, hdr->urgent_pointer);
     fprintf(stderr, "        syn=%d ack=%d rst=%d fin=%d push=%d urgent=%d data_offset=%d checksum=0x%04X\n",
             hdr->sync, hdr->ack, hdr->reset, hdr->finish, hdr->push, hdr->urgent, hdr->data_offset, hdr->checksum);
@@ -608,17 +611,15 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
 
             // check if they're ACKing data, and then free retransmission data if we can
             if(hdr->ack) {
+//#define NEWER_ACK(hdr,socket) ((socket->my_sequence_number >= socket->their_ack_number && hdr->ack_number >= socket->their_ack_number && hdr->ack_number <= socket->my_sequence_number) \
+//                           || (socket->my_sequence_number < socket->their_ack_number && (hdr->ack_number >= socket->their_ack_number || hdr->ack_number <= socket->my_sequence_number)))
+//                if(!NEWER_ACK(hdr, socket)) {
                 if(hdr->ack_number != socket->my_sequence_number) {
-                    fprintf(stderr, "tcp: got bad ACK\n");
-                    //TODO close?
+                    fprintf(stderr, "tcp: got bad ACK. closing socket\n");
+                    socket->state = TCP_SOCKET_STATE_CLOSED;
                     goto done;
                 }
 
-//#define NEWER_ACK(hdr,socket) (socket->my_sequence_number >= socket->their_ack_number && hdr->ack_number >= socket->their_ack_number && hdr->ack_number <= socket->my_sequence_number) \
-//                           || (socket->my_sequence_number < socket->their_ack_number && (hdr->ack_number >= socket->their_ack_number || hdr->ack_number <= socket->my_sequence_number)
-//
-//                if(NEWER_ACK)
-//                }
                 socket->their_ack_number = hdr->ack_number;
             }
 
@@ -650,6 +651,7 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
                     //!buffer_write(sendbuf, (u8*)hdr + payload_start, payload_length);
                     //!    _queue_segment(socket, sendbuf, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
                     //!buffer_destroy(sendbuf);
+                    _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
                     notify_condition(socket->receive_ready);
                 } else {
                     _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
@@ -817,6 +819,9 @@ static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16
 static s64 _process_send_buffers(struct tcp_socket* socket)
 {
     s64 ret = 0;
+    
+    // only send data if we're in the established data
+    if(socket->state != TCP_SOCKET_STATE_ESTABLISHED) return 0;
 
     acquire_lock(socket->send_buffers_lock);
     while(socket->send_buffers != null) {
@@ -876,7 +881,8 @@ static s64 _process_send_segment_queue(struct tcp_socket* socket)
         if((ret = entry->net_interface->wrap_packet(entry, &socket->net_socket.socket_info.source_address, NET_PROTOCOL_TCP, tcp_packet_size, &_build_tcp_packet, info)) < 0) return ret;
 
         // packet is ready for transmission, queue it in the network layer
-        fprintf(stderr, "tcp: net send queue ready for packet seq=%lu\n", info->sequence_number); 
+        fprintf(stderr, "tcp: net send queue ready for packet seq=%lu send_segment_queue=%d/%d (processed on task_id=%d)\n", 
+                info->sequence_number, socket->send_segment_queue_head, socket->send_segment_queue_tail, get_cpu()->current_task->task_id); 
         net_ready_send_packet_queue_entry(entry);
 
         // packet was delivered to the network layer, and so it should get sent soon. we can mark it 
