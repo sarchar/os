@@ -38,6 +38,7 @@ void* _PDCLIB_morecore( _PDCLIB_intptr_t size )
         // figure out the page order to allocate, as this allocation will be contiguous
         u8 order = 0;
         if(npages > 1) order = next_power_of_2(npages);
+        assert(order <= PALLOC_MAX_ORDER, "TODO multiple palloc calls are required to satisfy this request"); // doable once we can allocate a region of vmem before putting physical pages in it
 
         // claim pages
         intp phys = palloc_claim(order);
@@ -49,7 +50,7 @@ void* _PDCLIB_morecore( _PDCLIB_intptr_t size )
         morecore_lastcall_end = virt + ((1 << order) << PAGE_SHIFT);
 
         // return start of newly allocated region
-        fprintf(stderr, "_PDCLIB_morecore: alloc size=%ld virt=0x%lX morecore_lastcall_end=0x%lX\n", size, virt, morecore_lastcall_end);
+        //fprintf(stderr, "_PDCLIB_morecore: alloc size=%ld virt=0x%lX morecore_lastcall_end=0x%lX\n", size, virt, morecore_lastcall_end);
         return (void*)virt;
     } else {
         assert(false, "can't call _PDCLIB_morecore with negative argument yet");
