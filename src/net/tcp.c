@@ -1,3 +1,4 @@
+// RFC at https://datatracker.ietf.org/doc/html/rfc9293
 #include "kernel/common.h"
 
 #include "errno.h"
@@ -84,7 +85,9 @@ enum TCP_BUILD_PACKET_FLAGS {
     TCP_BUILD_PACKET_FLAG_PUSH          = 1 << 2,
     TCP_BUILD_PACKET_FLAG_PUSH_ON_EMPTY = 1 << 3,
     TCP_BUILD_PACKET_FLAG_RESET         = 1 << 4,
-    TCP_BUILD_PACKET_FLAG_FINISH        = 1 << 5
+    TCP_BUILD_PACKET_FLAG_FINISH        = 1 << 5,
+    TCP_BUILD_PACKET_FLAG_NO_RETRY      = 1 << 6, // when set, do not try to retransmit this packet
+    TCP_BUILD_PACKET_FLAG_OPTIONS       = 1 << 7, // include tcp options in the header
 };
 
 struct tcp_build_packet_info {
@@ -106,6 +109,8 @@ struct tcp_socket {
     struct tcp_socket* pending_accept_tail;
     struct ticketlock  accept_lock;
 
+    struct ticketlock  main_lock;
+
     struct ticketlock              send_segment_queue_lock;
     struct tcp_build_packet_info** send_segment_queue;
     u32    send_segment_queue_head;
@@ -115,7 +120,9 @@ struct tcp_socket {
 
     struct buffer*    send_buffers;
     struct ticketlock send_buffers_lock;
-    struct buffer* receive_buffer;
+
+    struct buffer*    receive_buffer;
+    struct ticketlock receive_buffer_lock;
 
     u8     state;
     u8     unused1;
@@ -136,6 +143,10 @@ struct tcp_socket {
     struct condition receive_ready;
 };
 
+// This checks if the ack_number in the header is strictly newer than the previously received ACK and a valid ACK according to our sequence number
+#define ACK_IS_NEWER(hdr,socket) ((socket->my_sequence_number >= socket->their_ack_number && hdr->ack_number > socket->their_ack_number && hdr->ack_number <= socket->my_sequence_number) \
+                               || (socket->my_sequence_number < socket->their_ack_number && (hdr->ack_number > socket->their_ack_number || hdr->ack_number <= socket->my_sequence_number)))
+
 static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16 max_payload_length, u16 flags);
 static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start);
 
@@ -149,6 +160,7 @@ static s64 _process_send_segment_queue(struct tcp_socket* socket);
 ////////////////////////////////////////////////////////////////////////////////
 static s64                _socket_listen (struct net_socket*, u16);
 static struct net_socket* _socket_accept (struct net_socket*);
+static s64                _socket_close  (struct net_socket*);
 static s64                _socket_update (struct net_socket* net_socket);
 static s64                _socket_send   (struct net_socket* net_socket, struct buffer*);
 static s64                _socket_receive(struct net_socket* net_socket, struct buffer*, u64 size);
@@ -157,7 +169,7 @@ static struct net_socket_ops tcp_socket_ops = {
     .listen  = &_socket_listen,
     .accept  = &_socket_accept,
     .connect = null,
-    .close   = null,
+    .close   = &_socket_close,
     .send    = &_socket_send,
     .receive = &_socket_receive,
     .update  = &_socket_update,
@@ -178,7 +190,9 @@ struct net_socket* tcp_create_socket(struct net_socket_info* sockinfo)
     struct tcp_socket* socket = (struct tcp_socket*)kalloc(sizeof(struct tcp_socket)); // use kalloc for fast allocation
     zero(socket);
 
+    socket->main_lock               = lock_init;
     socket->accept_lock             = lock_init;
+    socket->receive_buffer_lock     = lock_init;
     socket->send_buffers_lock       = lock_init;
     socket->send_segment_queue_lock = lock_init;
     socket->receive_ready           = condition_init;
@@ -196,6 +210,10 @@ void tcp_destroy_socket(struct net_socket* net_socket)
 
     if(socket->send_segment_queue) {
         free(socket->send_segment_queue);
+    }
+
+    if(socket->receive_buffer) {
+        buffer_destroy(socket->receive_buffer);
     }
 
     kfree(socket, sizeof(struct tcp_socket));
@@ -261,11 +279,19 @@ static struct net_socket* _socket_accept(struct net_socket* socket)
     return null;
 }
 
+static s64 _socket_close(struct net_socket* net_socket)
+{
+    // TODO: on established connections, send FIN
+    struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
+    socket->state = TCP_SOCKET_STATE_CLOSED;
+    return 0;
+}
+
 static s64 _socket_send(struct net_socket* net_socket, struct buffer* buf)
 {
     // add buf to the tail of the linked list tcp_socket.send_buffers
     struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
-    fprintf(stderr, "tcp: queing send buffer 0x%lX on socket 0x%lX read_size %lu\n", buf, socket, buffer_remaining_read(buf));
+    fprintf(stderr, "tcp: queuing send buffer 0x%lX on socket 0x%lX size %lu\n", buf, socket, buffer_remaining_read(buf));
 
     acquire_lock(socket->send_buffers_lock);
 
@@ -288,22 +314,42 @@ static s64 _socket_send(struct net_socket* net_socket, struct buffer* buf)
 
 static s64 _socket_receive(struct net_socket* net_socket, struct buffer* buf, u64 size)
 {
+    s64 res = 0;
+
     // receive should try and read `size` bytes, but can return early if we receive a PUSH
     //fprintf(stderr, "TODO: tcp receive socket 0x%lX buf 0x%lX size %lu/%lu\n", socket, buf, size, buffer_remaining_write(buf));
     struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
 
     // try to read up until size or until a PUSH is encountered
-//    acquire_lock(socket->receive_lock);
-    fprintf(stderr, "socket 0x%lX waiting on receive_ready condition\n");
-    wait_condition(socket->receive_ready);
-    fprintf(stderr, "socket 0x%lX woke up from receive_ready condition\n");
+    while(res >= 0 && (u64)res < size) {
+        fprintf(stderr, "socket 0x%lX waiting on receive_ready condition\n");
+        wait_condition(socket->receive_ready); // receive_ready is only triggered when receive buffer goes from empty to non-empty (not each time data is received)
+                                               // so we will receive data, and if the buffer is non-empty after we receive data, we can notify_condition since we've 
+                                               // consumed one signal to let successive calls and other threads read successfully
+        assert(buffer_remaining_read(socket->receive_buffer) > 0, "_socket_receive up with no data in buffer");
+        fprintf(stderr, "socket 0x%lX woke up from receive_ready condition\n");
 
-    unused(net_socket);
-    unused(buf);
-    unused(size);
+        // we need a lock to protect receive_buffer between here and _receive_payload
+        acquire_lock(socket->receive_buffer_lock);
+        fprintf(stderr, "receive buffer has %d remaining\n", buffer_remaining_read(socket->receive_buffer));
 
-//    release_lock(socket->receive_lock);
-    return 0;
+        // TODO read data
+        res += buffer_read_into(buf, socket->receive_buffer, size);
+        fprintf(stderr, "read %d from receive buffer, has %d remaining\n", res, buffer_remaining_read(socket->receive_buffer));
+        // TODO break if PSH encountered
+
+        // notify any remaining data available
+        if(buffer_remaining_read(socket->receive_buffer) > 0) {
+            notify_condition(socket->receive_ready);
+        }
+
+        release_lock(socket->receive_buffer_lock);
+
+        //TODO TEMP
+        break;
+    }
+
+    return res;
 }
 
 // called when there's work to be done on the socket
@@ -344,7 +390,7 @@ static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pen
     release_lock(owner->accept_lock);
 }
 
-static s32 _parse_options(struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options)
+static s32 _parse_header_options(struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options)
 {
     zero(options);
 
@@ -427,7 +473,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
 
     struct tcp_header_options options;
     s32 payload_start;
-    if((payload_start = _parse_options(hdr, packet_length, &options)) < 0) {
+    if((payload_start = _parse_header_options(hdr, packet_length, &options)) < 0) {
         fprintf(stderr, "tcp: dropping packet due to invalid options\n");
         return;
     }
@@ -436,10 +482,11 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     char buf2[16];
     ipv4_format_address(buf, iphdr->source_address);
     ipv4_format_address(buf2, iphdr->dest_address);
-    fprintf(stderr, "tcp: got source=%s:%d dest=%s:%d seq_number=%lu ack_number=%lu window=%d urgent_pointer=%d\n",
-            buf, hdr->source_port, buf2, hdr->dest_port, hdr->sequence_number, hdr->ack_number, hdr->window, hdr->urgent_pointer);
-    fprintf(stderr, "        syn=%d ack=%d rst=%d fin=%d push=%d urgent=%d data_offset=%d checksum=0x%04X\n",
-            hdr->sync, hdr->ack, hdr->reset, hdr->finish, hdr->push, hdr->urgent, hdr->data_offset, hdr->checksum);
+    fprintf(stderr, "tcp: got src=%s:%d dst=%s:%d SEQ=%lu ACK=%lu window=%lu urgent=%lu\n"
+                    "         SYN=%d ACK=%d RST=%d FIN=%d PSH=%d URG=%d\n"
+                    "         data_offset=%d checksum=0x%04X payload_length=%lu\n",
+            buf, hdr->source_port, buf2, hdr->dest_port, hdr->sequence_number, hdr->ack_number, hdr->window, hdr->urgent_pointer,
+            hdr->sync, hdr->ack, hdr->reset, hdr->finish, hdr->push, hdr->urgent, hdr->data_offset, hdr->checksum, packet_length - hdr->data_offset * 4);
 
     // The 4-tuple (source_address, source_port, dest_address, dest_port) defines a socket 
     // Look it up first, and take action on whether the socket exists or is new.
@@ -455,26 +502,26 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     sockinfo.dest_address.protocol   = NET_PROTOCOL_IPv4;
     sockinfo.dest_address.ipv4       = iphdr->dest_address;
 
-    // Look up the socket
+    // Look up the net_socket
     // TODO only create sockets on connection-style segments
-    struct net_socket* socket = net_lookup_socket(&sockinfo);
-    struct tcp_socket* tcpsocket = containerof(socket, struct tcp_socket, net_socket);
-    if(socket == null) {
+    struct net_socket* net_socket = net_lookup_socket(&sockinfo);
+    struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
+    if(net_socket == null) {
         // look up listening socket. a listening socket will have the source address of 0.0.0.0 and port as 0,
         // and the dest address can either be one belonging to a net_interface or also 0 to accept all incoming addresses
         sockinfo.source_address.ipv4 = 0;
         sockinfo.source_port         = 0;
 
-        socket = net_lookup_socket(&sockinfo);
-        if(socket == null) {
+        net_socket = net_lookup_socket(&sockinfo);
+        if(net_socket == null) {
             // no listening socket directed at ip:port, try 0.0.0.0:port
             sockinfo.dest_address.ipv4 = 0;
-            socket = net_lookup_socket(&sockinfo);
+            net_socket = net_lookup_socket(&sockinfo);
         }
 
         // validate that the socket is in a listening state
-        struct tcp_socket* listen_socket = containerof(socket, struct tcp_socket, net_socket);
-        if(socket == null || listen_socket->state != TCP_SOCKET_STATE_LISTEN) {
+        struct tcp_socket* listen_socket = containerof(net_socket, struct tcp_socket, net_socket);
+        if(net_socket == null || listen_socket->state != TCP_SOCKET_STATE_LISTEN) {
             // TODO no listening socket, so reply with ICMP host port unreachable
             fprintf(stderr, "tcp: no listening socket on %s:%d found, dropping packet\n", buf2, sockinfo.dest_port);
             goto done;
@@ -507,54 +554,107 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
         _add_pending_accept(listen_socket, containerof(newsocket, struct tcp_socket, net_socket));
 
         // deliver the packet to this socket
-        tcpsocket = containerof(newsocket, struct tcp_socket, net_socket);
-        tcpsocket->state         = TCP_SOCKET_STATE_LISTEN;
-        tcpsocket->net_interface = iface;
-
-        // allocate a send queue for the new socket
-        _allocate_send_segment_queue(tcpsocket);
+        socket = containerof(newsocket, struct tcp_socket, net_socket);
+        socket->state         = TCP_SOCKET_STATE_LISTEN;
+        socket->net_interface = iface;
     }
 
-    _receive_segment(tcpsocket, hdr, packet_length, &options, (u16)(payload_start & 0xFFFF));
+    if(socket != null) {
+        acquire_lock(socket->main_lock);
+        _receive_segment(socket, hdr, packet_length, &options, (u16)(payload_start & 0xFFFF));
+        release_lock(socket->main_lock);
+    }
 
 done:
     return;
+}
+
+static s64 _receive_payload(struct tcp_socket* socket, u32 sequence_number, u8* payload, u16 payload_length)
+{
+    if(payload_length == 0) return 0;
+
+    // TODO maybe their_sequence_number should be 64-bit and we don't have to worry about overflow, as 4GiB isn't that large now
+    // TODO process any payload
+    if(sequence_number != socket->their_sequence_number) { // if the incoming packet matches the packet we expect
+        fprintf(stderr, "tcp: TODO got out of order packet (got sequence %d, expected %d)\n", sequence_number, socket->their_sequence_number);
+        return 0;
+    }
+
+    acquire_lock(socket->receive_buffer_lock);
+
+    u32 before_read_size = buffer_remaining_read(socket->receive_buffer);
+
+    if(buffer_remaining_write(socket->receive_buffer) < payload_length) {
+        release_lock(socket->receive_buffer_lock);
+        return 0;
+    }
+
+    u64 v = buffer_write(socket->receive_buffer, payload, payload_length);
+    fprintf(stderr, "payload added %d to buffer, now has %d\n", payload_length, buffer_remaining_read(socket->receive_buffer));
+    assert(v == payload_length, "what happened that there was enough space and then there wasn't?");
+
+    if(before_read_size == 0) {
+        notify_condition(socket->receive_ready);
+    }
+
+    release_lock(socket->receive_buffer_lock);
+
+    return payload_length;
 }
 
 static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start)
 {
     s64 res = 0;
 
-    //fprintf(stderr, "tcp: got packet on socket 0x%lX syn=%d ack=%d\n", socket, hdr->sync, hdr->ack);
+    u16 payload_length = packet_length - payload_start;
+    fprintf(stderr, "tcp: receive segment on socket 0x%lX SYN=%d ACK=%d RST=%d PUSH=%d payload=%d bytes\n", socket, hdr->sync, hdr->ack, hdr->reset, hdr->push, payload_length);
 
     if(hdr->reset) {
-        fprintf(stderr, "tcp: socket 0x%lX got RST..ignoring\n", socket);
-        //TODO close socket
-        return 0;
+        fprintf(stderr, "tcp: TODO socket 0x%lX got RST..closing socket for now\n", socket);
+        goto close_done;
+    }
+
+    if(hdr->finish && socket->state != TCP_SOCKET_STATE_ESTABLISHED) {
+        // TODO technically a FIN packet could have data, but we would only want to receive that data if a connection is established
+        fprintf(stderr, "tcp: TODO socket 0x%lX got FIN before being established..closing socket for now\n", socket);
+        goto close_done;
     }
 
     // ACK value is valid
-    if(hdr->ack) fprintf(stderr, "tcp: received ACK for %lu\n", hdr->ack_number);
+    if(hdr->ack) {
+        fprintf(stderr, "tcp: received ACK for %lu\n", hdr->ack_number);
 
-    // If these options are sent on any packet other than SYN packets, it's invalid
-    if((options->present & (TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE | TCP_OPTION_PRESENT_WINDOW_SCALE)) != 0 && !hdr->sync) {
+        // if their ACK is valid, then handle that
+        if((hdr->ack_number != socket->their_ack_number) && !ACK_IS_NEWER(hdr, socket)) {
+            fprintf(stderr, "tcp: ACK received was incorrect (got %lu wanted between %lu..%lu)\n", hdr->ack_number, socket->their_ack_number, socket->my_sequence_number);
+            goto close_done;
+        }
+
+        // update their ACK
+        socket->their_ack_number = hdr->ack_number;
+
+        // TODO free retransmission data
+    }
+
+    // If these options are sent on any packet other than connect packets, it's invalid
+    bool is_connect = hdr->sync && !hdr->reset; // SYN+ACK resposes can have options
+    if((options->present & (TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE | TCP_OPTION_PRESENT_WINDOW_SCALE)) != 0 && !is_connect) {
         fprintf(stderr, "tcp: can only send maximum segment size with SYN packets\n");
-        //TODO close socket
-        return 0;
+        goto close_done;
     }
 
     switch(socket->state) {
     case TCP_SOCKET_STATE_LISTEN:
-        // the only packet in CLOSED state we care about is SYN=1,ACK=0. RST is taken care of above
-        // and any payload is ignored
-        if(!hdr->sync || hdr->ack) {
-            tcp_destroy_socket(&socket->net_socket);
-            goto done;
+        // the only packet in LISTEN state we care about is SYN=1,ACK=0. RST is taken care of above and any payload is ignored
+        if(!is_connect) {
+            // TODO net_destroy_socket(&socket->net_socket); // I don't think we can destroy the socket while we're in a function using it
+                                                             // the destroying process should get moved to a cleanup function
+            goto close_done;
         }
 
         // check for valid segment sizes (must be at least 64, but 0 means unlimited)
         if(options->present & TCP_OPTION_PRESENT_MAXIMUM_SEGMENT_SIZE) {
-            if(options->maximum_segment_size != 0 && options->maximum_segment_size < 64) goto done;
+            if(options->maximum_segment_size != 0 && options->maximum_segment_size < 64) goto close_done;
             socket->their_maximum_segment_size = options->maximum_segment_size;
         }
 
@@ -563,109 +663,94 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
             socket->their_window_scale = options->window_scale;
         }
 
-        // read the sync value (+1 for the sync sequence)
+        // setup their base sequence_number
         socket->their_sequence_base = hdr->sequence_number;
 
-        // our computed their_sequence_number is +1 for the SYN
-        socket->their_sequence_number = socket->their_sequence_base + 1;
+        // SYN flag counts towards sequence number before payload
+        socket->their_sequence_number = hdr->sequence_number + hdr->sync;
 
         // for now, our sequence number will be some magic computed from theirs. 
         // TODO we need an initial sequence number generator that's supposed to cycle with time
         socket->my_sequence_base = ~((hdr->sequence_number >> 16) | ((hdr->sequence_number & 0xFFFF) << 16));
         socket->my_sequence_number = socket->my_sequence_base;
 
-        // send SYN+ACK
-        if((res = _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_SYNC | TCP_BUILD_PACKET_FLAG_ACK)) < 0) {
-            // internal error, we need to error out
-            // TODO close the net_socket?
-            goto done;
+        // start their ACK at our sequence_number before we transmit SYN, as this lets ACK_IS_NEWER work correctly
+        socket->their_ack_number = socket->my_sequence_base;
+
+        // allocate the receive buffer
+        socket->receive_buffer = buffer_create(2*1024*1024); // TODO determine the size somehow
+
+        // receive the payload, adjusting the sequence number for the SYN flag
+        if((res = _receive_payload(socket, hdr->sequence_number + hdr->sync, (u8*)hdr + payload_start, payload_length)) < 0) {
+            // error receiving payload
+            goto close_done;
+        } else if(res != payload_length) {
+            // did not process the entire payload, maybe because the receive buffer was full
         }
 
+        // update their_sequence_number for the payload, which is technically allowed in a connect segment
+        socket->their_sequence_number += res;
+
+        // now is the time that we need a send_segment_queue, so allocate it
+        _allocate_send_segment_queue(socket);
+
+        // send SYN+ACK
+        if((res = _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_SYNC | TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_OPTIONS)) < 0) {
+            // internal error, we need to error out
+            goto close_done;
+        }
+
+        // wait for ACK
         socket->state = TCP_SOCKET_STATE_SYNC_RECEIVED;
         break;
 
     case TCP_SOCKET_STATE_SYNC_RECEIVED:
-        // wait for ACK of our sequence
+        // wait for ACK of our sequence. if we get any packet that doesn't have an ACK
+        // then the peer sent something out of order and we need to handle that
         if(hdr->sync || !hdr->ack) {
-            fprintf(stderr, "TODO: tcp: got second SYN after receiving SYN already\n");
-            socket->state = TCP_SOCKET_STATE_CLOSED;
-            goto done;
+            fprintf(stderr, "tcp: TODO got second SYN after receiving SYN already\n");
+            goto close_done;
         }
 
-        // if their ACK matches our sequence number, then handle that
-        if(hdr->ack_number != socket->my_sequence_number) {
-            fprintf(stderr, "tcp: ACK received during handshake was incorrect (%lu != %lu)\n", hdr->ack_number, socket->my_sequence_number);
-            socket->state = TCP_SOCKET_STATE_CLOSED;
-            goto done;
-        }
-
-        socket->their_ack_number = hdr->ack_number;
-
+        // if we get here, that means the ACK processed above was valid and connection is established
         fprintf(stderr, "tcp: socket 0x%lX ESTABLISHED\n", socket);
         socket->state = TCP_SOCKET_STATE_ESTABLISHED;
-        goto done;
+        break;
 
     case TCP_SOCKET_STATE_ESTABLISHED:
         {
-            u16 payload_length = packet_length - payload_start;
-            if(payload_length > 0) fprintf(stderr, "tcp: got data packet size %d\n", payload_length);
-
-            // check if they're ACKing data, and then free retransmission data if we can
-            if(hdr->ack) {
-//#define NEWER_ACK(hdr,socket) ((socket->my_sequence_number >= socket->their_ack_number && hdr->ack_number >= socket->their_ack_number && hdr->ack_number <= socket->my_sequence_number) \
-//                           || (socket->my_sequence_number < socket->their_ack_number && (hdr->ack_number >= socket->their_ack_number || hdr->ack_number <= socket->my_sequence_number)))
-//                if(!NEWER_ACK(hdr, socket)) {
-                if(hdr->ack_number != socket->my_sequence_number) {
-                    fprintf(stderr, "tcp: got bad ACK. closing socket\n");
-                    socket->state = TCP_SOCKET_STATE_CLOSED;
-                    goto done;
-                }
-
-                socket->their_ack_number = hdr->ack_number;
+            if(hdr->sync) {
+                fprintf(stderr, "tcp: TODO got SYN in state ESTABLISHED\n");
+                goto close_done;
             }
 
             // check the sequence # to see if this is new data
             // TODO check that the sequence_number falls within our window of data
             // (if it doesn't, then the peer isn't playing nice and we should bail on them)
             // and then add it to an internal buffer
-            if(hdr->sequence_number != socket->their_sequence_number) { // if the incoming packet matches the packet we expect
-                fprintf(stderr, "TODO: tcp: got unxpected packet (got sequence %d, expected %d)\n", hdr->sequence_number, socket->their_sequence_number);
-                goto done;
+            if((res = _receive_payload(socket, hdr->sequence_number, (u8*)hdr + payload_start, payload_length)) < 0) {
+                // internal error
+                goto close_done;
             }
 
             // update their sequence number
-            u16 seq_inc = payload_length;
-            if(hdr->sync) seq_inc += 1;
-            if(hdr->finish) seq_inc += 1;
+            u16 seq_inc = res + hdr->finish;
             socket->their_sequence_number += seq_inc;
 
-            // check if this is a FIN (close) packet
+            // check if this is a FIN (close) packet after processing data, since TCP allows data in them
             if(hdr->finish) {
                 fprintf(stderr, "tcp: got FIN request\n");
                 _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
                 socket->state = TCP_SOCKET_STATE_CLOSE_WAIT;
                 goto done;
-            }
-
-            // send an ACK if sequence numbers changed
-            if(seq_inc > 0) {
-                if(payload_length > 0) {
-                    //TODO this is TEMP anyway, so just allocate a buffer, write to it, queue it, and free it
-                    //!struct buffer* sendbuf = buffer_create(payload_length);
-                    //!buffer_write(sendbuf, (u8*)hdr + payload_start, payload_length);
-                    //!    _queue_segment(socket, sendbuf, payload_length, TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH);
-                    //!buffer_destroy(sendbuf);
-                    _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
-                    notify_condition(socket->receive_ready);
-                } else {
-                    _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
-                }
+            } else if(seq_inc > 0) { // send an ACK if sequence numbers changed
+                _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
             }
         }
         break;
 
     case TCP_SOCKET_STATE_CLOSE_WAIT:
-        // we just wait here for someone to call _socket_close()
+        // we just wait here for someone to call net_socket_close()
         break;
 
     default:
@@ -673,8 +758,14 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
         break;
     }
 
+    goto done;
+
+close_done:
+    fprintf(stderr, "tcp: closing socket 0x%lX\n", socket);
+    _socket_close(&socket->net_socket);
+
 done:
-    return res;
+    return res < 0 ? res : 0;
 }
 
 static u16 _compute_checksum(u32 source_address, u32 dest_address, u8* data, u16 data_length)
@@ -808,6 +899,7 @@ static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16
         return -EAGAIN;
     }
 
+    assert(socket->send_segment_queue != null, "must call _allocate_send_segment_queue before _queue_segment");
     socket->send_segment_queue[slot] = info;
     socket->send_segment_queue_tail = (socket->send_segment_queue_tail + 1) % socket->send_segment_queue_size; // only increment after send_segment_queue[slot] is valid
     release_lock(socket->send_segment_queue_lock);
@@ -815,7 +907,7 @@ static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16
     // tell the network layer this socket has work to do
     net_notify_socket(&socket->net_socket);
 
-    fprintf(stderr, "tcp: queued slot %d (new send_segment_queue_tail=%d, send_segment_queue_head=%d)\n", slot, socket->send_segment_queue_tail, socket->send_segment_queue_head);
+    fprintf(stderr, "tcp: queued slot %d send_segment_queue=%d/%d\n", slot, socket->send_segment_queue_head, socket->send_segment_queue_tail);
 
     return 0;
 }
@@ -833,7 +925,7 @@ static s64 _process_send_buffers(struct tcp_socket* socket)
 
         // remove buffer when it is empty
         if(buffer_remaining_read(curbuf) == 0) {
-            fprintf(stderr, "tcp: freeing buf 0x%lX\n", curbuf);
+//            fprintf(stderr, "tcp: freeing buf 0x%lX\n", curbuf);
 
             // remove the empty buffer from the list
             if(curbuf == curbuf->next) { // if curbuf points to itself, it's the only item in the list
@@ -850,7 +942,7 @@ static s64 _process_send_buffers(struct tcp_socket* socket)
         }
 
         // read the data from the buffer
-        fprintf(stderr, "tcp: queuing from send buffer 0x%lX on socket 0x%lX (%d remaining)\n", curbuf, socket, buffer_remaining_read(curbuf));
+//        fprintf(stderr, "tcp: queuing from send buffer 0x%lX on socket 0x%lX (%d remaining)\n", curbuf, socket, buffer_remaining_read(curbuf));
 
         // and queue up a data packet
         u16 queue_flags = TCP_BUILD_PACKET_FLAG_ACK | TCP_BUILD_PACKET_FLAG_PUSH_ON_EMPTY; // PUSH_ON_EMPTY = PUSH will be added if curbuf is empty
@@ -885,7 +977,7 @@ static s64 _process_send_segment_queue(struct tcp_socket* socket)
         if((ret = entry->net_interface->wrap_packet(entry, &socket->net_socket.socket_info.source_address, NET_PROTOCOL_TCP, tcp_packet_size, &_build_tcp_packet, info)) < 0) return ret;
 
         // packet is ready for transmission, queue it in the network layer
-        fprintf(stderr, "tcp: net send queue ready for packet seq=%lu send_segment_queue=%d/%d (processed on task_id=%d)\n", 
+        fprintf(stderr, "tcp: net send for packet seq=%lu send_segment_queue=%d/%d (processed on task_id=%d)\n", 
                 info->sequence_number, socket->send_segment_queue_head, socket->send_segment_queue_tail, get_cpu()->current_task->task_id); 
         net_ready_send_packet_queue_entry(entry);
 

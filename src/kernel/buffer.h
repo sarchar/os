@@ -34,7 +34,10 @@ struct buffer {
 struct buffer* buffer_create(u32 size);
 void           buffer_destroy(struct buffer*);
 u32            buffer_read(struct buffer*, u8*, u32);
+u32            buffer_read_into(struct buffer*, struct buffer*, u32);
 u32            buffer_write(struct buffer*, u8*, u32);
+u32            buffer_write_from(struct buffer*, struct buffer*, u32);
+u32            buffer_puts(struct buffer*, char*);
 
 __always_inline u32 buffer_remaining_read(struct buffer* buf) { return buf->usage; }
 __always_inline u32 buffer_remaining_write(struct buffer* buf) { return buf->size - buf->usage; } 

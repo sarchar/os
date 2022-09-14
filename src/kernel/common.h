@@ -11,12 +11,15 @@
 
             //fprintf(stderr, "assertion failed at " __FILE__ ":" stringify2(__LINE__) ": %s\n", err); 
 extern char const* assert_error_message; // might want this once per cpu more
-#define assert(cond,err) do { \
+#define __assert_int(cond,err) do { \
         if(!(cond)) {           \
             assert_error_message = err;         \
             kernel_panic(COLOR(128, 128, 128)); \
         }                                       \
     } while(false);
+#define __assert(cond, err) \
+    __assert_int(cond, "assertion failed at " __FILE__ ":" stringify2(__LINE__) ": " err "\n")
+#define assert(cond,err) __assert(cond,err)
 
 #define static_assert(cond,err) _Static_assert(cond, err)
 #define __always_inline __attribute__((always_inline)) inline

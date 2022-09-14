@@ -481,7 +481,7 @@ static void run_command(char* cmdbuffer)
             return;
         }
 
-        char* targetcpu = cmdptr;
+        char* stargetcpu = cmdptr;
         cmdptr = strchr(cmdptr, ' ');
         if(cmdptr != null) {
             *cmdptr++ = '\0';
@@ -489,9 +489,15 @@ static void run_command(char* cmdbuffer)
             cmdptr = end;
         }
 
+        u32 targetcpu = atoi(stargetcpu);
+        if(targetcpu >= apic_num_local_apics()) {
+            fprintf(stderr, "cpu %d is out of range\n", targetcpu);
+            return;
+        }
+
         extern s64 userland_task_main(struct task*);
         struct task* newtask = task_create(userland_task_main, (intp)null, true);
-        task_enqueue_for(atoi(targetcpu), newtask);
+        task_enqueue_for(targetcpu, newtask);
     } else if(strcmp(cmdbuffer, "pt") == 0) {
         paging_debug_table(get_cpu()->current_task->page_table);
     } else if(strcmp(cmdbuffer, "arp") == 0) {
@@ -702,36 +708,34 @@ static s64 echo_server_per_socket(struct task* task)
 {
     struct net_socket* socket = (struct net_socket*)task->userdata;
 
-    char cbuf[512];
     char ip[16];
     ipv4_format_address(ip, socket->socket_info.source_address.ipv4);
-    s64 s = (s64)snprintf(cbuf, 512, "Welcome to my echo server, %s:%d\n", ip, socket->socket_info.source_port);
 
-    struct buffer* buf;
-    buf = buffer_create((u64)s);
-    buffer_write(buf, (u8*)cbuf, (u64)s);
-    net_socket_send(socket, buf);
+    struct buffer* greeting = buffer_create(128);
+    buffer_puts(greeting, "Welcome to my echo server, ");
+    buffer_puts(greeting, ip);
+    buffer_puts(greeting, "\n");
+    net_socket_send(socket, greeting);
 
-    struct buffer* readbuf = buffer_create(countof(cbuf));
     while(true) {
-        s = net_socket_receive(socket, readbuf, countof(cbuf));
-//        if(s < 0) break;
-//        s = (s64)buffer_read(readbuf, (u8*)cbuf, countof(cbuf));
-//
-        buf = buffer_create((u64)s + 7);
-        buffer_write(buf, (u8*)"Echo: ", 6);
-//        buffer_write(buf, (u8*)cbuf, (u64)s);
-        buffer_write(buf, (u8*)"\n", 1);
-        if(net_socket_send(socket, buf) < 0) {
-            buffer_destroy(buf);
-            task_exit(-1);
+        struct buffer* reply = buffer_create(512);
+        buffer_write(reply, (u8*)"Echo: ", 6);
+        if(net_socket_receive(socket, reply, buffer_remaining_write(reply)) <= 0) {
+            // error/closed socket
+            buffer_destroy(reply);
+            break;
         }
 
-        task_yield(TASK_YIELD_VOLUNTARY);
+        // reply is freed after it is sent
+        if(net_socket_send(socket, reply) < 0) {
+            buffer_destroy(reply);
+            task_exit(-1);
+        }
     }
 
     net_socket_close(socket);
-    return s;
+    //TODO free socket
+    return 0;
 }
 
 static s64 echo_server(struct task* task)

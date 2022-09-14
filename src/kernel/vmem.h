@@ -19,6 +19,9 @@ intp vmem_map_pages(intp _vmem, intp phys, u64 npages, u32 flags);
 //intp vmem_unmap_pages(intp virt, u64 npages);
 intp vmem_unmap_pages(intp _vmem, intp virt, u64 npages);
 
+// TODO implement these
+intp vmem_alloc_region(intp _vmem, u64 npages);                        // Allocates a contiguous region of vmem that is not backed by physical memory
+
 // helpers for single page map/unmap
 #define vmem_map_page(vmem,phys,flags) vmem_map_pages(vmem, phys, 1, flags)
 #define vmem_unmap_page(vmem, virt) vmem_unmap_pages(vmem, virt, 1)

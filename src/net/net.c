@@ -21,6 +21,7 @@ static struct net_device* netdevs_tmp[256] = { null, }; // TEMP TODO get rid of 
 
 // global structure of all open sockets the kernel is aware of
 static struct net_socket* global_net_sockets = null;
+declare_spinlock(global_net_sockets_lock);
 
 // list of "notified" sockets, that have work pending
 static struct net_socket* notified_net_sockets = null;
@@ -250,9 +251,14 @@ static void _receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet
 struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
 {
     struct net_socket* tmp;
+    acquire_lock(global_net_sockets_lock);
     HT_FIND(global_net_sockets, *sockinfo, tmp);
-    if(tmp != null) return null;
+    if(tmp != null) {
+        release_lock(global_net_sockets_lock);
+        return null;
+    }
 
+    release_lock(global_net_sockets_lock); // releasing the lock lets socket create create other, possibly nested, sockets
     switch(sockinfo->protocol) {
     case NET_PROTOCOL_TCP:
         // get the size required for the socket structure and allocate it here
@@ -268,7 +274,9 @@ struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
     
     // add socket to global sockets
     memcpy(&tmp->socket_info, sockinfo, sizeof(struct net_socket_info)); // copy over sockinfo so *_create_socket() doesn't have to
+    acquire_lock(global_net_sockets_lock);
     HT_ADD(global_net_sockets, socket_info, tmp);
+    release_lock(global_net_sockets_lock);
 
     return tmp;
 }
@@ -276,9 +284,11 @@ struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
 void net_destroy_socket(struct net_socket* socket)
 {
     struct net_socket* tmp;
+    acquire_lock(global_net_sockets_lock);
     HT_FIND(global_net_sockets, socket->socket_info, tmp);
     assert(tmp != null, "all sockets should be in global_net_sockets");
     HT_DELETE(global_net_sockets, tmp);
+    release_lock(global_net_sockets_lock);
 
     switch(socket->socket_info.protocol) {
     case NET_PROTOCOL_TCP:
@@ -295,7 +305,9 @@ void net_destroy_socket(struct net_socket* socket)
 struct net_socket* net_lookup_socket(struct net_socket_info* sockinfo)
 {
     struct net_socket* res;
+    acquire_lock(global_net_sockets_lock);
     HT_FIND(global_net_sockets, *sockinfo, res);
+    release_lock(global_net_sockets_lock);
     return res;
 }
 

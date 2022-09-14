@@ -28,6 +28,7 @@ static void _kb_interrupt(struct interrupt_stack_registers* regs, intp pc, void*
     unused(userdata);
 
     // read the keyboard character and add it to our buffer
+    //TODO while(keyboard has data)...
     kb_data.buffer[kb_data.tail] = __inb(KEYBOARD_DATA);
     kb_data.tail = (kb_data.tail + 1) % 4096;
 }

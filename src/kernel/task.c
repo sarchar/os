@@ -363,11 +363,10 @@ resume_task:
 // call fprintf() (as interrupts are disabled and could cause a deadlock in the stream mutex)
 void task_unblock(struct task* task)
 {
-    assert(task->state == TASK_STATE_BLOCKED, "can't unblock an unblocked task");
-
     struct cpu* cpu = get_cpu();
-
     if(task->cpu == cpu) { // when we get called on the correct cpu, place the task in the unblocked queue
+        assert(task->state == TASK_STATE_BLOCKED, "can't unblock an unblocked task");
+
         u64 cpu_flags = __cli_saveflags();
         task_dequeue(&cpu->blocked_task, task);
 

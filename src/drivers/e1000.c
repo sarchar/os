@@ -428,7 +428,7 @@ static void _initialize_e1000(struct pci_device_info* pci_dev, u8 eth_index)
 
         pci_set_enable_msi(pci_dev, true);
     } else {
-        fprintf(stderr, "e1000: device does not support MSI, mapping global interrupt %d\n", pci_dev->config->h0.interrupt_line);
+        fprintf(stderr, "e1000: device does not support MSI, mapping global interrupt line %d\n", pci_dev->config->h0.interrupt_line);
 
         // Install a redirection from the PCI irq line to a new cpu interrupt
         // TODO: allocate cpu irqs!!

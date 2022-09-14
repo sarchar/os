@@ -284,7 +284,7 @@ struct condition_blocked_task {
     //TODO MAKE_CIRCULAR_LIST;
     struct task* task;
 #ifdef USE_DEQUE
-    MAKE_DEQUE;
+    MAKE_DEQUE(struct condition_blocked_task);
 #else
     struct condition_blocked_task* prev;
     struct condition_blocked_task* next;
@@ -372,6 +372,8 @@ void condition_notify(struct condition* cond)
     release_lock(cond->internal_lock);
 
     // we don't have to verify that task->state has became BLOCKED before calling task_unblock:
+    while(*(enum TASK_STATE volatile*)&bt->task->state != TASK_STATE_BLOCKED) __pause();
+
     // if the blocked task is on *this* cpu, task_yield would have been called without a race condition
     // if the blocked task was on another cpu, it may not have entered task_yield yet, but 
     // it's interrupts must be disabled (due to the __cli_saveflags above), and so an IPI

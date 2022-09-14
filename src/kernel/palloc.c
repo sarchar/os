@@ -16,8 +16,6 @@
 
 #define PALLOC_VERBOSE 0
 
-#define PALLOC_MAX_ORDER 11 // 1 greater than the actual order, 2^10 pages * 4KiB/page = 4MiB max contiguous allocation
-
 struct free_page {
     struct free_page* next;
     struct free_page* prev;
