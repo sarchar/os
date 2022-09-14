@@ -488,8 +488,8 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
     u32 cause = _read_command(edev, E1000_REG_INTERRUPT_CAUSE_CLEAR);
 
     if(cause & E1000_IFLAG_RX_TIMER_INT_RING_0) {
-        // packet received
-        //TODO notify packets instead of //_receive_packets(edev); ?
+        // packet has been received, but we don't do anything
+        // the net_do_work process will poll for incoming packets
         cause &= ~E1000_IFLAG_RX_TIMER_INT_RING_0;
     }
 

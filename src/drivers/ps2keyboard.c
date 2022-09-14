@@ -27,7 +27,7 @@ static void _kb_interrupt(struct interrupt_stack_registers* regs, intp pc, void*
     unused(pc);
     unused(userdata);
 
-    // read the keyboard character
+    // read the keyboard character and add it to our buffer
     kb_data.buffer[kb_data.tail] = __inb(KEYBOARD_DATA);
     kb_data.tail = (kb_data.tail + 1) % 4096;
 }
@@ -42,9 +42,15 @@ void ps2keyboard_load()
     __inb(KEYBOARD_DATA);
     while(__inb(KEYBOARD_STATUS) & 0x02) __inb(KEYBOARD_DATA);
 
+    // this interrupt is fixed at 33
     interrupts_install_handler(33, _kb_interrupt, null);
 
     fprintf(stderr, "ps2keyboard: initialized\n");
+}
+
+void ps2keyboard_unload()
+{
+    free(kb_data.buffer);
 }
 
 struct keyboard_map_entry {
@@ -237,9 +243,6 @@ __always_inline static u8 _get_next_scancode()
 
 void ps2keyboard_update()
 {
-    // nothing to do with no data
-    if(kb_data.tail == kb_data.head) return;
-
     // process the data
     while(kb_data.tail != kb_data.head) {
         u8 scancode = _get_next_scancode();

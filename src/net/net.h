@@ -100,6 +100,8 @@ typedef s64  (net_interface_wrap_packet_function)(struct net_send_packet_queue_e
 // Base class for network interfaces, like IPv4/6, that can be assigned to network devices.
 // The interface defines the local address and how to encapsulate packets in the assigned protocol
 struct net_interface {
+    MAKE_HASH_TABLE;
+
     struct net_address address;
     struct net_device* net_device;
     u8     protocol;
@@ -107,9 +109,6 @@ struct net_interface {
 
     net_interface_wrap_packet_function*    wrap_packet;
     net_interface_receive_packet_function* receive_packet;
-
-    // TODO send_packet, receive_packet, etc
-    MAKE_HASH_TABLE;
 };
 
 struct net_socket_info {
@@ -134,15 +133,14 @@ struct net_socket_ops {
 };
 
 struct net_socket {
+    MAKE_HASH_TABLE;
+
     struct net_socket_info socket_info;
     struct net_socket_ops* ops;
 
     // prev and next that allow the socket to be placed into a list
     struct net_socket* prev;
     struct net_socket* next;
-
-    // TODO send() and recv() function pointers?
-    MAKE_HASH_TABLE;
 };
 
 void net_init();
@@ -151,9 +149,6 @@ bool net_do_work();
 void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address, struct net_device_ops* ops);
 void net_device_register_interface(struct net_device* ndev, struct net_interface* iface);
 struct net_interface* net_device_find_interface(struct net_device* ndev, struct net_address* search_address);
-
-void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length);
-s64  net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length);
 
 s64  net_request_send_packet_queue_entry(struct net_interface*, struct net_socket*, struct net_send_packet_queue_entry**);
 void net_ready_send_packet_queue_entry(struct net_send_packet_queue_entry*);

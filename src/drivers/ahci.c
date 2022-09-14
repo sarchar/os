@@ -331,8 +331,6 @@ static void _deactivate_port(u8);
 static void _dump_port_registers(u8, char*);
 static inline s8 _find_free_command_slot(u8);
 static void _identify_device(u8);
-//static void _read_device(u8);
-//static void _write_device(u8);
 
 static u64 ahci_irq = 0;
 typedef void (hba_port_interrupt_handler)(u8 port_index, struct hba_port volatile*);
@@ -398,6 +396,7 @@ static bool _find_ahci_device_cb(struct pci_device_info* dev, void* userinfo)
 
 void ahci_load()
 {
+    // TODO initialize multiple AHCIs?
     struct pci_device_info* dev = null;
     pci_iterate_vendor_devices(0x8086, _find_ahci_device_cb, &dev);
 
@@ -486,11 +485,6 @@ void ahci_load()
     for(u8 i = 0; i < 32; i++) {
         if(ahci_device_ports[i] == null) continue;
         _identify_device(i);
-
-        if(!ahci_device_ports[i]->is_atapi) {
-            //_write_device(i);
-            //_read_device(i);
-        }
     }
 }
 
@@ -779,7 +773,6 @@ static bool _probe_port(u8 port_index)
     assert(aport != null, "don't call this function on an inactive port");
 
     // wait for drive to be ready
-    // TODO not sure what this one is doing
     wait_until_true((hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_STATUS) != 0xFF, 10000000, tmp) {
         fprintf(stderr, "ahci: port %d drive timeout for ready state\n", port_index);
         return false;
@@ -977,11 +970,9 @@ static struct hba_command_table* _create_command_table(struct hba_command_header
     }
 
     // allocate space for a command table and PRDs
-    // TODO use valloc() -- allocates virtual space and then vmem_get_phys()?
     intp phys = (intp)palloc_claim(palloc_order); // command table must be 128 byte aligned
 
     // the base address is where the table will go
-    // TODO we need vmem_map_region, and we can't use vmalloc because physical memory must be contiguous
     struct hba_command_table* tbl = (struct hba_command_table*)vmem_map_pages(VMEM_KERNEL, phys, 1 << palloc_order, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 	zero(tbl);
 
@@ -1141,151 +1132,6 @@ static void _identify_device(u8 port_index)
     // Free the memory associated with the command table
     _free_command_table(hdr, tbl, 1);
 }
-
-#if 0
-static void _read_device(u8 port_index)
-{
-    u64 tmp;
-    u8 cmdslot;
-
-    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
-    assert(ahci_device_ports[port_index] != null, "don't call this function on an inactive port");
-
-    // Set up a new command header
-    struct hba_command_header* hdr = _setup_new_command(port_index, 0, 0, 1, &cmdslot);
-    if(hdr == null) {
-        fprintf(stderr, "ahci: port %d failed to find free command list entry\n", port_index);
-        return;
-    }
-
-    // Create a new table for the command
-    struct hba_command_table* tbl = _create_command_table(hdr, 1);
-
-    // set up the READ DMA EXT command
-    u64 start_lba = 2;           // read from offset 1024
-    u16 num_sectors = 4096/512;  // read 8 sectors == 4096 bytes == 1 page
-    _set_h2d_fis(hdr, tbl, 1, ATA_COMMAND_READ_DMA_EXT, (1 << 6), start_lba, num_sectors);
-
-    // allocate memory for the read destination
-    // TODO should be provided by the calling function
-    intp dest_phys = (intp)palloc_claim_one(); // allocate memory for the read
-    intp dest_virt = vmem_map_page(dest_phys, MAP_PAGE_FLAG_WRITABLE);
-
-    // set up a the read destination in a prdt
-    // read one full page into prdt 0 at dest_phys and signal interrupt after completed
-    _set_prdt_entry(tbl, 0, dest_phys, 4096, true);
-
-    // OK, signal to the HBA that there's a command on that port
-    fprintf(stderr, "ahci: issuing READ DMA EXT on port %d\n", port_index);
-    _issue_command(hba_port, cmdslot);
-
-    // Wait for D2H response which will be notified via an interrupt
-    wait_until_true(ahci_irq, 1000000, tmp) {
-        fprintf(stderr, "ahci: port %d timed out waiting for D2H interrupt\n", port_index);
-        // TODO free memory and return error
-    } 
-
-    // Check for read error
-    if(hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_ERROR) {
-        fprintf(stderr, "ahci: port %d ata command error\n", port_index);
-        fprintf(stderr, "ahci: sata_error = 0x%lX\n", hba_port->sata_error);
-        // TODO free memory and return error
-    }
-
-    // print 512 bytes in 16 byte lines
-#if 0
-    fprintf(stderr, "ahci: port %d received:\n", port_index);
-    for(u32 offs = 0; offs < 512; offs += 16) {
-        fprintf(stderr, "    %04X: ", offs);
-        for(u32 i = 0; i < 16; i++) {
-            fprintf(stderr, "%02X ", ((u8 volatile*)dest_virt)[offs+i]);
-        }
-        fprintf(stderr, "- ");
-        for(u32 i = 0; i < 16; i++) {
-            u8 c = ((u8 volatile*)dest_virt)[offs+i];
-            if(c >= 0x20 && c <= 0x7f) {
-                fprintf(stderr, "%c", c);
-            } else {
-                fprintf(stderr, ".");
-            }
-        }
-        fprintf(stderr, "\n");
-    }
-#endif
-
-    // Free the read destination memory
-    vmem_unmap_page(dest_virt);
-    palloc_abandon(dest_phys, 0);
-
-    // Free command table
-    _free_command_table(hdr, tbl, 1);
-}
-
-static void _write_device(u8 port_index)
-{
-    u64 tmp;
-    u8 cmdslot;
-
-    struct hba_port volatile* hba_port = &ahci_base_memory->ports[port_index];
-    assert(ahci_device_ports[port_index] != null, "don't call this function on an inactive port");
-
-    // Set up a new command header
-    struct hba_command_header* hdr = _setup_new_command(port_index, 1, 0, 1, &cmdslot);
-    if(hdr == null) {
-        fprintf(stderr, "ahci: port %d failed to find free command list entry\n", port_index);
-        return;
-    }
-
-    // Create a new table for the command
-    struct hba_command_table* tbl = _create_command_table(hdr, 1);
-
-    // set up the WRITE DMA EXT command
-    u64 start_lba = 0;           // read from offset 0
-    u16 num_sectors = 4096/512;  // read 8 sectors == 4096 bytes == 1 page
-    _set_h2d_fis(hdr, tbl, 1, ATA_COMMAND_WRITE_DMA_EXT, (1 << 6), start_lba, num_sectors);
-
-    // allocate memory for the write data source
-    // TODO should be provided by the calling function
-    intp src_phys = (intp)palloc_claim_one(); // allocate memory for the read
-    intp src_virt = vmem_map_page(src_phys, MAP_PAGE_FLAG_WRITABLE);
-
-    // set up a the write source in a prdt
-    // write one full page from prdt 0 at src_phys and signal interrupt after completed
-    _set_prdt_entry(tbl, 0, src_phys, 4096, true);
-
-    // put some data in the memory
-    memcpy((void*)src_virt, (void*)"!!!!!HELLO!!!!!!", 16);
-    asm volatile("clflush %0\n" : : "m"(src_virt));
-
-    // OK, signal to the HBA that there's a command on that port
-    fprintf(stderr, "ahci: issuing WRITE DMA EXT on port %d\n", port_index);
-    _issue_command(hba_port, cmdslot);
-
-    // Wait for D2H response
-    wait_until_true(ahci_irq, 1000000, tmp) {
-        fprintf(stderr, "ahci: port %d timed out waiting for D2H interrupt\n", port_index);
-        // TODO free memory and return error
-    } 
-
-    // Check for write error
-    if(hba_port->task_file_data & HBAP_TASK_FILE_DATA_FLAG_ERROR) {
-        fprintf(stderr, "ahci: port %d ata command error\n", port_index);
-        fprintf(stderr, "ahci: sata_error = 0x%lX\n", hba_port->sata_error);
-        // TODO free memory and return error
-    }
-
-    // Done
-    fprintf(stderr, "ahci: write to port %d finished\n", port_index);
-
-    // Free the source memory
-    vmem_unmap_page(src_virt);
-    palloc_abandon(src_phys, 0);
-
-    // Free command table
-    _free_command_table(hdr, tbl, 1);
-}
-#endif
-
 
 bool ahci_read_device_sectors(u8 port_index, u64 start_lba, u64 num_sectors, intp dest)
 {

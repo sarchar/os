@@ -28,6 +28,7 @@ extern u8 _binary_font_psf_end;
 // cast the address to PSF header struct
 struct psf1_font *terminal_font;
 
+// TODO support unicode fonts
 static u16 unicode_map[1 << 16]; // 16-bit mapping for unicode TODO use calloc?
 static bool font_has_unicode;
 
@@ -49,55 +50,10 @@ static struct terminal current_terminal;
 
 static void _load_font()
 {
-//    u16 glyph = 0;
-
     // cast the address to PSF header struct
     terminal_font = (struct psf1_font*)&_binary_font_psf_start;
     font_has_unicode = false;
-return;
-#if 0
-    font_has_unicode = (terminal_font->flags == 0);
-
-    // is there a unicode table?
-    if (!font_has_unicode) return; 
-
-    // get the offset of the table
-    u8 *s = &_binary_font_psf_start + terminal_font->headersize + terminal_font->numglyph * terminal_font->bytesperglyph;
-
-    // allocate memory for translation table
-    //TODO unicode = calloc(USHRT_MAX, 2);
-
-    while(s > (u8*)&_binary_font_psf_end) {
-        u16 uc = (u16)s[0];
-        if(uc == 0xFF) {
-            glyph++;
-            s++;
-            continue;
-        } else if (uc & 0x80) {
-            // UTF-8 to unicode 
-            if ((uc & 0x20) == 0) {
-                uc = ((s[0] & 0x1F) << 6) + (s[1] & 0x3F);
-                s++;
-            } else {
-                if ((uc & 0x10) == 0) {
-                    uc = ((((s[0] & 0xF) << 6) + (s[1] & 0x3F)) << 6) + (s[2] & 0x3F);
-                    s += 2;
-                } else {
-                    if ((uc & 0x08) == 0) {
-                        uc = ((((((s[0] & 0x7) << 6) + (s[1] & 0x3F)) << 6) + (s[2] & 0x3F)) << 6) + (s[3] & 0x3F);
-                        s += 3;
-                    } else {
-                        uc = 0;
-                    }
-                }
-            }
-        }
-
-        // save translation 
-        unicode_map[uc] = glyph;
-        s++;
-    }
-#endif
+    return;
 }
 
 static void _draw_char_to_framebuffer(u16 c, u32 x, u32 y, color text_color, color bg_color)
@@ -105,14 +61,12 @@ static void _draw_char_to_framebuffer(u16 c, u32 x, u32 y, color text_color, col
     if(c >= 256) return;
 
     // we need to know how many bytes encode one row
-    //u8 bytesperline = (terminal_font->width + 7) / 8;
     u8 bytesperline = 1;
 
     // unicode translation 
     if(font_has_unicode) c = unicode_map[c];
 
     // get the glyph for the character. If there's no glyph for a given character, we'll display the first glyph.
-    //u32 *glyph = (u32*)((u8*)&_binary_font_psf_start + terminal_font->headersize + ((c >= 0 && c < terminal_font->numglyph) ? c : 0) * terminal_font->bytesperglyph);
     u8 *glyph = (u8*)terminal_font + sizeof(struct psf1_font) + c * terminal_font->charsize * bytesperline;
 
     // finally display pixels according to the bitmap
@@ -134,13 +88,14 @@ void terminal_init()
 {
     // the stdio streams have mutexes that are statically initialized in .data, but we need to do 
     // more initialization, so we call mtx_init on each of them to make sure they're properly initialized.
+    // TODO move this into pdclib somewhere
     mtx_init(&stdin->mtx, mtx_plain|mtx_recursive);
     mtx_init(&stdout->mtx, mtx_plain|mtx_recursive);
     mtx_init(&stderr->mtx, mtx_plain|mtx_recursive);
 
     _load_font();
 
-    current_terminal.width = TERMINAL_WIDTH; // TODO determine dynamically
+    current_terminal.width = TERMINAL_WIDTH; // TODO determine dynamically from framebuffer size
     current_terminal.height = TERMINAL_HEIGHT;
     current_terminal.window_y = 0; // window starts at y=0
     current_terminal.cursor_x = 0;

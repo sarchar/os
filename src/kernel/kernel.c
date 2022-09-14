@@ -691,6 +691,7 @@ static s64 shell(struct task* task)
 
     while(!exit_shell) {
         ps2keyboard_update();
+        task_yield(TASK_YIELD_VOLUNTARY);
     }
 
     fprintf(stderr, "\n...exiting kernel shell...\n");
@@ -795,6 +796,9 @@ __noreturn void kernel_do_work()
     // the checks below are ordered such that they continue to run while there
     // is work to do
     while(true) {
+        // clean up any exited tasks
+        task_clean();
+
         //if(!priority_queue.empty()) { work = priority_queue.pop(); do_work(work); continue; }
 
         if(net_do_work()) continue;

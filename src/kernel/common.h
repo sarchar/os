@@ -49,7 +49,7 @@ typedef int32_t   s32;
 typedef int64_t   s64;
 
 typedef u64       intp; // always == sizeof(void*)
-//TODO __compiletime_assert__(sizeof(intp) == sizeof(void*))
+static_assert(sizeof(intp) == sizeof(void*), "size of pointer must match size of intp");
 
 typedef u32 color;
 

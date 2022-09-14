@@ -40,6 +40,10 @@ struct arp_build_packet_info {
     u8*    dest_protocol_address;
 };
 
+// TODO arp tables map a network address, like an IPv4 address, to a MAC receipient who will deliver that packet
+// however, we also need to know which local MAC services that remote MAC, so we should build a hardware routing table
+// at some point too. maybe not in arp.c, but macmap.c or something. That would map a remote mac to a local mac, and
+// the local mac and be used to look up the delivery layer.
 struct arp_table_entry {
     struct net_address protocol_address;
     struct net_address hardware_address;
@@ -259,7 +263,26 @@ void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_le
     memcpy(_source_hardware_address.mac, source_hardware_address, 6);
     _source_protocol_address.ipv4 = ntohl(*(u32*)source_protocol_address);
 
-    if(opcode == ARP_OPCODE_REQUEST) { // && memcmp(dest_protocol_address, my_addr, 4) == 0) {
+    if(opcode == ARP_OPCODE_REQUEST) {
+        // TODO an incoming request also declares a mac address to device mapping, so add that to the global arp table
+
+        acquire_lock(global_arp_table_lock);
+
+        // first look up if we already have the address in our table
+        struct arp_table_entry* arpent = null;
+        HT_FIND(global_arp_table, _source_protocol_address, arpent);
+        if(arpent != null) {
+            fprintf(stderr, "arp: entry already in table, updating\n");
+            memcpy(&arpent->hardware_address, &_source_hardware_address, sizeof(struct net_address));
+        } else {
+            arpent = (struct arp_table_entry*)malloc(sizeof(struct arp_table_entry));
+            memcpy(&arpent->protocol_address, &_source_protocol_address, sizeof(struct net_address));
+            memcpy(&arpent->hardware_address, &_source_hardware_address, sizeof(struct net_address));
+            fprintf(stderr, "arp: new entry added to table\n");
+            HT_ADD(global_arp_table, protocol_address, arpent);
+        }
+
+        release_lock(global_arp_table_lock);
         // the incoming response forms an IPv4 address, so let's see if we have an interface for that device
         struct net_address search_address;
         zero(&search_address);

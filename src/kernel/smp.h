@@ -56,7 +56,7 @@ extern struct lock_functions ticketlock_functions;
 #define TICKETLOCK_INITIALIZER { ._v = 0, ._f = &ticketlock_functions }
 #define declare_ticketlock(n) struct ticketlock n = TICKETLOCK_INITIALIZER
 
-// conditions aka semaphores, (only applicable in tasks TODO and user space)
+// conditions aka semaphores (only applicable in tasks)
 // implements: wait_condition, notify_condition, trylock, canlock
 
 struct condition_blocked_task;
@@ -82,7 +82,7 @@ struct condition {
 
 extern struct lock_functions conditionlock_functions;
 
-// mutexes (only applicable in tasks TODO and user space)
+// mutexes (only applicable in tasks)
 // builds upon condition signals so that only one task uses a mutex at a given time
 // implements: acquire, release, trylock, canlock
 struct task;

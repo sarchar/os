@@ -34,6 +34,8 @@ static u32    send_queue_head;
 static u32    send_queue_tail;
 static declare_spinlock(send_queue_lock);
 
+static void _receive_packet(struct net_device*, u8, u8*, u16);
+
 void net_init()
 {
     send_queue_size = (1 << (PAGE_SHIFT + SEND_QUEUE_PAGE_ORDER)) / sizeof(struct net_send_packet_queue_entry*);
@@ -55,7 +57,7 @@ static bool net_do_rx_work()
         u16 packet_length;
         u8* packet;
         while((packet = ndev->ops->receive_packet(ndev, &net_protocol, &packet_length)) != null) { //TODO limit the # of packets we acquire per call to net_do_rx_work()?
-            net_receive_packet(ndev, net_protocol, packet, packet_length);
+            _receive_packet(ndev, net_protocol, packet, packet_length);
             res = true;
         }
     }
@@ -224,16 +226,8 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
     return tmp;
 }
 
-s64 net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length)
+static void _receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)
 {
-    fprintf(stderr, "net_send_packet: don't use me any more!\n");
-    if(ndev->ops->send_packet == null) return -ENOTSUP;
-    return ndev->ops->send_packet(ndev, packet, packet_length);
-}
-
-void net_receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)
-{
-    //TODO queue packet and wake up the network thread using an event lock
     switch(net_protocol) {
     case NET_PROTOCOL_IPv4:
         ipv4_handle_device_packet(ndev, packet, packet_length);

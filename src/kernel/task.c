@@ -47,7 +47,8 @@ void task_become()
     // and timing
     task->last_global_ticks = global_ticks;
 
-    // TODO allocate space for the stack and copy the current stack (if requested)
+    // stacks are allocated statically in the boot.asm and ap_boot.asm files
+    // so we don't allocate a stack for the currently running cpu (it already has one)
 
     // make the current task be this one
     assert(cpu->current_task == null, "only call this once");
@@ -277,12 +278,15 @@ void task_yield(enum TASK_YIELD_REASON reason)
         }
         // otherwise, we fall through and yield as if it was voluntary
         // ...
+
     case TASK_YIELD_VOLUNTARY:
         from_task->state = TASK_STATE_READY;
         break;
+
     case TASK_YIELD_EXITED:
         from_task->state = TASK_STATE_EXITED;
         break;
+
     case TASK_YIELD_WAIT_CONDITION:
         from_task->state = TASK_STATE_BLOCKED;
         break;

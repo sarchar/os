@@ -103,7 +103,7 @@ static void _map_kernel()
 
 void paging_init()
 {
-    // TODO build a new page table using memory allocated from palloc and switch to it
+    // build a new page table using memory allocated from palloc and switch to it
     // kernel_page_table is the level 4 page table
     kernel_page_table = _allocate_page_table();
     fprintf(stderr, "paging: initializing page tables (kernel_page_table->_cpu_table=0x%lX)\n", kernel_page_table->_cpu_table);
@@ -151,15 +151,16 @@ struct page_table* paging_create_private_table()
     // entry 0 maps 0x00000000_00000000->0x0000007F_FFFFFFFF
     // entry 0 will never be null
     assert(kernel_page_table->entries[0] != null, "low mem missing pointer in page table?");
-    private->entries[0] = kernel_page_table->entries[0];
+    private->entries[0]    = kernel_page_table->entries[0];
     private->_cpu_table[0] = kernel_page_table->_cpu_table[0];
     private->num_entries++; 
 
-    // entries 256-511 map 0x00008000_00000000-0x0000FFFF_FFFFFFFF
+    // entries 256-511 map 0xFFFF8000_00000000-0xFFFFFFFF_FFFFFFFF
     for(u64 i = 256; i < 512; i++) {
+        assert(kernel_page_table->entries[i] != null, "kernel high memory must have page table entries in the PML4");
         private->entries[i]    = kernel_page_table->entries[i];
         private->_cpu_table[i] = kernel_page_table->_cpu_table[i];
-        if(private->entries[i] != null) private->num_entries++; // TODO maybe none of this high level pointers should be null. problem is when new pointers are added to the kernel page table that need to be reflected in private page tables
+        private->num_entries++;
     }
 
     return private;
@@ -448,16 +449,13 @@ static void _map_2mb(intp phys, intp virt, u32 flags)
     *pde = (phys & CPU_PAGE_TABLE_ADDRESS_MASK_2MB) | CPU_PAGE_TABLE_ENTRY_FLAG_HUGE | pt_flags;
 }
 
+// calls _map_2mb and then flushes TLB
 void paging_map_2mb(intp phys, intp virt, u32 flags)
 {
-    // calls _map_2mb and then flushes TLB
     _map_2mb(phys, virt, flags);
 
-    // TODO do I actually have to issue 512 INVLPGs?
-    for(u32 i = 0; i < 512; i++) {
-        __invlpg(virt);
-        virt += 4096;
-    }
+    // invlpg invalidates all TLB entries associated with the 2mb page, so only one invlpg is necessary
+    __invlpg(virt);
 }
 
 void paging_identity_map_region(struct page_table* table_root, intp region_start, u64 region_size, u32 flags)

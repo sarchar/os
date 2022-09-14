@@ -289,6 +289,7 @@ void apic_set_cpu()
 
 void apic_map()
 {
+    // TODO use vmem instead of direct map. would require moving apic_map to after vmem_init, but I think that would work
     paging_map_page(PAGING_KERNEL, io_apic.base   , io_apic.base   , MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
     paging_map_page(PAGING_KERNEL, local_apic_base, local_apic_base, MAP_PAGE_FLAG_WRITABLE | MAP_PAGE_FLAG_DISABLE_CACHE);
 
@@ -301,9 +302,11 @@ void apic_map()
 
     // install interrupt handlers here, before smp, after interrupts_init().
     // global to all the local apics is the same interrupt handler for the timer
+    // TODO allocate interrupt numbers
     interrupts_install_handler(LOCAL_APIC_TIMER_INTERRUPT, _local_apic_timer_interrupt, null);
 
     // install the ipcall interrupt handler
+    // TODO allocate interrupt numbers
     interrupts_install_handler(LOCAL_APIC_IPCALL_INTERRUPT, _local_apic_ipcall_interrupt, null);
 }
 

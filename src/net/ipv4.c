@@ -16,9 +16,7 @@
 #include "string.h"
 
 // current gateway
-//u8 gateway_mac_address[] = { 0x00, 0x15, 0x5d, 0xcb, 0x2e, 0x3f }; // TODO use ARP to determine the gateway's ethernet address
-//u8 gateway_mac_address[] = { 0x00, 0x15, 0x5d, 0x89, 0xaf, 0x34 };
-static char const* gateway_ip_address = "192.168.53.1";
+static char const* gateway_ip_address = "192.168.53.1"; //TODO use DHCP
 
 static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* packet, u16 packet_length);
 static void _ipv4_header_to_host(struct ipv4_header* hdr);
@@ -121,10 +119,9 @@ s64 ipv4_wrap_packet(struct net_send_packet_queue_entry* sq_entry, struct net_ad
     u16 packet_size = sizeof(struct ipv4_header) + payload_size;
 
     // IPv4 is a toplevel layer, so it calls directly into the network device for packet memory
-    struct net_address hw_dest;     // TODO use ARP tables to map the gateway's IP to a mac address
+    struct net_address hw_dest;
 
     // If we know how to deliver to dest_address directly via ethernet, use it. otherwise, look up the gateway and use that
-    // TODO replace err with errno when thread local storage is supported
     s64 err;
     if((err = arp_lookup(dest_address, &hw_dest)) < 0 && err == -ENOENT) {
         struct net_address gateway_address;

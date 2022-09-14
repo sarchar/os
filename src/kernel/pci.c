@@ -148,12 +148,6 @@ static void _check_function(struct pci_segment_group* group, u8 bus, u8 device, 
     dev->function  = func;
     dev->config    = config;
 
-    // TODO get all BAR sizes. Requires knowing if addresses are 32/64 in size
-    if(dev->config->header_type == PCI_HEADER_TYPE_GENERIC) {
-        for(u8 i = 0; i < 6; i++) {
-        }
-    }
-
     // stash this bad boy in the hash table
     dev->vendor = vnd;
     HT_ADD(vnd->devices, config->device_id, dev);
@@ -308,7 +302,7 @@ intp pci_device_map_bar(struct pci_device_info* dev, u8 bar_index)
         addr &= ~(intp)PCI_BAR_NON_MMIO_ADDRESS_BITS;
         assert(__alignof(addr, 4096) == 0, "BAR address isn't page aligned");
 
-        return vmem_map_pages(VMEM_KERNEL, addr, size >> PAGE_SHIFT, map_flags);
+        return vmem_map_pages(VMEM_KERNEL, addr, (size + PAGE_SIZE - 1) >> PAGE_SHIFT, map_flags);
     } else {
         fprintf(stderr, "pci: device 0x%04X:0x%04X bar %d IO at port 0x%lX\n", dev->config->vendor_id, dev->config->device_id, bar_index, addr);
 
@@ -320,10 +314,9 @@ intp pci_device_map_bar(struct pci_device_info* dev, u8 bar_index)
 
 void pci_device_unmap_bar(struct pci_device_info* dev, u8 bar_index, intp virt)
 {
-    u64 size = pci_device_get_mmio_bar_size(dev, bar_index);
-
-    for(intp start = virt; start < virt + size; start += 0x1000) {
-        paging_unmap_page(PAGING_KERNEL, start); // TODO use vmem?
+    if(pci_device_is_bar_mmio(dev, bar_index)) {
+        u64 size = pci_device_get_mmio_bar_size(dev, bar_index);
+        vmem_unmap_pages(VMEM_KERNEL, virt, (size + PAGE_SIZE - 1) >> PAGE_SHIFT);
     }
 }
 

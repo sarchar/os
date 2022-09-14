@@ -153,10 +153,11 @@ void hpet_notify_timer_count(u8 num_hpets)
     fprintf(stderr, "hpet: %d HPETs found\n", num_timers);
 }
 
-void hpet_notify_presence(u8 hpet_number, u8 hardwar_revision_id, u8 comparator_count, u16 minimum_tick,
+// TODO move to init and use acpi_find_table instead
+void hpet_notify_presence(u8 hpet_number, u8 hardware_revision_id, u8 comparator_count, u16 minimum_tick,
                           intp address, u8 register_bit_width, u8 register_bit_offset, u8 flags)
 {
-    unused(hardwar_revision_id); // TODO check this?
+    unused(hardware_revision_id); // TODO check this?
     unused(register_bit_width);  // TODO not sure what these are used for, if anything
     unused(register_bit_offset);
 

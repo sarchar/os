@@ -128,6 +128,7 @@ enum VK {
 typedef void (ps2keyboard_cb)(char, void*);
 
 void ps2keyboard_load();
+void ps2keyboard_unload();
 void ps2keyboard_update();
 void ps2keyboard_hook_ascii(ps2keyboard_cb* cb, void* userdata);
 

@@ -64,21 +64,6 @@ static u16 _compute_checksum(u8* data, u16 data_length)
     return ~sum;
 }
 
-//u8* icmp_create_packet(u32 dest_address, u8 type, u8 code, u16 icmp_data_length, u8* icmp_packet_start, u16* packet_size)
-//{
-//    u16 icmp_packet_size = sizeof(struct icmp_header) + icmp_data_length;
-//    u8* packet_start = ipv4_create_packet(dest_address, IPv4_PROTOCOL_ICMP, icmp_packet_size, &icmp_packet_start, packet_size); // TODO should this be net_interface->create_packet()?
-//    
-//    if(packet_start != null) {
-//        struct icmp_header* icmp_header = (struct icmp_header*)icmp_packet_start;
-//        icmp_header->type     = type;
-//        icmp_header->code     = code;
-//        icmp_header->checksum = 0;
-//    }
-//
-//    return packet_start;
-//}
-
 struct icmp_build_packet_info {
     u8* payload;
     u16 payload_length;
@@ -108,8 +93,6 @@ static s64 _build_icmp_packet(struct net_send_packet_queue_entry* entry, u8* icm
     return sizeof(struct icmp_header) + info->payload_length;
 }
 
-//TODO maybe an icmp_wrap_packet would call a callback to load in the payload
-// and icmp_send_packet would make use of wrap_packet
 s64 icmp_send_packet(struct net_interface* iface, struct net_address* dest_address, u8 icmp_type, u8 icmp_code, u8* icmp_payload, u16 icmp_payload_length)
 {
     u16 icmp_packet_size = sizeof(struct icmp_header) + icmp_payload_length;

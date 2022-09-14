@@ -39,12 +39,11 @@ intp multiboot2_mmap_next_free_region(u64* size, u8* region_type)
         //fprintf(stderr, "multiboot: region addr=0x%lX size=0x%lX type=%d\n", iter->addr, iter->len, iter->type);
 
         // TODO reclaim ACPI ?
-        // TODO the check for <0x100000000 and for kernel region should be done in bootmem itself
         // maybe pass in a flags parameter and set flags based on the type of region it is
         switch(iter->type) {
         case MULTIBOOT_MEMORY_AVAILABLE:
             // the region the kernel is loaded into cannot be used for bootmem (well, unless we use _kernel_end_address 
-            // but there's no point for that right now. TODO later we can move the kernel and reclaim the entire region
+            // but there's no point for that right now.
             if(mbt_load_base_addr->load_base_addr < iter->addr || mbt_load_base_addr->load_base_addr > (iter->addr + iter->len)) {
                 ret = (intp)iter->addr;
                 *size = iter->len;
@@ -143,11 +142,6 @@ void multiboot2_parse(struct multiboot_info* multiboot_info)
                     (intp)mbt_framebuffer->common.framebuffer_type);
 
         case MULTIBOOT_TAG_TYPE_EFI_MMAP:
-            {
-                //TODO is this tag needed if MULTIBOOT_TAG_TYPE_MMAP works too?
-                //struct multiboot_tag_efi_mmap* mbt_efi_mmap = (struct multiboot_tag_efi_mmap*)mbt;
-                //fprintf(stderr, "MBT EFI mmap: descriptor size %d\n", mbt_efi_mmap->descr_size);
-            }
             break;
 
         case MULTIBOOT_TAG_TYPE_ACPI_NEW:

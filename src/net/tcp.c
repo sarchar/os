@@ -456,6 +456,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     sockinfo.dest_address.ipv4       = iphdr->dest_address;
 
     // Look up the socket
+    // TODO only create sockets on connection-style segments
     struct net_socket* socket = net_lookup_socket(&sockinfo);
     struct tcp_socket* tcpsocket = containerof(socket, struct tcp_socket, net_socket);
     if(socket == null) {
@@ -624,6 +625,9 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
             }
 
             // check the sequence # to see if this is new data
+            // TODO check that the sequence_number falls within our window of data
+            // (if it doesn't, then the peer isn't playing nice and we should bail on them)
+            // and then add it to an internal buffer
             if(hdr->sequence_number != socket->their_sequence_number) { // if the incoming packet matches the packet we expect
                 fprintf(stderr, "TODO: tcp: got unxpected packet (got sequence %d, expected %d)\n", hdr->sequence_number, socket->their_sequence_number);
                 goto done;
