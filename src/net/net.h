@@ -67,10 +67,24 @@ struct net_send_packet_queue_entry {
 
 struct net_device;
 struct net_interface;
+struct net_receive_packet_info;
+
 typedef s64 (net_wrap_packet_callback)(struct net_send_packet_queue_entry* entry, u8*, void*);
 typedef s64 (net_device_wrap_packet_function)(struct net_device* ndev, struct net_send_packet_queue_entry* entry, struct net_address* dest, u8 net_protocol, u16 packet_size, net_wrap_packet_callback*, void*);
 typedef s64 (net_device_send_packet_function)(struct net_device* ndev, u8* packet, u16 packet_length);
-typedef u8* (net_device_receive_packet_function)(struct net_device* ndev, u8* net_protocol, u16* packet_length);
+typedef struct net_receive_packet_info* (net_device_receive_packet_function)(struct net_device* ndev);
+
+// TODO generalize this to sending and receiving packets?
+struct net_receive_packet_info {
+    struct net_device* net_device; // device this packet was received on
+    u8*    packet_base;
+    u8*    packet; // updated as the packet_info traverses the layers
+    u16    packet_length; // length of the remaining packet, updated as the packet_info traverses the layers
+    u8     net_protocol;
+    u8     unused0;
+    u32    unused1;
+    void   (*free)(struct net_receive_packet_info*); // call to free this packet after it's contents have been consumed
+};
 
 struct net_device_ops {
     net_device_wrap_packet_function*    wrap_packet;    // packet building
@@ -93,7 +107,7 @@ struct net_device {
     struct net_device_ops* ops;
 };
 
-typedef void (net_interface_receive_packet_function)(struct net_interface*, u8* packet_start, u16 packet_length);
+typedef void (net_interface_receive_packet_function)(struct net_interface*, struct net_receive_packet_info*);
 typedef s64  (net_interface_wrap_packet_function)(struct net_send_packet_queue_entry*, struct net_address* dest_address, 
                                                   u8 net_protocol, u16 payload_size, net_wrap_packet_callback*, void*);
 

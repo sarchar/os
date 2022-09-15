@@ -43,7 +43,7 @@ struct ipv4_header {
 
 struct net_interface* ipv4_create_interface(struct net_address* local_address);
 
-void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length);
+void ipv4_handle_device_packet(struct net_receive_packet_info*);
 
 void ipv4_format_address(char* buf, u32 address);
 void ipv4_parse_address_string(struct net_address* addr, char const*);

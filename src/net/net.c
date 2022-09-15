@@ -35,7 +35,7 @@ static u32    send_queue_head;
 static u32    send_queue_tail;
 static declare_spinlock(send_queue_lock);
 
-static void _receive_packet(struct net_device*, u8, u8*, u16);
+static void _receive_packet(struct net_receive_packet_info*);
 
 void net_init()
 {
@@ -54,11 +54,9 @@ static bool net_do_rx_work()
         struct net_device* ndev = netdevs_tmp[i];
         if(ndev == null) continue;
 
-        u8 net_protocol;
-        u16 packet_length;
-        u8* packet;
-        while((packet = ndev->ops->receive_packet(ndev, &net_protocol, &packet_length)) != null) { //TODO limit the # of packets we acquire per call to net_do_rx_work()?
-            _receive_packet(ndev, net_protocol, packet, packet_length);
+        struct net_receive_packet_info* packet_info;
+        while((packet_info = ndev->ops->receive_packet(ndev)) != null) { //TODO limit the # of packets we acquire per call to net_do_rx_work()?
+            _receive_packet(packet_info);
             res = true;
         }
     }
@@ -227,11 +225,11 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
     return tmp;
 }
 
-static void _receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet, u16 packet_length)
+static void _receive_packet(struct net_receive_packet_info* packet_info)
 {
-    switch(net_protocol) {
+    switch(packet_info->net_protocol) {
     case NET_PROTOCOL_IPv4:
-        ipv4_handle_device_packet(ndev, packet, packet_length);
+        ipv4_handle_device_packet(packet_info);
         break;
 
     case NET_PROTOCOL_IPv6:
@@ -239,11 +237,11 @@ static void _receive_packet(struct net_device* ndev, u8 net_protocol, u8* packet
         break;
 
     case NET_PROTOCOL_ARP:
-        arp_handle_device_packet(ndev, packet, packet_length);
+        arp_handle_device_packet(packet_info);
         break;
 
     default:
-        fprintf(stderr, "net: unknown packet protocol 0x%02X\n", net_protocol);
+        fprintf(stderr, "net: unknown packet protocol 0x%02X\n", packet_info->net_protocol);
         break;
     }
 }

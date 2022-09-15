@@ -148,7 +148,7 @@ struct tcp_socket {
                                || (socket->my_sequence_number < socket->their_ack_number && (hdr->ack_number > socket->their_ack_number || hdr->ack_number <= socket->my_sequence_number)))
 
 static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16 max_payload_length, u16 flags);
-static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start);
+static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, struct tcp_header_options* options, struct net_receive_packet_info* packet_info);
 
 static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pending);
 
@@ -390,7 +390,7 @@ static void _add_pending_accept(struct tcp_socket* owner, struct tcp_socket* pen
     release_lock(owner->accept_lock);
 }
 
-static s32 _parse_header_options(struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options)
+static s32 _parse_header_options(struct net_receive_packet_info* packet_info, struct tcp_header* hdr, struct tcp_header_options* options)
 {
     zero(options);
 
@@ -401,7 +401,7 @@ static s32 _parse_header_options(struct tcp_header* hdr, u16 packet_length, stru
     u16 parameter;
 
     // bail on invalid setup
-    if(payload_start > packet_length) return -EINVAL;
+    if(payload_start > packet_info->packet_length) return -EINVAL;
 
     // until the end of options
     while(option_offset < payload_start) {
@@ -453,12 +453,12 @@ done:
     return payload_start;
 }
 
-void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
+void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, struct net_receive_packet_info* packet_info)
 {
-    struct tcp_header* hdr = (struct tcp_header*)packet;
+    struct tcp_header* hdr = (struct tcp_header*)packet_info->packet;
 
-    if(packet_length < sizeof(struct tcp_header)) {
-        fprintf(stderr, "tcp: dropping packet (size too small = %d)\n", packet_length);
+    if(packet_info->packet_length < sizeof(struct tcp_header)) {
+        fprintf(stderr, "tcp: dropping packet (size too small = %d)\n", packet_info->packet_length);
         return;
     }
 
@@ -473,7 +473,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
 
     struct tcp_header_options options;
     s32 payload_start;
-    if((payload_start = _parse_header_options(hdr, packet_length, &options)) < 0) {
+    if((payload_start = _parse_header_options(packet_info, hdr, &options)) < 0) {
         fprintf(stderr, "tcp: dropping packet due to invalid options\n");
         return;
     }
@@ -486,7 +486,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
                     "         SYN=%d ACK=%d RST=%d FIN=%d PSH=%d URG=%d\n"
                     "         data_offset=%d checksum=0x%04X payload_length=%lu\n",
             buf, hdr->source_port, buf2, hdr->dest_port, hdr->sequence_number, hdr->ack_number, hdr->window, hdr->urgent_pointer,
-            hdr->sync, hdr->ack, hdr->reset, hdr->finish, hdr->push, hdr->urgent, hdr->data_offset, hdr->checksum, packet_length - hdr->data_offset * 4);
+            hdr->sync, hdr->ack, hdr->reset, hdr->finish, hdr->push, hdr->urgent, hdr->data_offset, hdr->checksum, packet_info->packet_length - hdr->data_offset * 4);
 
     // The 4-tuple (source_address, source_port, dest_address, dest_port) defines a socket 
     // Look it up first, and take action on whether the socket exists or is new.
@@ -560,18 +560,26 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     }
 
     if(socket != null) {
+        // update the packet info before sending it on
+        packet_info->packet        = (u8*)hdr + (u16)(payload_start & 0xFFFF);
+        packet_info->packet_length = packet_info->packet_length - (u16)(payload_start & 0xFFFF);
+
         acquire_lock(socket->main_lock);
-        _receive_segment(socket, hdr, packet_length, &options, (u16)(payload_start & 0xFFFF));
+        _receive_segment(socket, hdr, &options, packet_info);
         release_lock(socket->main_lock);
+    } else {
+        // packet wasn't used, free it
+        packet_info->free(packet_info);
     }
 
 done:
     return;
 }
 
-static s64 _receive_payload(struct tcp_socket* socket, u32 sequence_number, u8* payload, u16 payload_length)
+// packet_info has been updated to point to the payload
+static s64 _receive_payload(struct tcp_socket* socket, u32 sequence_number, struct net_receive_packet_info* packet_info)
 {
-    if(payload_length == 0) return 0;
+    if(packet_info->packet_length == 0 /*TODO || packet_info->packet_length > socket->max_payload*/ ) return 0;
 
     // TODO maybe their_sequence_number should be 64-bit and we don't have to worry about overflow, as 4GiB isn't that large now
     // TODO process any payload
@@ -584,14 +592,14 @@ static s64 _receive_payload(struct tcp_socket* socket, u32 sequence_number, u8* 
 
     u32 before_read_size = buffer_remaining_read(socket->receive_buffer);
 
-    if(buffer_remaining_write(socket->receive_buffer) < payload_length) {
+    if(buffer_remaining_write(socket->receive_buffer) < packet_info->packet_length) {
         release_lock(socket->receive_buffer_lock);
         return 0;
     }
 
-    u64 v = buffer_write(socket->receive_buffer, payload, payload_length);
-    fprintf(stderr, "payload added %d to buffer, now has %d\n", payload_length, buffer_remaining_read(socket->receive_buffer));
-    assert(v == payload_length, "what happened that there was enough space and then there wasn't?");
+    u64 v = buffer_write(socket->receive_buffer, packet_info->packet, packet_info->packet_length);
+    fprintf(stderr, "payload added %d to buffer, now has %d\n", packet_info->packet_length, buffer_remaining_read(socket->receive_buffer));
+    assert(v == packet_info->packet_length, "what happened that there was enough space and then there wasn't?");
 
     if(before_read_size == 0) {
         notify_condition(socket->receive_ready);
@@ -599,14 +607,15 @@ static s64 _receive_payload(struct tcp_socket* socket, u32 sequence_number, u8* 
 
     release_lock(socket->receive_buffer_lock);
 
-    return payload_length;
+    return v;
 }
 
-static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u16 packet_length, struct tcp_header_options* options, u16 payload_start)
+static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, struct tcp_header_options* options, struct net_receive_packet_info* packet_info)
 {
     s64 res = 0;
 
-    u16 payload_length = packet_length - payload_start;
+    u16 payload_length = packet_info->packet_length;
+
     fprintf(stderr, "tcp: receive segment on socket 0x%lX SYN=%d ACK=%d RST=%d PUSH=%d payload=%d bytes\n", socket, hdr->sync, hdr->ack, hdr->reset, hdr->push, payload_length);
 
     if(hdr->reset) {
@@ -681,7 +690,7 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
         socket->receive_buffer = buffer_create(2*1024*1024); // TODO determine the size somehow
 
         // receive the payload, adjusting the sequence number for the SYN flag
-        if((res = _receive_payload(socket, hdr->sequence_number + hdr->sync, (u8*)hdr + payload_start, payload_length)) < 0) {
+        if((res = _receive_payload(socket, hdr->sequence_number + hdr->sync, packet_info)) < 0) {
             // error receiving payload
             goto close_done;
         } else if(res != payload_length) {
@@ -728,7 +737,7 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, u
             // TODO check that the sequence_number falls within our window of data
             // (if it doesn't, then the peer isn't playing nice and we should bail on them)
             // and then add it to an internal buffer
-            if((res = _receive_payload(socket, hdr->sequence_number, (u8*)hdr + payload_start, payload_length)) < 0) {
+            if((res = _receive_payload(socket, hdr->sequence_number, packet_info)) < 0) {
                 // internal error
                 goto close_done;
             }
@@ -765,6 +774,8 @@ close_done:
     _socket_close(&socket->net_socket);
 
 done:
+    // free the packet
+    packet_info->free(packet_info);
     return res < 0 ? res : 0;
 }
 

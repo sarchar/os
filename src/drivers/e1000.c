@@ -80,13 +80,13 @@ enum E1000_RXTXCONTROL_FLAGS {
     E1000_RXTXCONTROL_FLAG_RX_DESC_THRESHOLD_EIGHTH     = 2 << 8,
     E1000_TXCONTROL_FLAG_COLLISION_DISTANCE_SHIFT       = 12,
     E1000_RXTXCONTROL_FLAG_BROADCAST_ENABLE             = 1 << 15,
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_2048               = 0 << 16,
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_1024               = 1 << 16,
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_512                = 2 << 16,
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_256                = 3 << 16,
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_16384              = 1 << 16, // these next 3 require BUFFER_SIZE_EXTENSION set
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_8192               = 2 << 16,
-    E1000_RXTXCONTROL_FLAG_DESC_SIZE_4096               = 3 << 16,
+    E1000_RXCONTROL_FLAG_DESC_SIZE_2048                 = 0 << 16,
+    E1000_RXCONTROL_FLAG_DESC_SIZE_1024                 = 1 << 16,
+    E1000_RXCONTROL_FLAG_DESC_SIZE_512                  = 2 << 16,
+    E1000_RXCONTROL_FLAG_DESC_SIZE_256                  = 3 << 16,
+    E1000_RXCONTROL_FLAG_DESC_SIZE_16384                = 1 << 16, // these next 3 require BUFFER_SIZE_EXTENSION set
+    E1000_RXCONTROL_FLAG_DESC_SIZE_8192                 = 2 << 16,
+    E1000_RXCONTROL_FLAG_DESC_SIZE_4096                 = 3 << 16,
     E1000_TXCONTROL_FLAG_RETRANSMIT_ON_LATE_COLLISION   = 1 << 24,
     E1000_RXTXCONTROL_FLAG_BUFFER_SIZE_EXTENSION        = 1 << 25,
     E1000_RXTXCONTROL_FLAG_STRIP_ETHERNET_CRC           = 1 << 26,
@@ -114,6 +114,10 @@ enum E1000_TXDESC_COMMAND_FLAGS {
      E1000_IFLAG_RX_DESC_MIN_THRESHOLD_0 | \
      E1000_IFLAG_RX_SEQUENCE_ERROR       | \
      E1000_IFLAG_TX_DESC_WRITTEN_BACK)
+
+// Change these 2 in tandem -- can only be specific values
+#define E1000_HW_PACKET_SIZE (2 * 1024)
+#define E1000_HW_DESC_SIZE_FLAG E1000_RXCONTROL_FLAG_DESC_SIZE_2048
 
 #define FLUSH_WRITE(edev) (_read_command(edev, E1000_REG_STATUS))
      
@@ -165,10 +169,10 @@ static void _initialize_e1000(struct pci_device_info* dev, u8);
 static void _enable_interrupts(struct e1000_device*);
 static void _disable_interrupts(struct e1000_device*);
 static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, void* userdata);
-static u8*  _receive_packet(struct e1000_device*, u8*, u16*);
+static struct net_receive_packet_info*  _receive_packet(struct e1000_device*);
 static s64  _net_wrap_packet(struct net_device* ndev, struct net_send_packet_queue_entry* entry, struct net_address* dest_address, 
                              u8 net_protocol, u16 packet_size, net_wrap_packet_callback* build_payload, void* userdata);
-static u8*  _net_receive_packet(struct net_device*, u8*, u16*);
+static struct net_receive_packet_info*  _net_receive_packet(struct net_device*);
 static s64  _net_send_packet(struct net_device*, u8*, u16);
 
 static struct net_device_ops e1000_net_device_ops = {
@@ -286,6 +290,12 @@ static s64 _read_mac_address(struct e1000_device* edev)
     return 0;
 }
 
+static void _free_packet_memory(struct net_receive_packet_info* rpi)
+{
+    kfree(rpi->packet_base, E1000_HW_PACKET_SIZE);
+    kfree(rpi, sizeof(struct net_receive_packet_info));
+}
+
 static void _setup_rx(struct e1000_device* edev)
 {
     // allocate one page for rx descriptors
@@ -296,14 +306,7 @@ static void _setup_rx(struct e1000_device* edev)
     for(u32 d = 0; d < edev->rx_desc_count; d++) {
         struct e1000_rx_desc* desc = &edev->rx_desc[d];
         zero(desc);
-
-        // for now we're going to assume MTU is <2kb (page size / 2), so there will be enough room for the ethernet header and frame
-        // so we can use 1 page for two descriptors
-        if((d & 0x01) == 0) {
-            desc->address = palloc_claim_one();
-        } else {
-            desc->address = edev->rx_desc[d & ~0x01].address + (PAGE_SIZE >> 1);
-        }
+        desc->address = (u64)kalloc(E1000_HW_PACKET_SIZE);
     }
 
     // disable RX before changing buffers
@@ -325,7 +328,7 @@ static void _setup_rx(struct e1000_device* edev)
     rxcontrol |= E1000_RXTXCONTROL_FLAG_LOOPBACK_MODE_NONE;
     rxcontrol |= E1000_RXTXCONTROL_FLAG_RX_DESC_THRESHOLD_HALF;
     rxcontrol |= E1000_RXTXCONTROL_FLAG_BROADCAST_ENABLE;
-    rxcontrol |= E1000_RXTXCONTROL_FLAG_DESC_SIZE_2048;
+    rxcontrol |= E1000_HW_DESC_SIZE_FLAG;
     rxcontrol &= ~E1000_RXTXCONTROL_FLAG_BUFFER_SIZE_EXTENSION;
 
     _write_command(edev, E1000_REG_RXCONTROL, rxcontrol | E1000_RXTXCONTROL_FLAG_ENABLE);
@@ -516,13 +519,12 @@ static void _e1000_interrupt(struct interrupt_stack_registers* regs, intp pc, vo
     }
 }
 
-static u8* _parse_rx_desc(struct e1000_rx_desc* desc, u8* net_protocol, u16* packet_length)
+static struct net_receive_packet_info* _parse_rx_desc(struct e1000_rx_desc* desc)
 {
+    struct net_receive_packet_info* packet_info;
+
     // safety check for bogus packets
-    if(desc->length > (PAGE_SIZE >> 1)) {
-        fprintf(stderr, "e1000: invalid packet of size %d found, dropping\n", desc->length);
-        return null;
-    }
+    assert(desc->length <= E1000_HW_PACKET_SIZE, "if hardware provides a packet larger than the memory provided, there's probably stability issues coming up");
 
     u8* data         = (u8*)desc->address;
     u16 ethertype    = ntohs(*(u16*)&data[12]);
@@ -542,35 +544,50 @@ static u8* _parse_rx_desc(struct e1000_rx_desc* desc, u8* net_protocol, u16* pac
     // drop this packet if it's too large
     if(payload_size > 1500) return null;
 
-    //TODO CRCs?
-    unused(ethernet_crc);
-    switch(ethertype) {
-    case ETHERTYPE_IPv4: *net_protocol = NET_PROTOCOL_IPv4;        break;
-    case ETHERTYPE_IPv6: *net_protocol = NET_PROTOCOL_IPv6;        break;
-    case ETHERTYPE_ARP : *net_protocol = NET_PROTOCOL_ARP;         break;
-    default:             *net_protocol = NET_PROTOCOL_UNSUPPORTED; break;
-    }
+    // allocate the packet info
+    packet_info = (struct net_receive_packet_info*)kalloc(sizeof(struct net_receive_packet_info));
 
     //TODO drop packets not bound for our MAC address or broadcast
 
-    *packet_length = payload_size;
-    return &data[14];
+    //TODO CRCs?
+    unused(ethernet_crc);
+    switch(ethertype) {
+    case ETHERTYPE_IPv4: packet_info->net_protocol = NET_PROTOCOL_IPv4;        break;
+    case ETHERTYPE_IPv6: packet_info->net_protocol = NET_PROTOCOL_IPv6;        break;
+    case ETHERTYPE_ARP : packet_info->net_protocol = NET_PROTOCOL_ARP;         break;
+    default:             packet_info->net_protocol = NET_PROTOCOL_UNSUPPORTED; break;
+    }
+
+    packet_info->packet_base   = data;
+    packet_info->packet        = &data[14];
+    packet_info->packet_length = payload_size;
+    packet_info->free          = &_free_packet_memory;
+
+    return packet_info;
 }
 
-static u8* _receive_packet(struct e1000_device* edev, u8* net_protocol, u16* packet_length)
+static struct net_receive_packet_info* _receive_packet(struct e1000_device* edev)
 {
     struct e1000_rx_desc* desc;
-    u8* ret = null;
+    struct net_receive_packet_info* ret = null;
 
     acquire_lock(edev->rx_lock);
 
     if(((desc = &edev->rx_desc[edev->rx_desc_next])->status & E1000_RXTXDESC_STATUS_FLAG_DONE) == 0) goto done;
 
     //fprintf(stderr, "e1000: got packet length %d, status = 0x%lX\n", desc->length, desc->status);
+
     assert(desc->status & E1000_RXTXDESC_STATUS_FLAG_END_OF_PACKET, "multi-frame packets not supported atm. EOP must be set on all packets");
 
-    // process the packet before updating the tail pointer. this allows the packet to be copied before memory is reused
-    ret = _parse_rx_desc(desc, net_protocol, packet_length);
+    // build a packet info structure
+    if((ret = _parse_rx_desc(desc)) != null) { // if we're not going to drop this packet, replace the rx buffer with a new one
+        ret->net_device = &edev->net_device; // update the device pointer
+
+        // the receiver of the packet payload is the one responsible for calling kfree on this memory
+        u8* memory = (u8*)kalloc(E1000_HW_PACKET_SIZE); // allocate new memory
+        zero(memory);
+        desc->address = (u64)memory;
+    }
 
     // tell the hardware the packet is processed
     desc->status = 0;  // clear FLAG_DONE especially
@@ -612,10 +629,10 @@ static s64 _transmit_packet(struct e1000_device* edev, u8* data, u16 length)
     return length;
 }
 
-static u8* _net_receive_packet(struct net_device* ndev, u8* net_protocol, u16* packet_length)
+static struct net_receive_packet_info* _net_receive_packet(struct net_device* ndev)
 {
     struct e1000_device* edev = containerof(ndev, struct e1000_device, net_device);
-    return _receive_packet(edev, net_protocol, packet_length);
+    return _receive_packet(edev);
 }
 
 static s64 _net_send_packet(struct net_device* ndev, u8* packet, u16 packet_length)

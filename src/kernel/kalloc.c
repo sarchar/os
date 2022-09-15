@@ -13,8 +13,7 @@
 #define KALLOC_MAGIC 0x1E1EA5A5A5A5E1E1ULL
 
 #define KALLOC_MIN_N 4   // 16 bytes is the smallest allocation unit
-#define KALLOC_MAX_N 10  // 1024 bytes is the largest allocation unit
-//#define KALLOC_MAX_N 16  // 64k is the largest allocation unit
+#define KALLOC_MAX_N 12  // 4096 bytes is the largest allocation unit
 
 #define KALLOC_VERBOSE 0
 

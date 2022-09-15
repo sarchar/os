@@ -18,7 +18,7 @@
 // current gateway
 static char const* gateway_ip_address = "192.168.53.1"; //TODO use DHCP
 
-static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* packet, u16 packet_length);
+static void _ipv4_interface_receive_packet(struct net_interface* iface, struct net_receive_packet_info*);
 static void _ipv4_header_to_host(struct ipv4_header* hdr);
 static void _ipv4_header_to_network(struct ipv4_header* hdr);
 
@@ -194,19 +194,19 @@ static void _ipv4_header_to_network(struct ipv4_header* hdr)
     hdr->dest_address              = htonl(hdr->dest_address);
 }
 
-void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length)
+void ipv4_handle_device_packet(struct net_receive_packet_info* packet_info)
 {
     // immediately return if our packet is too short
-    if(packet_length < 20) return;
+    if(packet_info->packet_length < 20) return;
 
     // get the IP header
-    struct ipv4_header* hdr = (struct ipv4_header*)packet;
+    struct ipv4_header* hdr = (struct ipv4_header*)packet_info->packet;
     _ipv4_header_to_host(hdr);
 
     char buf1[16], buf2[16];
     ipv4_format_address(buf1, hdr->source_address);
     ipv4_format_address(buf2, hdr->dest_address);
-    //fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s size %d\n", hdr->identification, hdr->protocol, buf1, buf2, packet_length);
+    //fprintf(stderr, "ip: got packet 0x%04X protocol %d from %s to %s size %d\n", hdr->identification, hdr->protocol, buf1, buf2, packet_info->packet_length);
 
     // look up the net_interface that handles packets addressed to hdr->dest_address
     // if no interface is found, we can ignore the packet. otherwise, deliver the packet to that interface
@@ -216,43 +216,49 @@ void ipv4_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_l
     search_address.ipv4 = hdr->dest_address;
 
     // look up the device, else drop the packet if it's not bound for our interface on this device
-    struct net_interface* iface = net_device_find_interface(ndev, &search_address);
+    struct net_interface* iface = net_device_find_interface(packet_info->net_device, &search_address);
     if(iface == null) return;
 
     assert(iface->protocol == NET_PROTOCOL_IPv4, "must be");
-    iface->receive_packet(iface, packet, packet_length);
+    iface->receive_packet(iface, packet_info);
 }
 
-static void _ipv4_interface_receive_packet(struct net_interface* iface, u8* packet, u16 packet_length)
+static void _ipv4_interface_receive_packet(struct net_interface* iface, struct net_receive_packet_info* packet_info)
 {
     // get the IP header (already endian fixed)
-    struct ipv4_header* hdr = (struct ipv4_header*)packet;
+    struct ipv4_header* hdr = (struct ipv4_header*)packet_info->packet;
 
     // determine payload
-    u8* payload = packet + ((u16)hdr->header_length * 4);
-    u16 min_length = min(hdr->total_length, packet_length);
+    u8* payload = packet_info->packet + ((u16)hdr->header_length * 4);
+    u16 min_length = min(hdr->total_length, packet_info->packet_length);
     u16 payload_length = min_length - ((u16)hdr->header_length * 4);
-    if(hdr->total_length > packet_length || payload_length >= min_length) { // payload_length will overflow if hdr->header_length is invalid
-        fprintf(stderr, "ip: dropping packet 0x%04X due to invalid size (hdr->total_length=%d, packet_length=%d, payload_length=%d)\n", hdr->identification, hdr->total_length, packet_length, payload_length);
+    if(hdr->total_length > packet_info->packet_length || payload_length >= min_length) { // payload_length will overflow if hdr->header_length is invalid
+        fprintf(stderr, "ip: dropping packet 0x%04X due to invalid size (hdr->total_length=%d, packet_length=%d, payload_length=%d)\n", hdr->identification, hdr->total_length, packet_info->packet_length, payload_length);
         return;
     }
+
+    // update the pointers for the next layer
+    packet_info->packet        = payload;
+    packet_info->packet_length = payload_length;
 
     //TODO hash table the hdr->protocol and call the handler that way?
     switch(hdr->protocol) {
     case IPv4_PROTOCOL_ICMP:
-        icmp_receive_packet(iface, hdr, payload, payload_length);
+        icmp_receive_packet(iface, hdr, packet_info);
         break;
 
     case IPv4_PROTOCOL_TCP:
-        tcp_receive_packet(iface, hdr, payload, payload_length);
+        tcp_receive_packet(iface, hdr, packet_info);
         break;
 
     case IPv4_PROTOCOL_UDP:
-        udp_receive_packet(iface, hdr, payload, payload_length);
+        udp_receive_packet(iface, hdr, packet_info);
         break;
 
     default:
-        // unknown packet
+        // unknown packet, free memory and return
+        fprintf(stderr, "ip: unknown or unsupported IPv4 protocol %d\n", hdr->protocol);
+        packet_info->free(packet_info);
         break;
     }
 }

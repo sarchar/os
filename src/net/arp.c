@@ -217,9 +217,9 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface, struct 
     return 0;
 }
 
-void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_length)
+void arp_handle_device_packet(struct net_receive_packet_info* packet_info)
 {
-    struct arp_packet* inp = (struct arp_packet*)packet;
+    struct arp_packet* inp = (struct arp_packet*)packet_info->packet;
     u16 opcode = htons(inp->opcode);
 
     // verify packet length
@@ -242,8 +242,8 @@ void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_le
 
     // validate the packet size. ethernet will pad packets to at least 64 bytes, so we have to allow packets larger than what we really need
     u16 wanted_packet_length = sizeof(struct arp_packet) + 2 * (inp->hardware_address_length + inp->protocol_address_length);
-    if(wanted_packet_length > packet_length) {
-        fprintf(stderr, "arp: incoming packet of size %d incorrect (wanted %d)\n", packet_length, wanted_packet_length);
+    if(wanted_packet_length > packet_info->packet_length) {
+        fprintf(stderr, "arp: incoming packet of size %d incorrect (wanted %d)\n", packet_info->packet_length, wanted_packet_length);
         return;
     }
 
@@ -289,7 +289,7 @@ void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_le
         search_address.protocol = NET_PROTOCOL_IPv4;
         search_address.ipv4 = ntohl(*(u32*)dest_protocol_address);
 
-        struct net_interface* iface = net_device_find_interface(ndev, &search_address); // TODO search all interfaces, not just ones on this device?
+        struct net_interface* iface = net_device_find_interface(packet_info->net_device, &search_address); // TODO search all interfaces, not just ones on this device?
         if(iface == null) {
             char buf[16];
             ipv4_format_address(buf, search_address.ipv4);
@@ -305,7 +305,7 @@ void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_le
         // based on the source_protocol_address, perhaps.
 
         // send the response to the source address
-        arp_send_reply(ndev, iface, &_source_hardware_address, &_source_protocol_address);
+        arp_send_reply(packet_info->net_device, iface, &_source_hardware_address, &_source_protocol_address);
     } else if(opcode == ARP_OPCODE_REPLY) {
         // TODO see if it was a reply to one of our requests
         char buf[16];
@@ -332,6 +332,9 @@ void arp_handle_device_packet(struct net_device* ndev, u8* packet, u16 packet_le
 
         release_lock(global_arp_table_lock);
     }
+
+    // free the packet
+    packet_info->free(packet_info);
 }
 
 s64 arp_lookup(struct net_address* protocol_address, struct net_address* hardware_address)

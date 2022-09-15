@@ -112,26 +112,26 @@ s64 udp_send_packet(struct net_interface* iface, struct net_address* dest_addres
     return 0;
 }
 
-void udp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, u8* packet, u16 packet_length)
+void udp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, struct net_receive_packet_info* packet_info)
 {
     unused(iface);
 
-    struct udp_header* hdr = (struct udp_header*)packet;
+    struct udp_header* hdr = (struct udp_header*)packet_info->packet;
 
-    if(packet_length < sizeof(struct udp_header)) {
-        fprintf(stderr, "udp: dropping packet (size too small = %d)\n", packet_length);
+    if(packet_info->packet_length < sizeof(struct udp_header)) {
+        fprintf(stderr, "udp: dropping packet (size too small = %d)\n", packet_info->packet_length);
         return;
     }
 
     // immediately validate the checksum on the packet, if it's set
-    u16 length = min(ntohs(hdr->length), packet_length); // actual available data needs to be no greater than the actual packet_length
+    u16 length = min(ntohs(hdr->length), packet_info->packet_length); // actual available data needs to be no greater than the actual packet_length
 
     if(hdr->checksum) {
         u16 header_checksum = hdr->checksum; // clear to zero for computing the checksum
         hdr->checksum = 0;
 
         u16 computed_checksum;
-        if(header_checksum != (computed_checksum = _compute_checksum(iphdr->source_address, iphdr->dest_address, packet, length))) {
+        if(header_checksum != (computed_checksum = _compute_checksum(iphdr->source_address, iphdr->dest_address, packet_info->packet, length))) {
             fprintf(stderr, "udp: checksum error, dropping packet (computed 0x%04X, header says 0x%04X)\n", computed_checksum, header_checksum);
             return;
         }
@@ -152,4 +152,7 @@ void udp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
             buf, hdr->source_port, buf2, hdr->dest_port, hdr->length, hdr->checksum);
 
     // todo: verify checksum before passing data onwards
+
+    // free the packet memory
+    packet_info->free(packet_info);
 }
