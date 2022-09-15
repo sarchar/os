@@ -316,6 +316,8 @@ static s64 _socket_receive(struct net_socket* net_socket, struct buffer* buf, u6
 {
     s64 res = 0;
 
+    if(size == 0) return 0;
+
     // receive should try and read `size` bytes, but can return early if we receive a PUSH
     //fprintf(stderr, "TODO: tcp receive socket 0x%lX buf 0x%lX size %lu/%lu\n", socket, buf, size, buffer_remaining_write(buf));
     struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
