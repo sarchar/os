@@ -33,7 +33,8 @@ struct buffer {
 
 struct buffer* buffer_create(u32 size);
 void           buffer_destroy(struct buffer*);
-u32            buffer_read(struct buffer*, u8*, u32);
+u32            buffer_peek(struct buffer*, u8*, u32); // read without increasing read_pos
+u32            buffer_read(struct buffer*, u8*, u32); // dest can be null, which just increases read_pos without copying data
 u32            buffer_read_into(struct buffer*, struct buffer*, u32);
 u32            buffer_write(struct buffer*, u8*, u32);
 u32            buffer_write_from(struct buffer*, struct buffer*, u32);

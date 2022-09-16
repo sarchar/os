@@ -21,14 +21,26 @@ void buffer_destroy(struct buffer* buf)
     kfree(buf, sizeof(struct buffer));
 }
 
+u32 buffer_peek(struct buffer* buf, u8* dest, u32 max_read_size)
+{
+    u32 saved_read_pos = buf->read_pos;
+    u32 saved_usage    = buf->usage;
+    u32 ret = buffer_read(buf, dest, max_read_size);
+    buf->read_pos      = saved_read_pos;
+    buf->usage         = saved_usage;
+    return ret;
+}
+
 u32 buffer_read(struct buffer* buf, u8* dest, u32 max_read_size)
 {
     u32 total_read_size = 0;
 
     if(buf->usage > 0 && buf->read_pos >= buf->write_pos) {
         u32 read_size = min(buf->size - buf->read_pos, max_read_size);
-        memcpy(dest, &buf->buf[buf->read_pos], read_size);
-        dest += read_size;
+        if(dest != null) {
+            memcpy(dest, &buf->buf[buf->read_pos], read_size);
+            dest += read_size;
+        }
         max_read_size -= read_size;
         total_read_size += read_size;
         buf->read_pos = (buf->read_pos + read_size) % buf->size;
@@ -37,7 +49,9 @@ u32 buffer_read(struct buffer* buf, u8* dest, u32 max_read_size)
 
     if(buf->read_pos < buf->write_pos) { // implies buf->usage > 0
         u32 read_size = min(buf->write_pos - buf->read_pos, max_read_size);
-        memcpy(dest, &buf->buf[buf->read_pos], read_size);
+        if(dest != null) {
+            memcpy(dest, &buf->buf[buf->read_pos], read_size);
+        }
         total_read_size += read_size;
         buf->read_pos += read_size;
         buf->usage -= read_size;
@@ -48,6 +62,9 @@ u32 buffer_read(struct buffer* buf, u8* dest, u32 max_read_size)
 
 u32 buffer_read_into(struct buffer* dest, struct buffer* src, u32 count)
 {
+    assert(dest != null, "");
+    assert(src != null, "");
+
     // might have to split the write into two, to wrap around the ring buffer
     u32 remaining_read = buffer_remaining_read(src);
     count = min(remaining_read, count); // truncate to incoming buffer length

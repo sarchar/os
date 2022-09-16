@@ -143,6 +143,14 @@ struct tcp_socket {
     struct condition receive_ready;
 };
 
+struct payload_packet_info {
+    struct net_receive_packet_info* packet_info;
+    u64    flags;
+};
+
+// 5000 * ~1500 minus overhead = we can receive about ~7.2MiB of payload data
+#define PAYLOAD_MAX_PACKET_COUNT 5000
+
 // This checks if the ack_number in the header is strictly newer than the previously received ACK and a valid ACK according to our sequence number
 #define ACK_IS_NEWER(hdr,socket) ((socket->my_sequence_number >= socket->their_ack_number && hdr->ack_number > socket->their_ack_number && hdr->ack_number <= socket->my_sequence_number) \
                                || (socket->my_sequence_number < socket->their_ack_number && (hdr->ack_number > socket->their_ack_number || hdr->ack_number <= socket->my_sequence_number)))
@@ -213,6 +221,19 @@ void tcp_destroy_socket(struct net_socket* net_socket)
     }
 
     if(socket->receive_buffer) {
+        while(buffer_remaining_read(socket->receive_buffer) > 0) {
+            // read the payload info
+            struct payload_packet_info ppi;
+            if(buffer_read(socket->receive_buffer, (u8*)&ppi, sizeof(struct payload_packet_info)) != sizeof(struct payload_packet_info)) { // major error if there's not a full structure in the buffer
+                fprintf(stderr, "tcp: major buffer problem with socket 0x%lX, probably leaking memory\n", socket);
+                break;
+            }
+
+            // free the packet info
+            ppi.packet_info->free(ppi.packet_info);
+        }
+
+        // free the buffer
         buffer_destroy(socket->receive_buffer);
     }
 
@@ -312,14 +333,15 @@ static s64 _socket_send(struct net_socket* net_socket, struct buffer* buf)
     return 0;
 }
 
-static s64 _socket_receive(struct net_socket* net_socket, struct buffer* buf, u64 size)
+static s64 _socket_receive(struct net_socket* net_socket, struct buffer* dest, u64 size)
 {
     s64 res = 0;
 
+    // weird, but allowed
     if(size == 0) return 0;
 
     // receive should try and read `size` bytes, but can return early if we receive a PUSH
-    //fprintf(stderr, "TODO: tcp receive socket 0x%lX buf 0x%lX size %lu/%lu\n", socket, buf, size, buffer_remaining_write(buf));
+    //fprintf(stderr, "TODO: tcp receive socket 0x%lX dest 0x%lX size %lu/%lu\n", socket, dest, size, buffer_remaining_write(dest));
     struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
 
     // try to read up until size or until a PUSH is encountered
@@ -328,17 +350,38 @@ static s64 _socket_receive(struct net_socket* net_socket, struct buffer* buf, u6
         wait_condition(socket->receive_ready); // receive_ready is only triggered when receive buffer goes from empty to non-empty (not each time data is received)
                                                // so we will receive data, and if the buffer is non-empty after we receive data, we can notify_condition since we've 
                                                // consumed one signal to let successive calls and other threads read successfully
-        assert(buffer_remaining_read(socket->receive_buffer) > 0, "_socket_receive up with no data in buffer");
+        assert(buffer_remaining_read(socket->receive_buffer) >= sizeof(struct payload_packet_info), "_socket_receive got woke up with no data in buffer");
         fprintf(stderr, "socket 0x%lX woke up from receive_ready condition\n");
 
         // we need a lock to protect receive_buffer between here and _receive_payload
         acquire_lock(socket->receive_buffer_lock);
-        fprintf(stderr, "receive buffer has %d remaining\n", buffer_remaining_read(socket->receive_buffer));
+        fprintf(stderr, "receive buffer has %d entries remaining\n", buffer_remaining_read(socket->receive_buffer) / sizeof(struct payload_packet_info));
 
-        // TODO read data
-        res += buffer_read_into(buf, socket->receive_buffer, size);
-        fprintf(stderr, "read %d from receive buffer, has %d remaining\n", res, buffer_remaining_read(socket->receive_buffer));
-        // TODO break if PSH encountered
+        // get the current payload info
+        struct payload_packet_info ppi;
+        u32 v = buffer_peek(socket->receive_buffer, (u8*)&ppi, sizeof(ppi));
+        assert(v == sizeof(ppi), "must be the case");
+
+        // perform the data copy
+        u64 max_read    = min(size, ppi.packet_info->packet_length);
+        u32 actual_read = buffer_write(dest, ppi.packet_info->packet, max_read);
+        res += actual_read;
+
+        // update ppi and if necessary the receive_buffer too
+        ppi.packet_info->packet        += actual_read;
+        ppi.packet_info->packet_length -= actual_read;
+        u16 last_packet_length = ppi.packet_info->packet_length;
+        bool was_push = (ppi.packet_info->packet_length == 0) && ((ppi.flags & TCP_BUILD_PACKET_FLAG_PUSH) != 0);
+
+        if(ppi.packet_info->packet_length == 0) { // no more payload in this packet
+            fprintf(stderr, "before free\n");
+            ppi.packet_info->free(ppi.packet_info); // free the network packet
+            v = buffer_read(socket->receive_buffer, null, sizeof(struct payload_packet_info)); // clear the entry from the receive_buffer
+            fprintf(stderr, "after free\n");
+            assert(v == sizeof(struct payload_packet_info), "must be the case");
+        }
+
+        fprintf(stderr, "read %d, payload has %d bytes left, buffer has %d entries remaining\n", actual_read, last_packet_length, buffer_remaining_read(socket->receive_buffer) / sizeof(struct payload_packet_info));
 
         // notify any remaining data available
         if(buffer_remaining_read(socket->receive_buffer) > 0) {
@@ -347,8 +390,11 @@ static s64 _socket_receive(struct net_socket* net_socket, struct buffer* buf, u6
 
         release_lock(socket->receive_buffer_lock);
 
-        //TODO TEMP
-        break;
+        // two conditions make us break out, otherwise we continue waiting for data:
+        // 1) PSH flag was set in the packet that delivered this payload, but only once we read the entire packet
+        // 2) the destination buffer is full, detectable by writing less data to it than there is available
+        if(was_push || actual_read < max_read) break;
+        // otherwise, continue reading data
     }
 
     return res;
@@ -579,42 +625,43 @@ done:
 }
 
 // packet_info has been updated to point to the payload
-static s64 _receive_payload(struct tcp_socket* socket, u32 sequence_number, struct net_receive_packet_info* packet_info)
+static s64 _receive_payload(struct tcp_socket* socket, struct tcp_header* hdr, struct net_receive_packet_info* packet_info)
 {
     if(packet_info->packet_length == 0 /*TODO || packet_info->packet_length > socket->max_payload*/ ) return 0;
-
-    // TODO maybe their_sequence_number should be 64-bit and we don't have to worry about overflow, as 4GiB isn't that large now
-    // TODO process any payload
-    if(sequence_number != socket->their_sequence_number) { // if the incoming packet matches the packet we expect
-        fprintf(stderr, "tcp: TODO got out of order packet (got sequence %d, expected %d)\n", sequence_number, socket->their_sequence_number);
-        return 0;
-    }
 
     acquire_lock(socket->receive_buffer_lock);
 
     u32 before_read_size = buffer_remaining_read(socket->receive_buffer);
+    struct payload_packet_info ppi = {
+        .packet_info = packet_info,
+        .flags       = hdr->push ? TCP_BUILD_PACKET_FLAG_PUSH : 0,
+    };
 
-    if(buffer_remaining_write(socket->receive_buffer) < packet_info->packet_length) {
+    if(buffer_remaining_write(socket->receive_buffer) < sizeof(ppi)) {
+        fprintf(stderr, "tcp: incoming buffer for socket 0x%lX is full, dropping packet\n", socket);
         release_lock(socket->receive_buffer_lock);
         return 0;
     }
 
-    u64 v = buffer_write(socket->receive_buffer, packet_info->packet, packet_info->packet_length);
-    fprintf(stderr, "payload added %d to buffer, now has %d\n", packet_info->packet_length, buffer_remaining_read(socket->receive_buffer));
-    assert(v == packet_info->packet_length, "what happened that there was enough space and then there wasn't?");
+    u32 v = buffer_write(socket->receive_buffer, (u8*)&ppi, sizeof(ppi));
+    fprintf(stderr, "payload added one entry (length %d) to buffer, now has %d entries\n", packet_info->packet_length, buffer_remaining_read(socket->receive_buffer) / sizeof(ppi));
+    assert(v == sizeof(ppi), "what happened that there was enough space and then there wasn't?");
 
+    // only when we go from 0 to non-zero do we signal data is ready
     if(before_read_size == 0) {
         notify_condition(socket->receive_ready);
     }
 
     release_lock(socket->receive_buffer_lock);
 
-    return v;
+    // returning the size of the packet indicates it's been accepted
+    return packet_info->packet_length;
 }
 
 static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, struct tcp_header_options* options, struct net_receive_packet_info* packet_info)
 {
     s64 res = 0;
+    bool free_packet_info = true;
 
     u16 payload_length = packet_info->packet_length;
 
@@ -689,15 +736,22 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, s
         socket->their_ack_number = socket->my_sequence_base;
 
         // allocate the receive buffer
-        socket->receive_buffer = buffer_create(2*1024*1024); // TODO determine the size somehow
+        socket->receive_buffer = buffer_create(PAYLOAD_MAX_PACKET_COUNT * sizeof(struct payload_packet_info)); // TODO determine the size better somehow
 
         // receive the payload, adjusting the sequence number for the SYN flag
-        if((res = _receive_payload(socket, hdr->sequence_number + hdr->sync, packet_info)) < 0) {
-            // error receiving payload
-            goto close_done;
-        } else if(res != payload_length) {
-            // did not process the entire payload, maybe because the receive buffer was full
-        }
+        if(payload_length > 0) {
+            if((res = _receive_payload(socket, hdr, packet_info)) < 0) {
+                // error receiving payload
+                goto close_done;
+            } else if(res == 0) {
+                // did not process the entire payload, maybe because the receive buffer was full
+                // if this happens during connection, then there's some weird error and we fail out
+                goto close_done;
+            } else {
+                // packet was queued, so don't free it
+                free_packet_info = false;
+            }
+        } else res = 0;
 
         // update their_sequence_number for the payload, which is technically allowed in a connect segment
         socket->their_sequence_number += res;
@@ -739,23 +793,43 @@ static s64 _receive_segment(struct tcp_socket* socket, struct tcp_header* hdr, s
             // TODO check that the sequence_number falls within our window of data
             // (if it doesn't, then the peer isn't playing nice and we should bail on them)
             // and then add it to an internal buffer
-            if((res = _receive_payload(socket, hdr->sequence_number, packet_info)) < 0) {
-                // internal error
-                goto close_done;
+            // TODO maybe their_sequence_number should be 64-bit and we don't have to worry about overflow, as 4GiB isn't that large now
+            // we don't keep packets that come out of order. they're somewhat rare and the overhead isn't terribly significant. when we get a newer
+            // packet, we resend the previous ACK.  if the packet is older, then the peer might not have gotten our previous ACK. Only the case
+            // where the incoming sequence number matches what we expect do we receive the payload
+            if(hdr->sequence_number != socket->their_sequence_number) { // if the incoming packet matches the packet we expect
+                fprintf(stderr, "tcp: got old or out of order packet (got sequence %d, expected %d)\n", hdr->sequence_number, socket->their_sequence_number);
+                _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
+                goto done;
             }
 
-            // update their sequence number
+            // deliver a payload if there is one
+            if(payload_length > 0) {
+                if((res = _receive_payload(socket, hdr, packet_info)) < 0) {
+                    // internal error
+                    goto close_done;
+                } else if(res == 0) {
+                    // did not process the entire payload, maybe because the receive buffer was full
+                    // in the case that our buffer is full, we just drop the packet but maintain the connection
+                } else {
+                    // packet was queued, so don't free it
+                    free_packet_info = false;
+                }
+            } else res = 0;
+
+            // packet was received, update their sequence number
             u16 seq_inc = res + hdr->finish;
             socket->their_sequence_number += seq_inc;
+
+            if(seq_inc > 0) { // send an ACK if sequence numbers changed
+                _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
+            }
 
             // check if this is a FIN (close) packet after processing data, since TCP allows data in them
             if(hdr->finish) {
                 fprintf(stderr, "tcp: got FIN request\n");
-                _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
                 socket->state = TCP_SOCKET_STATE_CLOSE_WAIT;
                 goto done;
-            } else if(seq_inc > 0) { // send an ACK if sequence numbers changed
-                _queue_segment(socket, null, 0, TCP_BUILD_PACKET_FLAG_ACK);
             }
         }
         break;
@@ -777,7 +851,7 @@ close_done:
 
 done:
     // free the packet
-    packet_info->free(packet_info);
+    if(free_packet_info) packet_info->free(packet_info);
     return res < 0 ? res : 0;
 }
 
@@ -846,11 +920,13 @@ static s64 _build_tcp_packet(struct net_send_packet_queue_entry* entry, u8* tcp_
     hdr->push = (info->flags & TCP_BUILD_PACKET_FLAG_PUSH) != 0 ? 1 : 0;
 
     hdr->data_offset = sizeof(struct tcp_header) / 4; //htons(tcp_packet_size);
-    hdr->window      = htons(32 * 1024); // TODO temp use window scale option
+    hdr->window      = htons(1500 * 200 / 64); // TODO scale the window with the # of remaining packet space
     hdr->urgent_pointer = 0;
 
     hdr->flags       = htons(hdr->flags); // flip the flags byte
     hdr->checksum    = 0;  // initialize checksum to 0
+
+    // TODO options, especially window scale
 
     // copy payload over
     memcpy(tcp_packet_start + sizeof(struct tcp_header), info->payload, info->payload_length);
@@ -898,7 +974,7 @@ static s64 _queue_segment(struct tcp_socket* socket, struct buffer* payload, u16
     //TODO probably FINISH needs seq_inc too
     socket->my_sequence_number += seq_inc;
 
-    fprintf(stderr, "tcp: queuing segment length %d SYN=%d,ACK=%d,PUSH=%d seq=%lu ack=%lu\n", payload_length, (flags & TCP_BUILD_PACKET_FLAG_SYNC) ? 1 : 0, 
+    fprintf(stderr, "tcp: queuing segment payload_length %d SYN=%d,ACK=%d,PUSH=%d seq=%lu ack=%lu\n", payload_length, (flags & TCP_BUILD_PACKET_FLAG_SYNC) ? 1 : 0, 
             (flags & TCP_BUILD_PACKET_FLAG_ACK) ? 1 : 0, (flags & TCP_BUILD_PACKET_FLAG_PUSH) ? 1 : 0, info->sequence_number, info->ack_number);
 
     // stick info into the tx queue
