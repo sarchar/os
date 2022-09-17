@@ -46,8 +46,6 @@ void net_init()
 
 static bool net_do_rx_work()
 {
-    bool res = false;
-
     // TODO get notification from interfaces that there's data on the line
     u16 num_devs = netdev_next_index;
     for(u16 i = 0; i < num_devs; i++) {
@@ -55,19 +53,17 @@ static bool net_do_rx_work()
         if(ndev == null) continue;
 
         struct net_receive_packet_info* packet_info;
-        while((packet_info = ndev->ops->receive_packet(ndev)) != null) { //TODO limit the # of packets we acquire per call to net_do_rx_work()?
+        if((packet_info = ndev->ops->receive_packet(ndev)) != null) {
             _receive_packet(packet_info);
-            res = true;
+            return true;
         }
     }
 
-    return res;
+    return false;
 }
 
 static bool net_do_tx_work()
 {
-    u32 c = 0;
-
     // need a lock here since multiple threads are calling net_do_tx_work
     acquire_lock(send_queue_lock);
     while(send_queue_head != send_queue_tail) {
@@ -87,7 +83,10 @@ static bool net_do_tx_work()
         }
 
         // if there's no not-sent ready packets, we're done
-        if(ri == send_queue_tail) break;
+        if(ri == send_queue_tail) {
+            release_lock(send_queue_lock);
+            return false;
+        }
 
         // have a valid queue entry 
         struct net_send_packet_queue_entry* entry = send_queue[ri];
@@ -104,7 +103,7 @@ static bool net_do_tx_work()
         struct net_device* ndev = entry->net_interface->net_device;
         if(ndev->ops->send_packet != null) {
             s64 ret = ndev->ops->send_packet(ndev, entry->packet_start, entry->packet_length);
-            if(ret < 0) goto done_nolock;
+            if(ret < 0) return false;
         }
 
         if(can_free) {
@@ -112,17 +111,15 @@ static bool net_do_tx_work()
             kfree(entry, sizeof(struct net_send_packet_queue_entry));
         }
 
-        acquire_lock(send_queue_lock);
+        return true;
     }
 
     release_lock(send_queue_lock);
-done_nolock:
-    return c > 0;
+    return false;
 }
 
 static bool net_do_notify_sockets()
 {
-    u32 c = 0;
     while(notified_net_sockets != null) { // check if any socket exists with work to do
         // grab the socket, maybe another cpu will get it first
         acquire_lock(notify_socket_lock);
@@ -144,16 +141,35 @@ static bool net_do_notify_sockets()
 
         notify_socket->next = notify_socket->prev = null;
         notify_socket->ops->update(notify_socket);
-        c++;
+        
+        return true;
     }
 
-    return c > 0;
+    return false;
 }
 
 // return true if we "did work"
+declare_spinlock(net_work_lock);
 bool net_do_work()
 {
-    return net_do_rx_work() || net_do_tx_work() || net_do_notify_sockets();
+    bool loop = true;
+    bool did_work;
+
+    // if we can't get the lock, return to do other work
+    if(!try_lock(net_work_lock)) return false;
+
+    while(loop) {
+        loop = false;
+        loop = net_do_rx_work()        || loop;
+        loop = net_do_notify_sockets() || loop;
+        loop = net_do_tx_work()        || loop;
+
+        did_work = loop || did_work;
+    }
+
+    release_lock(net_work_lock);
+
+    return did_work;
 }
 
 // will create vnode #device=net:N #driver=driver_name:M

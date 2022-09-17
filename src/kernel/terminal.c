@@ -127,6 +127,8 @@ void terminal_putc(u16 c)
             current_terminal.cursor_y = current_terminal.height - 1;
             terminal_scroll(1);
         }
+    } else if(c == '\r') {
+        current_terminal.cursor_x = 0;
     } else {
         terminal_setc(c, current_terminal.cursor_x, current_terminal.cursor_y);
         terminal_step(1);

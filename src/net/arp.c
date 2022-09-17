@@ -111,7 +111,7 @@ s64 arp_send_request(struct net_interface* iface, struct net_address* lookup_add
 
         char buf[16];
         ipv4_format_address(buf, lookup_address->ipv4);
-        fprintf(stderr, "arp: creating request packet for %s\n", buf);
+        //fprintf(stderr, "arp: creating request packet for %s\n", buf);
     } else if(lookup_address->protocol == NET_PROTOCOL_IPv6) {
         info.arp.protocol_type = ETHERTYPE_IPv6;
         info.arp.protocol_address_length = 6;
@@ -181,7 +181,7 @@ s64 arp_send_reply(struct net_device* ndev, struct net_interface* iface, struct 
 
         char buf[16];
         ipv4_format_address(buf, dest_protocol_address->ipv4);
-        fprintf(stderr, "arp: creating reply packet to %s\n", buf);
+        //fprintf(stderr, "arp: creating reply packet to %s\n", buf);
     } else if(iface->protocol == NET_PROTOCOL_IPv6) {
         info.arp.protocol_type = ETHERTYPE_IPv6;
         info.arp.protocol_address_length = 6;
@@ -272,13 +272,13 @@ void arp_handle_device_packet(struct net_receive_packet_info* packet_info)
         struct arp_table_entry* arpent = null;
         HT_FIND(global_arp_table, _source_protocol_address, arpent);
         if(arpent != null) {
-            fprintf(stderr, "arp: entry already in table, updating\n");
+            //fprintf(stderr, "arp: entry already in table, updating\n");
             memcpy(&arpent->hardware_address, &_source_hardware_address, sizeof(struct net_address));
         } else {
             arpent = (struct arp_table_entry*)malloc(sizeof(struct arp_table_entry));
             memcpy(&arpent->protocol_address, &_source_protocol_address, sizeof(struct net_address));
             memcpy(&arpent->hardware_address, &_source_hardware_address, sizeof(struct net_address));
-            fprintf(stderr, "arp: new entry added to table\n");
+            //fprintf(stderr, "arp: new entry added to table\n");
             HT_ADD(global_arp_table, protocol_address, arpent);
         }
 
@@ -299,7 +299,7 @@ void arp_handle_device_packet(struct net_receive_packet_info* packet_info)
 
         char buf[16];
         ipv4_format_address(buf, search_address.ipv4);
-        fprintf(stderr, "arp: request received for %s, sending response\n", buf);
+        //fprintf(stderr, "arp: request received for %s, sending response\n", buf);
 
         // TODO might we ever need to route the response to a different network device? if so, we'll need to route 
         // based on the source_protocol_address, perhaps.
@@ -310,9 +310,9 @@ void arp_handle_device_packet(struct net_receive_packet_info* packet_info)
         // TODO see if it was a reply to one of our requests
         char buf[16];
         ipv4_format_address(buf, _source_protocol_address.ipv4);
-        fprintf(stderr, "arp: got response for %s: %02x:%02x:%02x:%02x:%02x:%02x\n", buf,
-                _source_hardware_address.mac[0], _source_hardware_address.mac[1], _source_hardware_address.mac[2],
-                _source_hardware_address.mac[3], _source_hardware_address.mac[4], _source_hardware_address.mac[5]);
+        //fprintf(stderr, "arp: got response for %s: %02x:%02x:%02x:%02x:%02x:%02x\n", buf,
+        //        _source_hardware_address.mac[0], _source_hardware_address.mac[1], _source_hardware_address.mac[2],
+        //        _source_hardware_address.mac[3], _source_hardware_address.mac[4], _source_hardware_address.mac[5]);
 
         acquire_lock(global_arp_table_lock);
 
@@ -320,13 +320,13 @@ void arp_handle_device_packet(struct net_receive_packet_info* packet_info)
         struct arp_table_entry* arpent = null;
         HT_FIND(global_arp_table, _source_protocol_address, arpent);
         if(arpent != null) {
-            fprintf(stderr, "arp: entry already in table, updating\n");
+            //fprintf(stderr, "arp: entry already in table, updating\n");
             memcpy(&arpent->hardware_address, &_source_hardware_address, sizeof(struct net_address));
         } else {
             arpent = (struct arp_table_entry*)malloc(sizeof(struct arp_table_entry));
             memcpy(&arpent->protocol_address, &_source_protocol_address, sizeof(struct net_address));
             memcpy(&arpent->hardware_address, &_source_hardware_address, sizeof(struct net_address));
-            fprintf(stderr, "arp: new entry added to table\n");
+            //fprintf(stderr, "arp: new entry added to table\n");
             HT_ADD(global_arp_table, protocol_address, arpent);
         }
 

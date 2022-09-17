@@ -24,6 +24,7 @@
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
+#include "net/tcp.h"
 #include "net/udp.h"
 #include "paging.h"
 #include "palloc.h"
@@ -42,6 +43,7 @@ extern void _gdt_fixup(intp vma_base);
 void kernel_main(struct multiboot_info*);
 
 static s64 echo_server(struct task*);
+static s64 get_www(struct task*);
 static bool volatile exit_shell = false;
 
 __noreturn void kernel_panic(u32 error)
@@ -603,12 +605,6 @@ static void run_command(char* cmdbuffer)
         char payload[] = "hello!";
         udp_send_packet(iface, &dest_address, 10000, port, (u8*)payload, strlen(payload) + 1);
     } else if(strcmp(cmdbuffer, "listen") == 0) {
-        //struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
-        //if(ndev == null) return;
-
-        //struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
-        //if(iface == null) return;
-
         // determine port to listen on
         char* portstr = cmdptr;
         cmdptr = strchr(cmdptr, ' ');
@@ -626,6 +622,26 @@ static void run_command(char* cmdbuffer)
         struct cpu* cpu = get_cpu();
         task_enqueue(&cpu->current_task, echo_server_task);
 
+    } else if(strcmp(cmdbuffer, "www") == 0) {
+        // get IP to fetch from
+        char* serverip = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        // start the fetch thread
+        u32 slen = strlen(serverip);
+        if(slen > 0) {
+            struct buffer* buf = buffer_create(slen);
+            buffer_write(buf, (u8*)serverip, slen);
+
+            struct task* get_www_task = task_create(get_www, (intp)buf, false);
+            struct cpu* cpu = get_cpu();
+            task_enqueue(&cpu->current_task, get_www_task);
+        }
     }
 }
 
@@ -704,6 +720,74 @@ static s64 shell(struct task* task)
     return 0;
 }
 
+static s64 get_www(struct task* task)
+{
+    struct net_socket* socket = null;
+    s64 res;
+
+    // read the IP address from the command line
+    struct buffer* buf = (struct buffer*)task->userdata;
+    u32 slen = buffer_remaining_read(buf);
+    char* serverip = (char*)__builtin_alloca(slen);
+    buffer_read(buf, (u8*)serverip, slen);
+    buffer_destroy(buf);
+
+    // parse the IP address
+    struct net_address server_address;
+    ipv4_parse_address_string(&server_address, serverip);
+
+    // create a sockinfo for our connection: destination is port 80 (HTTP)
+    struct net_socket_info sockinfo;
+    sockinfo.protocol = NET_PROTOCOL_TCP;
+    sockinfo.dest_address = server_address;
+    sockinfo.dest_port = 80;
+
+    // use the local interface as source address with a random source port
+    struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+    assert(ndev != null, "missing network device");
+    struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+    assert(iface != null, "missing network interface");
+    sockinfo.source_address = iface->address;
+    sockinfo.source_port = 43149;
+
+    // create the socket
+    socket = net_socket_create(&sockinfo);
+    __tcp_set_socket_iface(socket, iface); // TODO this shouldn't be necessary, as routing should handle it
+
+    // try connecting
+    fprintf(stderr, "Connecting to %s...", serverip);
+    if((res = net_socket_connect(socket)) < 0) goto done;
+    fprintf(stderr, "connected!\n");
+
+    // send HTTP request
+    buf = buffer_create(512);
+    buffer_puts(buf, "GET / HTTP/1.1\r\n");
+    buffer_puts(buf, "Host: bbc.com\r\n");
+    buffer_puts(buf, "Accept: text/html\r\n");
+    buffer_puts(buf, "\r\n");
+    if((res = net_socket_send(socket, buf)) < 0) goto done;
+
+    // read and print until the socket closes
+    while(true) {
+        struct buffer* response = buffer_create(512);
+        if((res = net_socket_receive(socket, response, buffer_remaining_write(response))) <= 0) {
+            buffer_destroy(response);
+            break;
+        }
+
+        char s[512];
+        u32 c = buffer_read(response, (u8*)s, buffer_remaining_read(response));
+        s[c] = 0;
+        fprintf(stderr, "%s\n", s);
+
+        buffer_destroy(response);
+    }
+
+done:
+    net_socket_destroy(socket); 
+    return res;
+}
+
 static s64 echo_server_per_socket(struct task* task)
 {
     struct net_socket* socket = (struct net_socket*)task->userdata;
@@ -743,10 +827,10 @@ static s64 echo_server(struct task* task)
     struct net_socket_info sockinfo;
     zero(&sockinfo);
     sockinfo.protocol                = NET_PROTOCOL_TCP;
-    sockinfo.source_address.protocol = NET_PROTOCOL_IPv4;
     sockinfo.dest_address.protocol   = NET_PROTOCOL_IPv4;
-    sockinfo.dest_address.ipv4       = 0; // listen on 0.0.0.0, iface->address; // use the interface address as our bind address
-    sockinfo.dest_port               = (u16)task->userdata;
+    sockinfo.source_address.protocol = NET_PROTOCOL_IPv4;
+    sockinfo.source_address.ipv4     = 0; // listen on 0.0.0.0
+    sockinfo.source_port             = (u16)task->userdata;
 
     struct net_socket* socket = net_socket_create(&sockinfo);
     if(socket == null) {
@@ -757,7 +841,7 @@ static s64 echo_server(struct task* task)
     // start listening on said socket
     if(net_socket_listen(socket, 10) < 0) {
         fprintf(stderr, "could not listen on socket\n");
-        //net_destroy_socket(socket);
+        net_socket_destroy(socket);
         return -1;
     }
 
