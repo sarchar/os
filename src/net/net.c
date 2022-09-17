@@ -246,7 +246,7 @@ static void _receive_packet(struct net_receive_packet_info* packet_info)
     }
 }
 
-struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
+struct net_socket* net_socket_create(struct net_socket_info* sockinfo)
 {
     struct net_socket* tmp;
     acquire_lock(global_net_sockets_lock);
@@ -260,7 +260,7 @@ struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
     switch(sockinfo->protocol) {
     case NET_PROTOCOL_TCP:
         // get the size required for the socket structure and allocate it here
-        tmp = tcp_create_socket(sockinfo);
+        tmp = tcp_socket_create(sockinfo);
         break;
 
     case NET_PROTOCOL_UDP:
@@ -279,28 +279,7 @@ struct net_socket* net_create_socket(struct net_socket_info* sockinfo)
     return tmp;
 }
 
-void net_destroy_socket(struct net_socket* socket)
-{
-    struct net_socket* tmp;
-    acquire_lock(global_net_sockets_lock);
-    HT_FIND(global_net_sockets, socket->socket_info, tmp);
-    assert(tmp != null, "all sockets should be in global_net_sockets");
-    HT_DELETE(global_net_sockets, tmp);
-    release_lock(global_net_sockets_lock);
-
-    switch(socket->socket_info.protocol) {
-    case NET_PROTOCOL_TCP:
-        // get the size required for the socket structure and allocate it here
-        tcp_destroy_socket(socket);
-        break;
-
-    case NET_PROTOCOL_UDP:
-        //TODO
-        break;
-    }
-}
-
-struct net_socket* net_lookup_socket(struct net_socket_info* sockinfo)
+struct net_socket* net_socket_lookup(struct net_socket_info* sockinfo)
 {
     struct net_socket* res;
     acquire_lock(global_net_sockets_lock);
@@ -356,6 +335,22 @@ s64 net_socket_send(struct net_socket* socket, struct buffer* buf)
 s64 net_socket_receive(struct net_socket* socket, struct buffer* buf, u16 size)
 {
     return socket->ops->receive(socket, buf, size);
+}
+
+void net_socket_destroy(struct net_socket* socket)
+{
+    socket->ops->destroy(socket);
+}
+
+// actually removes the socket from the global socket pool
+void net_socket_finish_destroy(struct net_socket* socket)
+{
+    struct net_socket* tmp;
+    acquire_lock(global_net_sockets_lock);
+    HT_FIND(global_net_sockets, socket->socket_info, tmp);
+    assert(tmp != null, "all sockets should be in global_net_sockets");
+    HT_DELETE(global_net_sockets, tmp);
+    release_lock(global_net_sockets_lock);
 }
 
 s64 net_request_send_packet_queue_entry(struct net_interface* iface, struct net_socket* socket, struct net_send_packet_queue_entry** ret)

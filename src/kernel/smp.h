@@ -14,17 +14,21 @@ static __always_inline bool smp_ready() { return _ap_all_go; }
 #define can_lock(lock)         (lock)._f->canlock((intp)&(lock))
 #define wait_condition(lock)   (lock)._f->wait((intp)&(lock))
 #define notify_condition(lock) (lock)._f->notify((intp)&(lock))
+#define end_condition(lock)    (lock)._f->end((intp)&(lock))
 
 // TODO rwlocks. generic locking functions can assert if the lock doesn't support rwlocking
 // the rwticket lock from http://locklessinc.com/articles/locks/ looks good for my purposes
 
 struct lock_functions {
+    // spinlocks
     void (*acquire)(intp);
     void (*release)(intp);
     bool (*trylock)(intp);
     bool (*canlock)(intp);
+    // semaphores
     void (*wait)(intp);
     void (*notify)(intp);
+    void (*end)(intp);
 };
 
 // spinlocks

@@ -733,8 +733,7 @@ static s64 echo_server_per_socket(struct task* task)
         }
     }
 
-    net_socket_close(socket);
-    //TODO free socket
+    net_socket_destroy(socket); // close the socket if open, and free memory associated with the socket
     return 0;
 }
 
@@ -749,7 +748,7 @@ static s64 echo_server(struct task* task)
     sockinfo.dest_address.ipv4       = 0; // listen on 0.0.0.0, iface->address; // use the interface address as our bind address
     sockinfo.dest_port               = (u16)task->userdata;
 
-    struct net_socket* socket = net_create_socket(&sockinfo);
+    struct net_socket* socket = net_socket_create(&sockinfo);
     if(socket == null) {
         fprintf(stderr, "could not create socket\n");
         return -1;
@@ -762,7 +761,7 @@ static s64 echo_server(struct task* task)
         return -1;
     }
 
-    fprintf(stderr, "socket listening 0x%lX\n", net_lookup_socket(&sockinfo));
+    fprintf(stderr, "socket listening 0x%lX\n", net_socket_lookup(&sockinfo));
 
     // okay, listening socket is ready, wait for a socket
     while(true) {

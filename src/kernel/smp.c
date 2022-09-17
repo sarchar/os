@@ -202,6 +202,7 @@ struct lock_functions spinlock_functions = {
     .canlock = (bool(*)(intp))&spinlock_canlock,
     .wait    = null,
     .notify  = null,
+    .end     = null,
 };
 
 static void ticketlock_acquire(struct ticketlock* tkt)
@@ -246,6 +247,7 @@ struct lock_functions ticketlock_functions = {
     .canlock = (bool(*)(intp))&ticketlock_canlock,
     .wait    = null,
     .notify  = null,
+    .end     = null,
 };
 
 static void mutex_acquire(struct mutex* m)
@@ -277,24 +279,44 @@ struct lock_functions mutexlock_functions = {
     .canlock = (bool(*)(intp))&mutex_canlock,
     .wait    = null,
     .notify  = null,
+    .end     = null,
 };
 
-#define USE_DEQUE
 struct condition_blocked_task {
-    //TODO MAKE_CIRCULAR_LIST;
     struct task* task;
-#ifdef USE_DEQUE
     MAKE_DEQUE(struct condition_blocked_task);
-#else
-    struct condition_blocked_task* prev;
-    struct condition_blocked_task* next;
-#endif
 };
+
+static bool condition_trylock(struct condition* cond)
+{
+    bool res = false;
+    acquire_lock(cond->internal_lock);
+
+    __barrier();
+    if(cond->waiters < cond->signals) {
+        __atomic_inc(&cond->waiters);
+        res = true;
+    }
+
+    release_lock(cond->internal_lock);
+    return res;
+}
+
+static bool condition_canlock(struct condition* cond)
+{
+    return cond->waiters < cond->signals;
+}
 
 void condition_wait(struct condition* cond)
 {
     // try locking the ticketlock, this means multiple waiters will be served in order
     acquire_lock(cond->internal_lock);
+    
+    // if the lock has ended, return immediately
+    if(cond->signals == (u64)-1) {
+        release_lock(cond->internal_lock);
+        return;
+    }
 
     // increment the waiter index
     u32 me = __atomic_xinc(&cond->waiters);
@@ -317,19 +339,7 @@ void condition_wait(struct condition* cond)
     bt->task = get_cpu()->current_task;
 
     // add bt to blocked tasks
-#ifdef USE_DEQUE
     DEQUE_PUSH_BACK(cond->blocked_tasks, bt);
-#else
-    if(cond->blocked_tasks == null) {
-        bt->next = bt->prev = bt;
-        cond->blocked_tasks = bt;
-    } else {
-        cond->blocked_tasks->prev->next = bt;
-        bt->prev = cond->blocked_tasks->prev;
-        bt->next = cond->blocked_tasks;
-        cond->blocked_tasks->prev = bt;
-    }
-#endif
 
     // prevent preemption between now and the call to task_yield
     u64 cpu_flags = __cli_saveflags();
@@ -344,29 +354,21 @@ void condition_wait(struct condition* cond)
 void condition_notify(struct condition* cond)
 {
     acquire_lock(cond->internal_lock);
+    if(cond->signals == (u64)-1) {
+        release_lock(cond->internal_lock);
+        return;
+    }
+
     __atomic_inc(&cond->signals);
 
     // since we have internal_lock, condition_wait can't modify cond->blocked_tasks
     // so if there are no blocked tasks, we can safely return
     struct condition_blocked_task* bt = cond->blocked_tasks;
-#ifdef USE_DEQUE
     DEQUE_POP_FRONT(cond->blocked_tasks, bt);
-#endif
     if(bt == null) { // no waiting tasks, return
         release_lock(cond->internal_lock);
         return;
     }
-
-#ifndef USE_DEQUE
-    // since we have a blocked task, we need to wake it up
-    // remove the head of the list
-    if(bt->next == bt) cond->blocked_tasks = null;
-    else {
-        cond->blocked_tasks = bt->next;
-        cond->blocked_tasks->prev = bt->prev;
-        cond->blocked_tasks->prev->next = cond->blocked_tasks;
-    }
-#endif
 
     // safe to release the condition lock now
     release_lock(cond->internal_lock);
@@ -381,24 +383,23 @@ void condition_notify(struct condition* cond)
     task_unblock(bt->task); // IPI for non-local tasks
 }
 
-static bool condition_trylock(struct condition* cond)
+// wake up all blocked threads and prevent any more from getting blocked
+static void condition_end(struct condition* cond)
 {
-    bool res = false;
     acquire_lock(cond->internal_lock);
+    cond->signals = (u64)-1;
 
-    __barrier();
-    if(cond->waiters < cond->signals) {
-        __atomic_inc(&cond->waiters);
-        res = true;
+    // since we have internal_lock, condition_wait can't modify cond->blocked_tasks
+    // so if there are no blocked tasks, we can safely return
+    struct condition_blocked_task* bt = cond->blocked_tasks;
+    DEQUE_POP_FRONT(cond->blocked_tasks, bt);
+    while(bt != null) {
+        while(*(enum TASK_STATE volatile*)&bt->task->state != TASK_STATE_BLOCKED) __pause();
+        task_unblock(bt->task); // IPI for non-local tasks
+        DEQUE_POP_FRONT(cond->blocked_tasks, bt);
     }
 
     release_lock(cond->internal_lock);
-    return res;
-}
-
-static bool condition_canlock(struct condition* cond)
-{
-    return cond->waiters < cond->signals;
 }
 
 struct lock_functions conditionlock_functions = {
@@ -408,5 +409,6 @@ struct lock_functions conditionlock_functions = {
     .canlock = (bool(*)(intp))&condition_canlock,
     .wait    = (void(*)(intp))&condition_wait,
     .notify  = (void(*)(intp))&condition_notify,
+    .end     = (void(*)(intp))&condition_end,
 };
 

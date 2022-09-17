@@ -141,6 +141,7 @@ struct net_socket_ops {
     struct net_socket* (*accept) (struct net_socket*);
     s64                (*connect)(struct net_socket*);
     s64                (*close)  (struct net_socket*);
+    void               (*destroy)(struct net_socket*);
     s64                (*send)   (struct net_socket*, struct buffer*);
     s64                (*receive)(struct net_socket*, struct buffer*, u64);
     s64                (*update) (struct net_socket*);
@@ -167,9 +168,8 @@ struct net_interface* net_device_find_interface(struct net_device* ndev, struct 
 s64  net_request_send_packet_queue_entry(struct net_interface*, struct net_socket*, struct net_send_packet_queue_entry**);
 void net_ready_send_packet_queue_entry(struct net_send_packet_queue_entry*);
 
-struct net_socket* net_create_socket(struct net_socket_info*);
-void               net_destroy_socket(struct net_socket*);
-struct net_socket* net_lookup_socket(struct net_socket_info*);
+struct net_socket* net_socket_create(struct net_socket_info*);
+struct net_socket* net_socket_lookup(struct net_socket_info*);
 void net_notify_socket(struct net_socket*);
 
 // interface/wrappers to net_socket_ops
@@ -177,8 +177,12 @@ s64                net_socket_listen (struct net_socket*, u16 backlog);
 struct net_socket* net_socket_accept (struct net_socket*);
 s64                net_socket_connect(struct net_socket*);
 s64                net_socket_close  (struct net_socket*);
+void               net_socket_destroy(struct net_socket*);
 s64                net_socket_send   (struct net_socket*, struct buffer*);
 s64                net_socket_receive(struct net_socket*, struct buffer*, u16);
+
+// don't call this unless you know what you're doing; use net_socket_destroy() instead
+void net_socket_finish_destroy(struct net_socket* socket);
 
 //TODO These are temporary
 struct net_device* net_device_by_index(u16); //TODO this should be removed eventually and net_device_from_vnode(vfs_find("#netdev=index")) should be used
