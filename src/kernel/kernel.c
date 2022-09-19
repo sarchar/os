@@ -21,6 +21,7 @@
 #include "kernel.h"
 #include "multiboot2.h"
 #include "net/arp.h"
+#include "net/dhcp.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
@@ -160,19 +161,6 @@ static void load_drivers()
     ahci_load();
     e1000_load();
 
-    // send an ARP packet for 192.168.53.1 since we use it all the time
-    {
-        struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
-        if(ndev != null) {
-            struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
-            if(iface != null) {
-                // create an ARP request for the specified IP address
-                struct net_address lookup_address;
-                ipv4_parse_address_string(&lookup_address, "192.168.53.1");
-                arp_send_request(iface, &lookup_address);
-            }
-        }
-    }
 }
 
 static char current_directory[256] = "/";
@@ -587,23 +575,24 @@ static void run_command(char* cmdbuffer)
             cmdptr = end;
         }
 
-        // send a udp packet
-        struct net_address dest_address;
-        ipv4_parse_address_string(&dest_address, addr);
+        // TODO convert to use net_socket_create/send/destroy. no more direct interface to udp_send_packet
+        //! // send a udp packet
+        //! struct net_address dest_address;
+        //! ipv4_parse_address_string(&dest_address, addr);
 
-        char* portstr = cmdptr;
-        cmdptr = strchr(cmdptr, ' ');
-        if(cmdptr != null) {
-            *cmdptr++ = '\0';
-        } else {
-            cmdptr = end;
-        }
+        //! char* portstr = cmdptr;
+        //! cmdptr = strchr(cmdptr, ' ');
+        //! if(cmdptr != null) {
+        //!     *cmdptr++ = '\0';
+        //! } else {
+        //!     cmdptr = end;
+        //! }
 
-        u16 port = atoi(portstr);
-        if(port == 0) port = 8080;
+        //! u16 port = atoi(portstr);
+        //! if(port == 0) port = 8080;
 
-        char payload[] = "hello!";
-        udp_send_packet(iface, &dest_address, 10000, port, (u8*)payload, strlen(payload) + 1);
+        //! char payload[] = "hello!";
+        //! udp_send_packet(iface, &dest_address, 10000, port, (u8*)payload, strlen(payload) + 1);
     } else if(strcmp(cmdbuffer, "listen") == 0) {
         // determine port to listen on
         char* portstr = cmdptr;
@@ -687,7 +676,15 @@ bool read_root_device_sector(struct filesystem_callbacks* fscbs, u64 start_secto
 
 static s64 shell(struct task* task)
 {
+    s64 res = 0;
+
     fprintf(stderr, "shell started with task id = %d\n", task->task_id);
+
+    // initialize the libc RNG
+    struct cmos_time cmostime;
+    cmos_read_rtc(&cmostime);
+    u32 seed = 60 * (60 * (24 * (30 * (12 * cmostime.year + cmostime.month) + cmostime.day) + cmostime.hours) + cmostime.minutes) + cmostime.seconds;
+    srand(seed);
 
     ps2keyboard_hook_ascii(&handle_keypress, null);
 
@@ -703,6 +700,16 @@ static s64 shell(struct task* task)
         fprintf(stderr, "root device <#device:ahci #ahci:%d> is not an ext2 filesystem\n", root_device);
     } else {
         fprintf(stderr, "root device <#device:ahci #ahci:%d> found\n", root_device);
+    }
+
+    // configure the first IPv4 interface using dhcp
+    fprintf(stderr, "configuring network...\n");
+    struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
+    assert(ndev != null, "missing network device");
+    struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
+    assert(iface != null, "missing network interface");
+    if((res = dhcp_configure_network(iface, true)) < 0) {
+        fprintf(stderr, "failed to configure network (err = %d)\n", res);
     }
 
     fprintf(stderr, "kernel shell ready...\n\n");
@@ -748,11 +755,10 @@ static s64 get_www(struct task* task)
     struct net_interface* iface = net_device_get_interface_by_index(ndev, NET_PROTOCOL_IPv4, 0); // grab the first IPv4 interface
     assert(iface != null, "missing network interface");
     sockinfo.source_address = iface->address;
-    sockinfo.source_port = 43149;
+    sockinfo.source_port = 10000 + rand() % 40000;
 
     // create the socket
-    socket = net_socket_create(&sockinfo);
-    __tcp_set_socket_iface(socket, iface); // TODO this shouldn't be necessary, as routing should handle it
+    socket = net_socket_create(iface, &sockinfo);
 
     // try connecting
     fprintf(stderr, "Connecting to %s...", serverip);
@@ -764,6 +770,7 @@ static s64 get_www(struct task* task)
     buffer_puts(buf, "GET / HTTP/1.1\r\n");
     buffer_puts(buf, "Host: bbc.com\r\n");
     buffer_puts(buf, "Accept: text/html\r\n");
+    buffer_puts(buf, "Connection: close\r\n");
     buffer_puts(buf, "\r\n");
     if((res = net_socket_send(socket, buf)) < 0) goto done;
 
@@ -832,7 +839,7 @@ static s64 echo_server(struct task* task)
     sockinfo.source_address.ipv4     = 0; // listen on 0.0.0.0
     sockinfo.source_port             = (u16)task->userdata;
 
-    struct net_socket* socket = net_socket_create(&sockinfo);
+    struct net_socket* socket = net_socket_create(null, &sockinfo);
     if(socket == null) {
         fprintf(stderr, "could not create socket\n");
         return -1;

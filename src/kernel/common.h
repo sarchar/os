@@ -87,18 +87,25 @@ typedef u32 color;
 #define _wutd(start)  /* wait until timer delta */ \
         (hpet_kernel_timer_delta_to_us((start), hpet_get_kernel_timer_value()))
 
-#define wait_until_true(cnd, timeout, tmp)         \
-        (tmp) = hpet_get_kernel_timer_value();     \
-        while(!(cnd) && _wutd(tmp) < timeout) ;    \
+#define wait_until_true(cnd, timeout, tmp)                  \
+        (tmp) = hpet_get_kernel_timer_value();              \
+        while(!(cnd) && _wutd(tmp) < timeout) __pause();    \
         if(_wutd(tmp) >= timeout)
 
-#define wait_until_false(cnd, timeout, tmp)        \
-        (tmp) = hpet_get_kernel_timer_value();     \
-        while((cnd) && _wutd(tmp) < timeout) ;     \
+#define wait_until_false(cnd, timeout, tmp)                 \
+        (tmp) = hpet_get_kernel_timer_value();              \
+        while((cnd) && _wutd(tmp) < timeout) __pause();     \
         if(_wutd(tmp) >= timeout)
 
 
 // with the above functions we can hack in a simple usleep function
-#define usleep(us) { u64 tmp; wait_until_false(true, us, tmp) {}; }
+#define usleep(us) do { u64 tmp; wait_until_false(true, us, tmp) {}; } while(0)
+#define mleep(msecs) do { usleep(secs*1000); } while(0)
+#define sleep(secs) do { usleep(secs*1000000); } while(0)
+
+// high res timer macros
+#define timer_now() hpet_get_kernel_timer_value()
+// time in microseconds since 's' was sampled
+#define timer_since(s) hpet_kernel_timer_delta_to_us(s, hpet_get_kernel_timer_value())
 
 #endif

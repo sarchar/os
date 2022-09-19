@@ -15,6 +15,14 @@
 #include "stdlib.h"
 #include "string.h"
 
+struct ipv4_build_packet_info {
+    struct net_address*          dest_address;
+    u16                          identification;
+    u8                           ipv4_protocol;
+    net_wrap_packet_callback*    build_payload;
+    void*                        payload_userdata;
+};
+
 // current gateway
 static char const* gateway_ip_address = "192.168.53.1"; //TODO use DHCP
 
@@ -49,13 +57,17 @@ static u16 _ipv4_compute_checksum(u8* data, u16 data_length)
     return ~sum;
 }
 
-struct ipv4_build_packet_info {
-    struct net_address*          dest_address;
-    u16                          identification;
-    u8                           ipv4_protocol;
-    net_wrap_packet_callback*    build_payload;
-    void*                        payload_userdata;
-};
+static inline bool _is_broadcast(struct net_address* address)
+{
+    if(address->protocol != NET_PROTOCOL_IPv4) return false;
+
+    if((address->ipv4 & 0x000000FF) == 0x000000FF) return true;
+    if((address->ipv4 & 0x0000FFFF) == 0x0000FFFF) return true;
+    if((address->ipv4 & 0x00FFFFFF) == 0x00FFFFFF) return true;
+    if((address->ipv4 & 0xFFFFFFFF) == 0xFFFFFFFF) return true;
+
+    return false;
+}
 
 static s64 _build_ipv4_packet(struct net_send_packet_queue_entry* entry, u8* ipv4_packet_start, void* userdata)
 {
@@ -123,7 +135,11 @@ s64 ipv4_wrap_packet(struct net_send_packet_queue_entry* sq_entry, struct net_ad
 
     // If we know how to deliver to dest_address directly via ethernet, use it. otherwise, look up the gateway and use that
     s64 err;
-    if((err = arp_lookup(dest_address, &hw_dest)) < 0 && err == -ENOENT) {
+    if(_is_broadcast(dest_address)) {
+        // with a broadcast address we want to send to all MACs on the switch
+        hw_dest.protocol = NET_PROTOCOL_ETHERNET;
+        memset(hw_dest.mac, 0xFF, 6);
+    } else if((err = arp_lookup(dest_address, &hw_dest)) < 0 && err == -ENOENT) {
         struct net_address gateway_address;
         ipv4_parse_address_string(&gateway_address, gateway_ip_address);
         if((err = arp_lookup(&gateway_address, &hw_dest)) < 0) {
@@ -166,6 +182,12 @@ struct net_interface* ipv4_create_interface(struct net_address* local_address)
     iface->net_interface.wrap_packet    = &ipv4_wrap_packet;
 
     return &iface->net_interface;
+}
+
+void ipv4_set_gateway(struct net_interface* net_interface, struct net_address* addr)
+{
+    struct ipv4_interface* iface = containerof(net_interface, struct ipv4_interface, net_interface);
+    iface->gateway_address = *addr;
 }
 
 // this and _ipv4_header_to_network is identical, but are separate for readability
@@ -217,10 +239,18 @@ void ipv4_handle_device_packet(struct net_receive_packet_info* packet_info)
 
     // look up the device, else drop the packet if it's not bound for our interface on this device
     struct net_interface* iface = net_device_find_interface(packet_info->net_device, &search_address);
-    if(iface == null) return;
+    if(iface == null) {
+        // no interface was found, but if we have an unbound interface that's accepting all data packets,
+        // we can deliver to that interface instead
+        search_address.ipv4 = 0;
+        iface = net_device_find_interface(packet_info->net_device, &search_address);
+        if(iface != null && !iface->accept_all) iface = null;
+    }
 
-    assert(iface->protocol == NET_PROTOCOL_IPv4, "must be");
-    iface->receive_packet(iface, packet_info);
+    if(iface != null) {
+        assert(iface->protocol == NET_PROTOCOL_IPv4, "must be");
+        iface->receive_packet(iface, packet_info);
+    }
 }
 
 static void _ipv4_interface_receive_packet(struct net_interface* iface, struct net_receive_packet_info* packet_info)

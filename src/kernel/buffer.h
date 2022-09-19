@@ -13,10 +13,10 @@
 // they're only used as unidirection buffers.
 //
 // Currently, these buffers are NOT thread-safe
+#include "deque.h"
 
 struct buffer {
-    struct buffer* prev;
-    struct buffer* next;
+    MAKE_DEQUE(struct buffer);    // 16 bytes
 
     u8* buf;       // vmem pointer to actual data storage
     u32 read_pos;  // current read position into buf
@@ -25,13 +25,15 @@ struct buffer {
     u32 size;      // allocated size for buf
     u32 usage;     // current amount of data in the buffer
 
-    u64 flags;     // generic flags to be used with whatever module needs it
+    u32 buf_flags; // flags used by buffer_ module
+    u32 flags;     // generic flags to be used with whatever module needs it
 
     u64 unused0;   // to align to 64 bytes
     u64 unused1;
 };
 
 struct buffer* buffer_create(u32 size);
+struct buffer* buffer_create_with(u8*, u32 size, u32 write_pos);     // provide your own storage
 void           buffer_destroy(struct buffer*);
 u32            buffer_peek(struct buffer*, u8*, u32); // read without increasing read_pos
 u32            buffer_read(struct buffer*, u8*, u32); // dest can be null, which just increases read_pos without copying data

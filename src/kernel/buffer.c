@@ -6,6 +6,10 @@
 #include "stdlib.h"
 #include "string.h"
 
+enum BUFFER_FLAGS {
+    BUFFER_FLAG_USER_BUFFER = 1 << 0,
+};
+
 struct buffer* buffer_create(u32 size)
 {
     struct buffer* buf = (struct buffer*)kalloc(sizeof(struct buffer));
@@ -15,9 +19,20 @@ struct buffer* buffer_create(u32 size)
     return buf;
 }
 
+struct buffer* buffer_create_with(u8* userbuf, u32 size, u32 write_pos)
+{
+    struct buffer* buf = (struct buffer*)kalloc(sizeof(struct buffer));
+    zero(buf);
+    buf->buf       = userbuf;
+    buf->size      = size;
+    buf->write_pos = write_pos;
+    buf->buf_flags |= BUFFER_FLAG_USER_BUFFER;
+    return buf;
+}
+
 void buffer_destroy(struct buffer* buf)
 {
-    free(buf->buf);
+    if((buf->buf_flags & BUFFER_FLAG_USER_BUFFER) == 0) free(buf->buf);
     kfree(buf, sizeof(struct buffer));
 }
 

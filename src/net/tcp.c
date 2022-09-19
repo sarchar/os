@@ -102,7 +102,6 @@ struct tcp_build_segment_info {
 
 struct tcp_socket {
     struct net_socket     net_socket;
-    struct net_interface* net_interface;
 
     // for incoming connections
     struct tcp_socket* pending_accept;
@@ -401,18 +400,7 @@ static s64 _socket_send(struct net_socket* net_socket, struct buffer* buf)
     //fprintf(stderr, "tcp: queuing send buffer 0x%lX on socket 0x%lX size %lu\n", buf, socket, buffer_remaining_read(buf));
 
     acquire_lock(socket->send_buffers_lock);
-
-    if(socket->send_buffers == null) { // no buffers yet, so add buf pointing to itself
-        buf->next = buf->prev = buf;
-        socket->send_buffers = buf;
-    } else {
-        // add buf to end of the list
-        socket->send_buffers->prev->next = buf;
-        buf->prev = socket->send_buffers;
-        socket->send_buffers->prev = buf;
-        buf->next = socket->send_buffers;
-    }
-
+    DEQUE_PUSH_BACK(socket->send_buffers, buf);
     release_lock(socket->send_buffers_lock);
 
     net_notify_socket(net_socket);
@@ -443,7 +431,7 @@ static s64 _socket_receive(struct net_socket* net_socket, struct buffer* dest, u
         u32 remaining_payloads = buffer_remaining_read(socket->receive_buffer) / sizeof(struct payload_packet_info);
 
         // we can wake up due to a lost connection and then we have to return no data, informing the caller that the socket has closed
-        if(remaining_payloads == 0 && socket->state != TCP_SOCKET_STATE_ESTABLISHED) {
+        if(remaining_payloads == 0 || socket->state != TCP_SOCKET_STATE_ESTABLISHED) {
             // condition must have triggered due to closed socket, return
             release_lock(socket->receive_buffer_lock);
             break;
@@ -680,7 +668,7 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
         sockinfo.dest_address.ipv4   = iphdr->source_address;
         sockinfo.dest_port           = hdr->source_port;
         sockinfo.source_address.ipv4 = iphdr->dest_address;
-        struct net_socket* newsocket = net_socket_create(&sockinfo);
+        struct net_socket* newsocket = net_socket_create(iface, &sockinfo);
         if(newsocket == null) {
             __atomic_dec(&listen_socket->pending_accept_count);
             goto done; // failed to allocate socket, so out of memory or something
@@ -691,14 +679,13 @@ void tcp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
 
         // deliver the packet to this socket
         socket = containerof(newsocket, struct tcp_socket, net_socket);
-        socket->state         = TCP_SOCKET_STATE_LISTEN;
-        socket->net_interface = iface;
+        socket->state = TCP_SOCKET_STATE_LISTEN;
     }
 
     if(socket != null) {
         // update the packet info before sending it on
-        packet_info->packet        = (u8*)hdr + (u16)(payload_start & 0xFFFF);
-        packet_info->packet_length = packet_info->packet_length - (u16)(payload_start & 0xFFFF);
+        packet_info->packet         = (u8*)hdr + (u16)(payload_start & 0xFFFF);
+        packet_info->packet_length -= (u16)(payload_start & 0xFFFF);
 
         acquire_lock(socket->main_lock);
         _receive_segment(socket, hdr, &options, packet_info);
@@ -1235,17 +1222,7 @@ static s64 _process_send_buffers(struct tcp_socket* socket)
         // remove buffer when it is empty
         if(buffer_remaining_read(curbuf) == 0) {
 //            fprintf(stderr, "tcp: freeing buf 0x%lX\n", curbuf);
-
-            // remove the empty buffer from the list
-            if(curbuf == curbuf->next) { // if curbuf points to itself, it's the only item in the list
-                socket->send_buffers = null;
-            } else {
-                // otherwise, fix up the prev/next pointers
-                if(curbuf->prev != null) curbuf->prev->next = curbuf->next;
-                if(curbuf->next != null) curbuf->next->prev = curbuf->prev;
-                if(socket->send_buffers == curbuf) socket->send_buffers = curbuf->next;
-            }
-
+            DEQUE_POP_FRONT(socket->send_buffers, curbuf);
             buffer_destroy(curbuf);
             continue;
         }
@@ -1277,7 +1254,7 @@ static s64 _process_send_segment_queue(struct tcp_socket* socket)
 
         // ask the network interface for a tx queue slot
         struct net_send_packet_queue_entry* entry;
-        ret = net_request_send_packet_queue_entry(socket->net_interface, &socket->net_socket, &entry);
+        ret = net_request_send_packet_queue_entry(socket->net_socket.net_interface, &socket->net_socket, &entry);
         if(ret == -EAGAIN) return 0; // safe, we will try again later
         else if(ret < 0) return ret; // return other errors
 
@@ -1300,8 +1277,3 @@ static s64 _process_send_segment_queue(struct tcp_socket* socket)
     return 0;
 }
 
-void __tcp_set_socket_iface(struct net_socket* net_socket, struct net_interface* iface) // TODO get rid of this
-{
-    struct tcp_socket* socket = containerof(net_socket, struct tcp_socket, net_socket);
-    socket->net_interface = iface; 
-}

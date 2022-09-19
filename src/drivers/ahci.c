@@ -2,6 +2,7 @@
 
 #include "ahci.h"
 #include "ata.h"
+#include "cpu.h"
 #include "hpet.h"
 #include "interrupts.h"
 #include "kalloc.h"

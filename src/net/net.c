@@ -12,6 +12,7 @@
 #include "net/ipv4.h"
 #include "net/net.h"
 #include "net/tcp.h"
+#include "net/udp.h"
 #include "stdio.h"
 #include "stdlib.h"
 
@@ -175,11 +176,14 @@ bool net_do_work()
 // will create vnode #device=net:N #driver=driver_name:M
 void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address, struct net_device_ops* ops)
 {
+    declare_ticketlock(lock_init);
+
     zero(ndev);
 
     ndev->hardware_address = *hardware_address;
     ndev->index            = __atomic_xinc(&netdev_next_index);
     ndev->ops              = ops;
+    ndev->interfaces_lock  = lock_init;
 
     char buf[256];
     sprintf(buf, "#device=net:%d #driver=%s:%d", ndev->index, driver_name, driver_index);
@@ -216,16 +220,18 @@ void net_set_hardware_address(struct net_device* ndev, struct net_address* addre
 void net_device_register_interface(struct net_device* ndev, struct net_interface* iface)
 {
     struct net_interface* tmp;
+    acquire_lock(ndev->interfaces_lock);
     HT_FIND(ndev->interfaces, iface->address, tmp);
 
     if(tmp != null) {
+        release_lock(ndev->interfaces_lock);
         fprintf(stderr, "net: error interface already registered");
         return;
     }
 
     iface->net_device = ndev;
-
     HT_ADD(ndev->interfaces, address, iface);
+    release_lock(ndev->interfaces_lock);
 
     if(iface->protocol == NET_PROTOCOL_IPv4) {
         char buf[16];
@@ -234,10 +240,21 @@ void net_device_register_interface(struct net_device* ndev, struct net_interface
     }
 }
 
+void net_device_unregister_interface(struct net_interface* iface)
+{
+    struct net_device* ndev = iface->net_device;
+    acquire_lock(ndev->interfaces_lock);
+    HT_DELETE(ndev->interfaces, iface);
+    release_lock(ndev->interfaces_lock);
+    iface->net_device = null;
+}
+
 struct net_interface* net_device_find_interface(struct net_device* ndev, struct net_address* search_address)
 {
     struct net_interface* tmp;
+    acquire_lock(ndev->interfaces_lock);
     HT_FIND(ndev->interfaces, *search_address, tmp);
+    release_lock(ndev->interfaces_lock);
     return tmp;
 }
 
@@ -262,7 +279,7 @@ static void _receive_packet(struct net_receive_packet_info* packet_info)
     }
 }
 
-struct net_socket* net_socket_create(struct net_socket_info* sockinfo)
+struct net_socket* net_socket_create(struct net_interface* iface, struct net_socket_info* sockinfo)
 {
     struct net_socket* tmp;
     acquire_lock(global_net_sockets_lock);
@@ -280,7 +297,7 @@ struct net_socket* net_socket_create(struct net_socket_info* sockinfo)
         break;
 
     case NET_PROTOCOL_UDP:
-        //TODO
+        tmp = udp_socket_create(sockinfo);
         break;
     }
 
@@ -288,6 +305,7 @@ struct net_socket* net_socket_create(struct net_socket_info* sockinfo)
     
     // add socket to global sockets
     memcpy(&tmp->socket_info, sockinfo, sizeof(struct net_socket_info)); // copy over sockinfo so *_create_socket() doesn't have to
+    tmp->net_interface = iface;
     acquire_lock(global_net_sockets_lock);
     HT_ADD(global_net_sockets, socket_info, tmp);
     release_lock(global_net_sockets_lock);

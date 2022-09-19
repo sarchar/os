@@ -393,8 +393,9 @@ static void _register_network_device(struct e1000_device* edev, u8 eth_index)
 
     // TODO TEMP create an IPv4 interface on this device
     struct net_address local_addr;
-    ipv4_parse_address_string(&local_addr, "192.168.53.20");
-    struct net_interface* iface = ipv4_create_interface(&local_addr); // TODO will create #interface=ipv4:N
+    //ipv4_parse_address_string(&local_addr, "192.168.53.20");
+    ipv4_parse_address_string(&local_addr, "0.0.0.0");
+    struct net_interface* iface = ipv4_create_interface(&local_addr); // TODO will create #netlayer=ipv4:N
     net_device_register_interface(&edev->net_device, iface);
 }
 

@@ -2,6 +2,7 @@
 #define __NET_H__
 
 #include "hashtable.h"
+#include "kernel/smp.h"
 
 struct buffer;
 
@@ -98,7 +99,9 @@ struct net_device {
     // read/write/other callback functions
     // vnode pointer?
     struct net_address hardware_address;
+
     struct net_interface* interfaces;
+    struct ticketlock     interfaces_lock;
 
     u16 index; // network device inde
     u16 unused0;
@@ -119,7 +122,8 @@ struct net_interface {
     struct net_address address;
     struct net_device* net_device;
     u8     protocol;
-    u8     unused0[7];
+    bool   accept_all;
+    u8     unused0[6];
 
     net_interface_wrap_packet_function*    wrap_packet;
     net_interface_receive_packet_function* receive_packet;
@@ -152,6 +156,7 @@ struct net_socket {
 
     struct net_socket_info socket_info;
     struct net_socket_ops* ops;
+    struct net_interface*  net_interface;
 
     // prev and next that allow the socket to be placed into a list
     struct net_socket* prev;
@@ -163,12 +168,13 @@ bool net_do_work();
 
 void net_init_device(struct net_device* ndev, char* driver_name, u16 driver_index, struct net_address* hardware_address, struct net_device_ops* ops);
 void net_device_register_interface(struct net_device* ndev, struct net_interface* iface);
+void net_device_unregister_interface(struct net_interface* iface);
 struct net_interface* net_device_find_interface(struct net_device* ndev, struct net_address* search_address);
 
 s64  net_request_send_packet_queue_entry(struct net_interface*, struct net_socket*, struct net_send_packet_queue_entry**);
 void net_ready_send_packet_queue_entry(struct net_send_packet_queue_entry*);
 
-struct net_socket* net_socket_create(struct net_socket_info*);
+struct net_socket* net_socket_create(struct net_interface*, struct net_socket_info*);
 struct net_socket* net_socket_lookup(struct net_socket_info*);
 void net_notify_socket(struct net_socket*);
 
