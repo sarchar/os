@@ -234,9 +234,11 @@ void net_device_register_interface(struct net_device* ndev, struct net_interface
     release_lock(ndev->interfaces_lock);
 
     if(iface->protocol == NET_PROTOCOL_IPv4) {
-        char buf[16];
-        ipv4_format_address(buf, iface->address.ipv4);
-        fprintf(stderr, "net: registered IPv4 device interface %s\n", buf);
+        char addr[16];
+        ipv4_format_address(addr, iface->address.ipv4);
+        char netmask[16];
+        ipv4_format_address(netmask, iface->netmask.ipv4);
+        fprintf(stderr, "net: registered IPv4 device interface %s/%s\n", addr, netmask);
     }
 }
 

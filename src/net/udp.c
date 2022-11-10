@@ -218,13 +218,13 @@ void udp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     struct net_socket_info sockinfo = {
         .protocol           = NET_PROTOCOL_UDP,
         .source_port        = hdr->dest_port,
-        .dest_port          = 0,
+        .dest_port          = hdr->source_port,
     };
 
     zero(&sockinfo.source_address);
     zero(&sockinfo.dest_address);
     sockinfo.dest_address.protocol   = NET_PROTOCOL_IPv4;
-    sockinfo.dest_address.ipv4       = 0;
+    sockinfo.dest_address.ipv4       = iphdr->source_address;
     sockinfo.source_address.protocol = NET_PROTOCOL_IPv4;
     sockinfo.source_address.ipv4     = iphdr->dest_address;
 
@@ -232,11 +232,18 @@ void udp_receive_packet(struct net_interface* iface, struct ipv4_header* iphdr, 
     struct net_socket* net_socket = net_socket_lookup(&sockinfo);
     struct udp_socket* socket = containerof(net_socket, struct udp_socket, net_socket);
     if(net_socket == null) {
-        // No bound sockets to the ip:port, See if there's a socket bound to 0.0.0.0:port
-        sockinfo.source_address.ipv4 = 0;
-
+        // No direct socket to the peer, so see if there's a listening socket from all peers
+        sockinfo.dest_port         = 0;
+        sockinfo.dest_address.ipv4 = 0;
         net_socket = net_socket_lookup(&sockinfo);
         socket = containerof(net_socket, struct udp_socket, net_socket);
+
+        if(net_socket == null) { // No bound sockets to the ip:port, See if there's a socket bound to 0.0.0.0:port
+            sockinfo.source_address.ipv4 = 0;
+
+            net_socket = net_socket_lookup(&sockinfo);
+            socket = containerof(net_socket, struct udp_socket, net_socket);
+        }
     }
     
     if(net_socket != null) {

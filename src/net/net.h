@@ -120,6 +120,7 @@ struct net_interface {
     MAKE_HASH_TABLE;
 
     struct net_address address;
+    struct net_address netmask;
     struct net_device* net_device;
     u8     protocol;
     bool   accept_all;

@@ -1,6 +1,6 @@
 
 # define the target build
-ADD_LIBRARY(net STATIC arp.c dhcp.c icmp.c ipv4.c net.c tcp.c udp.c)
+ADD_LIBRARY(net STATIC arp.c dhcp.c dns.c icmp.c ipv4.c net.c tcp.c udp.c)
 
 TARGET_INCLUDE_DIRECTORIES(net PRIVATE "${CMAKE_SOURCE_DIR}/src")
 TARGET_INCLUDE_DIRECTORIES(net PRIVATE "${CMAKE_SOURCE_DIR}/src/uthash_impl")

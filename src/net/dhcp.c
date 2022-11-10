@@ -4,6 +4,7 @@
 
 #include "arp.h"
 #include "dhcp.h"
+#include "dns.h"
 #include "errno.h"
 #include "hpet.h"
 #include "ipv4.h"
@@ -401,6 +402,7 @@ static bool _handle_packet(struct dhcp* dhcp, struct dhcp_header* hdr, u16 packe
             if(iface->address.ipv4 != hdr->your_address) {
                 net_device_unregister_interface(iface);
                 iface->address.ipv4 = hdr->your_address;
+                iface->netmask.ipv4 = options.subnet_mask;
                 net_device_register_interface(ndev, iface);
 
                 // set the gateway IP
@@ -409,6 +411,13 @@ static bool _handle_packet(struct dhcp* dhcp, struct dhcp_header* hdr, u16 packe
                     .ipv4     = options.router,
                 };
                 ipv4_set_gateway(iface, &gateway_address);
+
+                // set the DNS server
+                struct net_address dns_server = {
+                    .protocol = NET_PROTOCOL_IPv4,
+                    .ipv4     = options.dns_server1,
+                };
+                dns_set_server(&dns_server);
 
                 // send an ARP packet to discover where the router is
                 arp_send_request(iface, &gateway_address);

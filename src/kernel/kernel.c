@@ -22,6 +22,7 @@
 #include "multiboot2.h"
 #include "net/arp.h"
 #include "net/dhcp.h"
+#include "net/dns.h"
 #include "net/icmp.h"
 #include "net/ipv4.h"
 #include "net/net.h"
@@ -612,8 +613,8 @@ static void run_command(char* cmdbuffer)
         task_enqueue(&cpu->current_task, echo_server_task);
 
     } else if(strcmp(cmdbuffer, "www") == 0) {
-        // get IP to fetch from
-        char* serverip = cmdptr;
+        // get IP or hostname to fetch from
+        char* server = cmdptr;
         cmdptr = strchr(cmdptr, ' ');
         if(cmdptr != null) {
             *cmdptr++ = '\0';
@@ -622,15 +623,63 @@ static void run_command(char* cmdbuffer)
         }
 
         // start the fetch thread
-        u32 slen = strlen(serverip);
+        u32 slen = strlen(server);
         if(slen > 0) {
             struct buffer* buf = buffer_create(slen);
-            buffer_write(buf, (u8*)serverip, slen);
+            buffer_write(buf, (u8*)server, slen);
 
             struct task* get_www_task = task_create(get_www, (intp)buf, false);
             struct cpu* cpu = get_cpu();
             task_enqueue(&cpu->current_task, get_www_task);
         }
+    } else if(strcmp(cmdbuffer, "host") == 0) {
+        // get hostname parameter
+        char* hoststr = cmdptr;
+        cmdptr = strchr(cmdptr, ' ');
+        if(cmdptr != null) {
+            *cmdptr++ = '\0';
+        } else {
+            cmdptr = end;
+        }
+
+        struct dns_result* dns_result = dns_lookup(hoststr);
+        if(dns_result == null) {
+            fprintf(stderr, "failed to lookup host %s\n", hoststr);
+            return;
+        }
+
+        struct dns_record* rec = &dns_result->records[0];
+        for(u32 i = 0; i < dns_result->num_records; i++, rec++) {
+            char s[16];
+            fprintf(stderr, "[%d] %s: ", i, rec->name);
+
+            switch(rec->type) {
+            case DNS_RECORD_TYPE_ADDRESS:
+                switch(rec->address.protocol) {
+                case NET_PROTOCOL_IPv4:
+                    ipv4_format_address(s, rec->address.ipv4);
+                    fprintf(stderr, "IPv4 address %s", s);
+                    break;
+
+                case NET_PROTOCOL_IPv6:
+                    fprintf(stderr, "IPv6 address TODO");
+                    break;
+                }
+                break;
+
+            case DNS_RECORD_TYPE_NAMESERVER:
+                fprintf(stderr, "nameserver %s", rec->ptr);
+                break;
+
+            default:
+                fprintf(stderr, "unknown type %d", rec->internal_type);
+                break;
+            }
+
+            fprintf(stderr, " (ttl = %d)\n", rec->ttl);
+        }
+    
+        dns_result_destroy(dns_result);
     }
 }
 
@@ -732,22 +781,39 @@ static s64 get_www(struct task* task)
     struct net_socket* socket = null;
     s64 res;
 
-    // read the IP address from the command line
+    // read the server address from the command line
     struct buffer* buf = (struct buffer*)task->userdata;
     u32 slen = buffer_remaining_read(buf);
-    char* serverip = (char*)__builtin_alloca(slen);
-    buffer_read(buf, (u8*)serverip, slen);
+    char* server = (char*)__builtin_alloca(slen);
+    buffer_read(buf, (u8*)server, slen);
     buffer_destroy(buf);
 
-    // parse the IP address
-    struct net_address server_address;
-    ipv4_parse_address_string(&server_address, serverip);
+    // lookup the address via DNS
+    struct dns_result* dns_result = dns_lookup(server);
+    if(dns_result == null) {
+        fprintf(stderr, "failed to lookup host %s\n", server);
+        goto done;
+    }
+
+    // grab the first A record
+    struct dns_record* rec = &dns_result->records[0];
+    for(u32 i = 0; i < dns_result->num_records; i++, rec++) {
+        if(rec->type == DNS_RECORD_TYPE_ADDRESS && rec->address.protocol == NET_PROTOCOL_IPv4) break;
+    }
+
+    // if no records were found, error
+    if(dns_result->num_records == 0 || rec->type != DNS_RECORD_TYPE_ADDRESS) {
+        fprintf(stderr, "no A record found for server %s\n", server);
+        goto done;
+    }
+
+    dns_result_destroy(dns_result);
 
     // create a sockinfo for our connection: destination is port 80 (HTTP)
     struct net_socket_info sockinfo;
-    sockinfo.protocol = NET_PROTOCOL_TCP;
-    sockinfo.dest_address = server_address;
-    sockinfo.dest_port = 80;
+    sockinfo.protocol     = NET_PROTOCOL_TCP;
+    sockinfo.dest_address = rec->address;
+    sockinfo.dest_port    = 80;
 
     // use the local interface as source address with a random source port
     struct net_device* ndev = net_device_by_index(0); // grab the first network adapter
@@ -759,17 +825,24 @@ static s64 get_www(struct task* task)
 
     // create the socket
     socket = net_socket_create(iface, &sockinfo);
+    if(socket == null) {
+        fprintf(stderr, "failed to create socket\n");
+        goto done;
+    }
 
     // try connecting
-    fprintf(stderr, "Connecting to %s...", serverip);
+    char serverip[16];
+    ipv4_format_address(serverip, rec->address.ipv4);
+    fprintf(stderr, "Connecting to %s [%s]...", server, serverip);
     if((res = net_socket_connect(socket)) < 0) goto done;
     fprintf(stderr, "connected!\n");
 
     // send HTTP request
     buf = buffer_create(512);
     buffer_puts(buf, "GET / HTTP/1.1\r\n");
-    buffer_puts(buf, "Host: bbc.com\r\n");
-    buffer_puts(buf, "Accept: text/html\r\n");
+    buffer_puts(buf, "Host: ");
+    buffer_puts(buf, server);
+    buffer_puts(buf, "\r\nAccept: text/html\r\n");
     buffer_puts(buf, "Connection: close\r\n");
     buffer_puts(buf, "\r\n");
     if((res = net_socket_send(socket, buf)) < 0) goto done;
@@ -791,7 +864,7 @@ static s64 get_www(struct task* task)
     }
 
 done:
-    net_socket_destroy(socket); 
+    if(socket != null) net_socket_destroy(socket); 
     return res;
 }
 
